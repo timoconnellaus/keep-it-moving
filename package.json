@@ -1,0 +1,72 @@
+{
+  "name": "@tim/interviewer",
+  "version": "0.1.0",
+  "description": "A local, agent-driven interview session with a browser questionnaire and Gemini Live voice companion.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "interviewer": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "web-dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev:server": "tsx src/server/main.ts",
+    "dev:web": "vite",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build:web": "vite build",
+    "build": "npm run build:server && npm run build:web",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src tests scripts vite.config.ts vitest.config.ts eslint.config.js",
+    "format:check": "prettier --check .",
+    "link:dev": "npm run build && npm link",
+    "unlink:dev": "npm unlink -g @tim/interviewer || true",
+    "link:skill": "node scripts/link-skill.mjs",
+    "unlink:skill": "node scripts/link-skill.mjs --unlink",
+    "setup:agents": "npm run link:skill && node scripts/add-global-context.mjs",
+    "smoke:gemini": "vitest run tests/gemini.real.test.ts"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.4",
+    "@fastify/websocket": "^11.2.0",
+    "@google/genai": "^1.40.0",
+    "env-paths": "^3.0.0",
+    "fastify": "^5.8.2",
+    "html-to-image": "^1.11.13",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^25.3.5",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.2.0",
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.8.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.11"
+  }
+}
