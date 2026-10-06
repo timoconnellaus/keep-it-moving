@@ -49,6 +49,14 @@ function projectName(key: string): string {
   return words.map((word) => word[0]!.toUpperCase() + word.slice(1)).join(" ");
 }
 
+/** Push services browsers subscribe through: Chrome/Android, Firefox, Edge, Safari. */
+const PUSH_SERVICES = [
+  "fcm.googleapis.com",
+  "updates.push.services.mozilla.com",
+  "notify.windows.com",
+  "push.apple.com",
+];
+
 const ORIGIN_COLUMNS = [
   "project_id",
   "branch",
@@ -303,9 +311,22 @@ export class InterviewStore {
       .map((row) => String(row.endpoint));
   }
 
+  /** Only real push services, so the Worker never POSTs to an arbitrary URL. */
   addPushSubscription(endpoint: string): void {
-    if (!/^https:\/\//.test(endpoint))
+    let host: string;
+    try {
+      const url = new URL(endpoint);
+      if (url.protocol !== "https:") throw new Error();
+      host = url.hostname;
+    } catch {
       throw new Error("A push endpoint is an https URL");
+    }
+    if (
+      !PUSH_SERVICES.some(
+        (service) => host === service || host.endsWith(`.${service}`),
+      )
+    )
+      throw new Error(`${host} is not a known push service`);
     this.sql.all(
       "INSERT INTO push_subscriptions (endpoint, created_at) VALUES (?, ?) ON CONFLICT(endpoint) DO NOTHING",
       endpoint,

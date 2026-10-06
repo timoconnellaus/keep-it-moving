@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { createHub } from "../server/hub.js";
+import { createHub, sameSite } from "../server/hub.js";
 import { durableObjectSql } from "../server/sql.js";
 import { InterviewStore } from "../server/store.js";
 import type { Env } from "./env.js";
@@ -42,6 +42,9 @@ export class InterviewHub extends DurableObject<Env> {
   override async fetch(request: Request): Promise<Response> {
     const socket = new URL(request.url).pathname.match(/^\/ws\/([^/]+)$/);
     if (!socket) return this.hub.app.fetch(request);
+    // WebSockets skip CORS, so check the page opening one is our own.
+    if (!sameSite(request))
+      return new Response("Cross-site socket refused", { status: 403 });
     if (request.headers.get("upgrade") !== "websocket")
       return new Response("Expected a WebSocket", { status: 426 });
     // The home page listens for list changes only; tokens are never this short.

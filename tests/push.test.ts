@@ -26,11 +26,11 @@ describe("push notifications", () => {
   it("notifies once when an interview with nothing open gains questions", async () => {
     vi.useFakeTimers();
     const { store, sent, sql } = harness();
-    store.addPushSubscription("https://push.example/phone");
+    store.addPushSubscription("https://fcm.googleapis.com/fcm/send/phone");
     const session = store.createSession("", {});
     store.addQuestions(session.id, [{ prompt: "One?" }, { prompt: "Two?" }]);
     await settle();
-    expect(sent).toEqual(["https://push.example/phone"]);
+    expect(sent).toEqual(["https://fcm.googleapis.com/fcm/send/phone"]);
 
     // More questions while some are still open: the user already knows.
     store.addQuestions(session.id, [{ prompt: "Three?" }]);
@@ -50,7 +50,7 @@ describe("push notifications", () => {
   it("forgets a device whose push service says it is gone", async () => {
     vi.useFakeTimers();
     const { store, sql } = harness(410);
-    store.addPushSubscription("https://push.example/old-phone");
+    store.addPushSubscription("https://fcm.googleapis.com/fcm/send/old-phone");
     const session = store.createSession("", {});
     store.addQuestions(session.id, [{ prompt: "One?" }]);
     await settle();
@@ -68,7 +68,7 @@ describe("push notifications", () => {
     await app.inject({
       method: "POST",
       url: "/api/browser/push/subscribe",
-      payload: { endpoint: "https://push.example/phone" },
+      payload: { endpoint: "https://fcm.googleapis.com/fcm/send/phone" },
     });
     const refused = await app.inject({
       method: "POST",
@@ -76,12 +76,51 @@ describe("push notifications", () => {
       payload: { endpoint: "javascript:alert(1)" },
     });
     expect(refused.statusCode).toBe(400);
+    const elsewhere = await app.inject({
+      method: "POST",
+      url: "/api/browser/push/subscribe",
+      payload: { endpoint: "https://attacker.example/collect" },
+    });
+    expect(elsewhere.statusCode).toBe(400);
+    expect(elsewhere.json().error).toContain("not a known push service");
     const test = await app.inject({
       method: "POST",
       url: "/api/browser/push/test",
     });
     expect(test.json()).toEqual({ ok: true, devices: 1 });
-    expect(sent).toEqual(["https://push.example/phone"]);
+    expect(sent).toEqual(["https://fcm.googleapis.com/fcm/send/phone"]);
+    sql.close();
+  });
+});
+
+describe("cross-site requests", () => {
+  it("refuses browser writes from another site but allows its own pages and the CLI", async () => {
+    const { app, store, sql } = harness();
+    const session = store.createSession("", {});
+    const write = (headers: Record<string, string>) =>
+      app.inject({
+        method: "POST",
+        url: `/api/browser/${session.token}/stage/visibility`,
+        payload: { visible: true },
+        headers,
+      });
+    expect((await write({ "sec-fetch-site": "cross-site" })).statusCode).toBe(
+      403,
+    );
+    expect((await write({ origin: "https://evil.example" })).statusCode).toBe(
+      403,
+    );
+    expect((await write({ "sec-fetch-site": "same-origin" })).statusCode).toBe(
+      200,
+    );
+    expect((await write({})).statusCode).toBe(200);
+    // Reads stay open: a cross-site page can't read the response anyway.
+    const read = await app.inject({
+      method: "GET",
+      url: "/api/browser/overview",
+      headers: { "sec-fetch-site": "cross-site" },
+    });
+    expect(read.statusCode).toBe(200);
     sql.close();
   });
 });

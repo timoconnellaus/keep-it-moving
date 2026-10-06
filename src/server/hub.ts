@@ -116,6 +116,14 @@ export function createHub(options: HubOptions) {
 
   app.get("/health", (c) => c.json({ ok: true }));
 
+  // Browser routes ride on the Access cookie, so refuse writes another site
+  // could forge with it. Agent routes use bearer tokens and need no check.
+  app.use("/api/browser/*", async (c, next) => {
+    if (c.req.method !== "GET" && !sameSite(c.req.raw))
+      return c.json({ error: "Cross-site request refused" }, 403);
+    await next();
+  });
+
   // Agent routes. Fixed paths go before /api/sessions/:id.
   app.get("/api/sessions/projects", (c) => c.json(store.listProjects()));
   app.post("/api/sessions/projects/update", async (c) => {
@@ -402,6 +410,23 @@ const OVERVIEW_PING_MS = 300;
 const PUSH_SETTLE_MS = 1_500;
 /** Events that change an interview's place in the switcher. */
 const OVERVIEW_EVENTS = /^(session|question\.(added|deleted)|answer)\./;
+
+/**
+ * Whether a request came from this site's own pages. Browsers send
+ * Sec-Fetch-Site, or at least Origin, on cross-site writes; a request with
+ * neither (the CLI, a test) is not from a browser page.
+ */
+export function sameSite(request: Request): boolean {
+  const site = request.headers.get("sec-fetch-site");
+  if (site) return site === "same-origin" || site === "none";
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === new URL(request.url).host;
+  } catch {
+    return false;
+  }
+}
 
 function withoutContent(artifact: ArtifactView): ArtifactView {
   const copy = { ...artifact };
