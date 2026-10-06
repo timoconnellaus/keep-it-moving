@@ -899,6 +899,9 @@ h1 {
   border-radius: 4px;
   padding: 1px 5px;
 }
+.switcher-close {
+  display: none;
+}
 .switcher-list {
   display: flex;
   flex-direction: column;
@@ -1050,6 +1053,9 @@ h1 {
 .home-head h1 {
   margin: 0;
   font-size: 24px;
+  overflow: visible;
+  white-space: normal;
+  flex: none;
 }
 .home-summary {
   color: var(--muted);
@@ -1136,5 +1142,129 @@ h1 {
   .origin-line {
     flex-wrap: wrap;
     row-gap: 2px;
+  }
+}
+
+/* Notifications */
+.notify {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.notify-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+  color: #2f4137;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.notify-button.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.notify-test {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.notify-blocked,
+.notify-error {
+  color: #9b3b2a;
+  font-size: 12.5px;
+}
+
+/* Phones */
+@media (max-width: 600px) {
+  .shell {
+    width: calc(100% - 16px);
+  }
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .switcher {
+    flex: 1 1 100%;
+  }
+  .switcher-button {
+    width: 100%;
+  }
+  .switcher-menu {
+    position: fixed;
+    inset: 8px;
+    width: auto;
+    max-height: none;
+  }
+  .switcher-list {
+    flex: 1;
+    max-height: none;
+  }
+  .switcher-foot span:not(.spacer) {
+    display: none;
+  }
+  .switcher-search kbd {
+    display: none;
+  }
+  .switcher-close {
+    display: block;
+    order: -1;
+    align-self: flex-end;
+    min-height: 40px;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font-size: 15px;
+    font-weight: 600;
+    padding: 0 6px;
+  }
+  .home {
+    width: calc(100% - 20px);
+    padding-top: 16px;
+  }
+  .home-head {
+    row-gap: 10px;
+  }
+  .home-head .spacer {
+    display: none;
+  }
+  .home-summary {
+    flex-basis: 100%;
+    order: 1;
+    margin-top: -6px;
+  }
+  .home-head .notify {
+    order: 2;
+  }
+  .home-filter {
+    order: 3;
+  }
+  .home-filter {
+    width: 100%;
+  }
+  .home-project-head {
+    flex-wrap: wrap;
+    padding: 12px 14px;
+  }
+  .home-row {
+    padding: 12px 14px;
+    gap: 10px;
+  }
+  .home-answer,
+  .home-open {
+    margin-left: auto;
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 }

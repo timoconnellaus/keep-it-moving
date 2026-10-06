@@ -15,11 +15,16 @@ export interface BrowserSockets {
   sendAll(data: string): void;
 }
 
+/** Sends a data-less Web Push; resolves to the push service's HTTP status. */
+export type PushSender = (endpoint: string) => Promise<number>;
+
 export interface HubOptions {
   store: InterviewStore;
   /** The public origin, used in session URLs. */
   baseUrl: string;
   sockets: BrowserSockets;
+  /** Web Push to the user's devices; absent when no VAPID key is configured. */
+  push?: { publicKey: string; send: PushSender } | undefined;
 }
 
 interface Watcher {
@@ -66,7 +71,33 @@ export function createHub(options: HubOptions) {
       sockets.sendAll(JSON.stringify({ type: "overview" }));
     }, OVERVIEW_PING_MS);
   };
+  // An interview that had nothing open and gains questions now waits on the
+  // user: notify their devices once per burst of added questions.
+  const added = new Map<string, number>();
+  const notify = async () => {
+    if (!options.push) return;
+    const endpoints = store.pushSubscriptions();
+    await Promise.all(
+      endpoints.map(async (endpoint) => {
+        const status = await options.push!.send(endpoint).catch(() => 0);
+        // Gone: the device unsubscribed or the app was uninstalled.
+        if (status === 404 || status === 410)
+          store.removePushSubscription(endpoint);
+      }),
+    );
+  };
+  const checkWaiting = (sessionId: string) => {
+    const count = added.get(sessionId) ?? 0;
+    added.delete(sessionId);
+    const open = store.openQuestions(sessionId);
+    if (open > 0 && open - count <= 0) void notify();
+  };
   store.subscribe((event) => {
+    if (event.type === "question.added") {
+      if (!added.has(event.sessionId))
+        setTimeout(() => checkWaiting(event.sessionId), PUSH_SETTLE_MS);
+      added.set(event.sessionId, (added.get(event.sessionId) ?? 0) + 1);
+    }
     later(() => {
       const watcher = watchers.get(event.sessionId);
       if (watcher?.write(event)) store.markDelivered(event.sessionId, event.id);
@@ -307,6 +338,22 @@ export function createHub(options: HubOptions) {
   app.get("/api/browser/overview", (c) =>
     c.json({ sessions: store.summaries() }),
   );
+  app.get("/api/browser/push/key", (c) =>
+    c.json({ publicKey: options.push?.publicKey ?? null }),
+  );
+  app.post("/api/browser/push/subscribe", async (c) => {
+    store.addPushSubscription(String((await body(c)).endpoint ?? ""));
+    return c.json({ ok: true });
+  });
+  app.post("/api/browser/push/unsubscribe", async (c) => {
+    store.removePushSubscription(String((await body(c)).endpoint ?? ""));
+    return c.json({ ok: true });
+  });
+  app.post("/api/browser/push/test", async (c) => {
+    if (!options.push) return c.json({ error: "Push is not configured" }, 503);
+    await notify();
+    return c.json({ ok: true, devices: store.pushSubscriptions().length });
+  });
   // The rest are addressed by the session's secret token.
   app.get("/api/browser/:token/session", (c) =>
     c.json(browserView(tokenSession(c.req.param("token")))),
@@ -351,6 +398,8 @@ export function createHub(options: HubOptions) {
 
 const HEARTBEAT_MS = 25_000;
 const OVERVIEW_PING_MS = 300;
+/** Agents add a batch of questions in a burst; notify once it has landed. */
+const PUSH_SETTLE_MS = 1_500;
 /** Events that change an interview's place in the switcher. */
 const OVERVIEW_EVENTS = /^(session|question\.(added|deleted)|answer)\./;
 

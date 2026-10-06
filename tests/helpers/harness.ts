@@ -1,4 +1,8 @@
-import { createHub, type BrowserSockets } from "../../src/server/hub.js";
+import {
+  createHub,
+  type BrowserSockets,
+  type PushSender,
+} from "../../src/server/hub.js";
 import { InterviewStore } from "../../src/server/store.js";
 import { nodeSql } from "./nodeSql.js";
 
@@ -14,6 +18,7 @@ export function hubHarness(
   options: {
     path?: string;
     sockets?: BrowserSockets;
+    push?: { publicKey: string; send: PushSender };
   } = {},
 ) {
   const sql = nodeSql(options.path);
@@ -21,6 +26,7 @@ export function hubHarness(
   const hub = createHub({
     store,
     baseUrl: "https://interviewer.test",
+    push: options.push,
     sockets: options.sockets ?? {
       send: () => undefined,
       sendAll: () => undefined,

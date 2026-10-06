@@ -3,6 +3,7 @@ import { createHub } from "../server/hub.js";
 import { durableObjectSql } from "../server/sql.js";
 import { InterviewStore } from "../server/store.js";
 import type { Env } from "./env.js";
+import { webPush } from "./push.js";
 
 /**
  * Every interview, in one SQLite-backed Durable Object: the deployment has a
@@ -16,6 +17,7 @@ export class InterviewHub extends DurableObject<Env> {
     this.hub = createHub({
       store: new InterviewStore(durableObjectSql(ctx.storage)),
       baseUrl: env.PUBLIC_URL,
+      push: webPush(env),
       sockets: {
         send: (sessionId, data) => {
           for (const socket of ctx.getWebSockets(sessionId))

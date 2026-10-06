@@ -11,3 +11,7 @@ createRoot(root).render(
     {window.location.pathname.startsWith("/s/") ? <App /> : <Home />}
   </StrictMode>,
 );
+
+// Installable as an app, and the target of push notifications.
+if ("serviceWorker" in navigator)
+  void navigator.serviceWorker.register("/sw.js").catch(() => undefined);

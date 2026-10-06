@@ -106,6 +106,9 @@ export class InterviewStore {
         id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, name TEXT NOT NULL, color TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        endpoint TEXT PRIMARY KEY, created_at TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS questions_session ON questions(session_id);
       CREATE INDEX IF NOT EXISTS events_session ON events(session_id, delivered);
       CREATE INDEX IF NOT EXISTS artifacts_session ON artifacts(session_id);
@@ -279,6 +282,39 @@ export class InterviewStore {
           lastActivity: String(row.last_event ?? row.updated_at),
         };
       });
+  }
+
+  /** Unanswered questions in an active interview, or 0 when it is stopped. */
+  openQuestions(sessionId: string): number {
+    const row = first(
+      this.sql,
+      `SELECT s.status, (SELECT COUNT(*) FROM questions q LEFT JOIN answers a ON a.question_id = q.id
+         WHERE q.session_id = s.id AND q.deleted = 0 AND a.question_id IS NULL) open
+       FROM sessions s WHERE s.id = ?`,
+      sessionId,
+    );
+    return row && row.status === "active" ? Number(row.open) : 0;
+  }
+
+  /** Push endpoints of the user's devices; pushes carry no data. */
+  pushSubscriptions(): string[] {
+    return this.sql
+      .all("SELECT endpoint FROM push_subscriptions")
+      .map((row) => String(row.endpoint));
+  }
+
+  addPushSubscription(endpoint: string): void {
+    if (!/^https:\/\//.test(endpoint))
+      throw new Error("A push endpoint is an https URL");
+    this.sql.all(
+      "INSERT INTO push_subscriptions (endpoint, created_at) VALUES (?, ?) ON CONFLICT(endpoint) DO NOTHING",
+      endpoint,
+      now(),
+    );
+  }
+
+  removePushSubscription(endpoint: string): void {
+    this.sql.all("DELETE FROM push_subscriptions WHERE endpoint = ?", endpoint);
   }
 
   listSessions(baseUrl: string, all = false): SessionView[] {

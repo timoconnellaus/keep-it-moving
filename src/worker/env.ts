@@ -14,6 +14,9 @@ export interface Env {
   ACCESS_TEAM_DOMAIN: string;
   /** The Access application's audience tag. */
   ACCESS_AUD: string;
+  /** Web Push (VAPID): the public key as base64url, the private key a JWK secret. */
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_JWK?: string;
   /** Local development only: skips Access and signs in as this address on localhost. */
   DEV_EMAIL?: string;
 }

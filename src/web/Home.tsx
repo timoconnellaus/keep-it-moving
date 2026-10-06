@@ -7,6 +7,7 @@ import {
   sessionState,
   useOverview,
 } from "./overview.js";
+import { NotifyToggle } from "./Notify.js";
 
 /** Every interview, grouped by project, at the site root. */
 export function Home() {
@@ -60,6 +61,7 @@ export function Home() {
           </span>
         )}
         <span className="spacer" />
+        <NotifyToggle />
         <label className="home-filter">
           <span aria-hidden="true">⌕</span>
           <input

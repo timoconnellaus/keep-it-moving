@@ -8,6 +8,9 @@ import {
   sessionState,
 } from "./overview.js";
 
+const touchScreen = () =>
+  typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+
 const matches = (session: SessionSummary, query: string) =>
   !query ||
   [
@@ -115,7 +118,8 @@ export function Switcher({
           <label className="switcher-search">
             <span aria-hidden="true">⌕</span>
             <input
-              autoFocus
+              // On a phone, focusing would open the keyboard over the list.
+              autoFocus={!touchScreen()}
               type="text"
               aria-label="Search interviews"
               placeholder="Jump to an interview, project or branch…"
@@ -139,6 +143,13 @@ export function Switcher({
             />
             <kbd>⌘K</kbd>
           </label>
+          <button
+            type="button"
+            className="switcher-close"
+            onClick={() => setOpen(false)}
+          >
+            Close
+          </button>
           <div className="switcher-list">
             {sessions === null && <p className="switcher-empty">Loading…</p>}
             {sessions !== null && !flat.length && (

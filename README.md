@@ -21,7 +21,7 @@ interviewer login       # browser sign-in: Cloudflare Access, then OAuth back to
 
 Deploy with `npm run deploy`, which builds the web client and runs `wrangler deploy`.
 
-For local development, put `DEV_EMAIL=<the allowed email>` in `.dev.vars` (only honoured on localhost) and run `npm run dev`.
+For local development, put `DEV_EMAIL=<the allowed email>` and `PUBLIC_URL=http://localhost` in `.dev.vars` and run `npx wrangler dev --local --host localhost` (`.claude/launch.json` has it as `worker`). `--host localhost` keeps requests on localhost, where `DEV_EMAIL` stands in for the Access login.
 
 ## First interview
 
@@ -87,6 +87,14 @@ Interviews from every agent session (local or cloud, Claude Code or Codex) are g
 The first interview from a remote creates its project, named from the repo and given the next free colour, which then stays the same everywhere. `interviewer project list`, `project rename <project> --name <name>` and `project color <project> --color <#hex>` manage them.
 
 In the browser, the interview title is a switcher (click it, or press ⌘K): every interview, grouped by project, with its branch, agent session, progress and whether it waits on you. A dot on the title counts the other interviews waiting on you, and updates live. The site root lists every interview the same way.
+
+## On your phone
+
+The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's Access sign-in. It opens on the list of interviews.
+
+**Notify me** on that page turns on push notifications for the device. When an interview with nothing open gains questions, the Worker pushes to every subscribed device, and the notification names the interview (for example "FrockBot · Checkout flow, 3 questions waiting") and opens it when tapped. **Send a test** checks the setup.
+
+Pushes carry no data: the Worker signs an empty Web Push with its VAPID key (`VAPID_PUBLIC_KEY` in `wrangler.jsonc`, the private key in the `VAPID_PRIVATE_JWK` secret), and the service worker asks the server what is waiting. The icons, manifest and service worker are public, outside Cloudflare Access, because Google's servers fetch the icons without a sign-in when they build the app.
 
 ## Questionnaire behavior
 

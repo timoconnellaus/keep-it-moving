@@ -4,6 +4,8 @@ import type { Env } from "./env.js";
 
 export { InterviewHub } from "./hub.js";
 
+const PUBLIC_FILES = /^\/(assets\/|icons\/|manifest\.webmanifest$|sw\.js$)/;
+
 const hub = (env: Env) => env.HUB.get(env.HUB.idFromName("interviews"));
 
 const page = (status: number, message: string) =>
@@ -28,7 +30,9 @@ const site: ExportedHandler<Env> = {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/health") return Response.json({ ok: true });
-    if (url.pathname.startsWith("/assets/")) return env.ASSETS.fetch(request);
+    // Build output and app-install files hold nothing private, and Google's
+    // servers fetch the icons without the Access cookie when installing.
+    if (PUBLIC_FILES.test(url.pathname)) return env.ASSETS.fetch(request);
     const email = await accessEmail(request, env);
     if (!isAllowed(email, env))
       return page(403, "This interviewer belongs to someone else.");
