@@ -13,23 +13,20 @@ import type {
   SessionView,
 } from "../shared/schema.js";
 import { shownArtifact } from "../shared/workspace.js";
-import type { GeminiVoice } from "./gemini.js";
-import { ArtifactThumb, Stage, type StageCapture } from "./Stage.js";
+import { useOverview } from "./overview.js";
+import { ArtifactThumb, Stage } from "./Stage.js";
+import { Switcher } from "./Switcher.js";
 
 const token = window.location.pathname.split("/").filter(Boolean).at(-1) ?? "";
 
 export function App() {
   const [session, setSession] = useState<SessionView | null>(null);
   const [error, setError] = useState("");
-  const [voiceState, setVoiceState] = useState<
-    "off" | "connecting" | "listening" | "error"
-  >("off");
-  const voice = useRef<GeminiVoice | null>(null);
-  const questionElements = useRef(new Map<string, HTMLElement>());
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
   const [acceptingAll, setAcceptingAll] = useState(false);
   const [stageExpanded, setStageExpanded] = useState(false);
-  const stageCapture = useRef<StageCapture | null>(null);
+  const [overviewVersion, setOverviewVersion] = useState(0);
+  const sessions = useOverview(overviewVersion);
   const showArtifact = useCallback(async (artifactId: string) => {
     await fetch(`/api/browser/${token}/stage`, {
       method: "POST",
@@ -45,6 +42,14 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [stageExpanded]);
+  const setStageVisible = useCallback(async (visible: boolean) => {
+    if (!visible) setStageExpanded(false);
+    await fetch(`/api/browser/${token}/stage/visibility`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ visible }),
+    });
+  }, []);
   const onDirtyChange = useCallback((questionId: string, value: boolean) => {
     setDirty((current) => {
       if (current.has(questionId) === value) return current;
@@ -63,7 +68,6 @@ export function App() {
     }
     const next = (await response.json()) as SessionView;
     setSession(next);
-    voice.current?.updateSession(next);
   }, []);
 
   useEffect(() => {
@@ -93,9 +97,10 @@ export function App() {
           nextSocket.close();
           return;
         }
+        if (message.type === "overview")
+          setOverviewVersion((value) => value + 1);
         if (message.type === "state" && message.session) {
           setSession(message.session);
-          voice.current?.updateSession(message.session);
         }
       };
       nextSocket.onerror = () => setError(disconnectedMessage);
@@ -116,37 +121,8 @@ export function App() {
         socket?.readyState === WebSocket.OPEN
       )
         socket.close();
-      void voice.current?.stop();
     };
   }, [refresh]);
-
-  useEffect(() => {
-    if (session?.focusSource === "gemini" && session.focusedQuestionId) {
-      questionElements.current
-        .get(session.focusedQuestionId)
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  }, [session?.focusSource, session?.focusedQuestionId]);
-
-  const toggleVoice = async () => {
-    if (!session || session.status !== "active") return;
-    if (voice.current) {
-      await voice.current.stop();
-      voice.current = null;
-      setVoiceState("off");
-      return;
-    }
-    setVoiceState("connecting");
-    const { GeminiVoice } = await import("./gemini.js");
-    const instance = new GeminiVoice(token, session, {
-      onState: setVoiceState,
-      onError: setError,
-      refresh: () => void refresh(),
-      captureStage: async () => (await stageCapture.current?.()) ?? null,
-    });
-    voice.current = instance;
-    if (!(await instance.start())) voice.current = null;
-  };
 
   if (!session)
     return (
@@ -205,34 +181,24 @@ export function App() {
           question={question}
           number={index + 1}
           emphasized={question.id === focused}
-          geminiFocused={
-            session.focusSource === "gemini" &&
-            session.focusedQuestionIds.includes(question.id)
-          }
-          geminiFocusLead={
-            session.focusSource === "gemini" &&
-            question.id === session.focusedQuestionId
-          }
           disabled={!active || acceptingAll}
-          elementRef={(element) => {
-            if (element) questionElements.current.set(question.id, element);
-            else questionElements.current.delete(question.id);
-          }}
           onSaved={refresh}
           onDirtyChange={onDirtyChange}
           artifacts={session.artifacts}
           shownArtifactId={shown?.id ?? null}
-          onShowArtifact={(id) => void showArtifact(id)}
+          onShowArtifact={(id) => {
+            void showArtifact(id);
+            if (!session.stageVisible) void setStageVisible(true);
+          }}
         />
       ))}
     </section>
   );
+  const workspaceOpen = session.stageVisible && session.artifacts.length > 0;
   return (
-    <main
-      className={`shell ${session.artifacts.length ? "with-workspace" : ""}`}
-    >
+    <main className={`shell ${workspaceOpen ? "with-workspace" : ""}`}>
       <header className="topbar">
-        <h1>{session.title}</h1>
+        <Switcher session={session} sessions={sessions} />
         {total > 0 && (
           <span
             className="progress"
@@ -259,23 +225,22 @@ export function App() {
               : `Accept ${acceptable.length} default${acceptable.length === 1 ? "" : "s"}`}
           </button>
         )}
-        <button
-          className={`mic ${voiceState}`}
-          onClick={() => void toggleVoice()}
-          disabled={!active || voiceState === "connecting"}
-          aria-label={
-            voiceState === "listening"
-              ? "Stop voice conversation"
-              : "Start voice conversation"
-          }
-          title={
-            voiceState === "listening"
-              ? "Stop voice conversation"
-              : "Start voice conversation"
-          }
-        >
-          <MicIcon active={voiceState === "listening"} />
-        </button>
+        {session.artifacts.length > 0 && (
+          <button
+            className={`workspace-toggle ${workspaceOpen ? "on" : ""}`}
+            type="button"
+            aria-pressed={workspaceOpen}
+            onClick={() => void setStageVisible(!workspaceOpen)}
+            title={
+              workspaceOpen
+                ? "Hide the plan and other workspace items"
+                : "Show the plan and other workspace items"
+            }
+          >
+            Workspace
+            <span className="count">{session.artifacts.length}</span>
+          </button>
+        )}
       </header>
       {error && (
         <div className="notice" role="status">
@@ -287,7 +252,7 @@ export function App() {
           This interview is finished. Answers are available to review.
         </div>
       )}
-      {session.artifacts.length ? (
+      {workspaceOpen ? (
         <div className={`workspace ${stageExpanded ? "expanded" : ""}`}>
           <Stage
             token={token}
@@ -295,7 +260,7 @@ export function App() {
             expanded={stageExpanded}
             onShow={(id) => void showArtifact(id)}
             onToggleExpanded={() => setStageExpanded((value) => !value)}
-            captureRef={stageCapture}
+            onClose={() => void setStageVisible(false)}
           />
           {questions}
         </div>
@@ -366,10 +331,7 @@ function QuestionCard({
   question,
   number,
   emphasized,
-  geminiFocused,
-  geminiFocusLead,
   disabled,
-  elementRef,
   onSaved,
   onDirtyChange,
   artifacts,
@@ -380,11 +342,7 @@ function QuestionCard({
   question: QuestionView;
   number: number;
   emphasized: boolean;
-  geminiFocused: boolean;
-  /** First question of the group voice is discussing; carries the label. */
-  geminiFocusLead: boolean;
   disabled: boolean;
-  elementRef(element: HTMLElement | null): void;
   onSaved(): Promise<void>;
   onDirtyChange(questionId: string, dirty: boolean): void;
   artifacts: ArtifactView[];
@@ -470,8 +428,7 @@ function QuestionCard({
 
   return (
     <article
-      ref={elementRef}
-      className={`question ${open ? "open" : ""} ${emphasized ? "emphasized" : ""} ${geminiFocused ? "gemini-focused" : ""} ${question.answer?.delivered ? "received" : ""}`}
+      className={`question ${open ? "open" : ""} ${emphasized ? "emphasized" : ""} ${question.answer?.delivered ? "received" : ""}`}
     >
       <div className="question-heading">
         <span className="number">{String(number).padStart(2, "0")}</span>
@@ -486,7 +443,6 @@ function QuestionCard({
             {linked.title}
           </button>
         )}
-        {geminiFocusLead && <span className="gemini-focus">Gemini</span>}
         {question.answer && (
           <button
             className="edit"
@@ -515,8 +471,8 @@ function QuestionCard({
           ) : (
             <span
               className="status-icon saved"
-              aria-label="Saved locally"
-              title="Saved locally"
+              aria-label="Saved"
+              title="Saved"
             >
               ✓
             </span>
@@ -695,14 +651,5 @@ function Recommendation({ markdown }: { markdown: string }) {
         <Markdown>{markdown}</Markdown>
       </div>
     </div>
-  );
-}
-function MicIcon({ active }: { active: boolean }) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-5a3.5 3.5 0 1 0-7 0v5A3.5 3.5 0 0 0 12 15Z" />
-      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6" />
-      {active && <circle cx="19" cy="5" r="3" className="live-dot" />}
-    </svg>
   );
 }

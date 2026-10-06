@@ -1,13 +1,9 @@
-import { useEffect, useMemo, useRef, type RefObject } from "react";
+import { useMemo } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ArtifactView, SessionView } from "../shared/schema.js";
 import { artifactViewUrl, shownArtifact } from "../shared/workspace.js";
 import { svgImageUrl } from "./diagram.js";
-import { captureFrame, captureImage, type StageImage } from "./stageCapture.js";
-
-/** Photographs whatever the stage shows, for Gemini; null for text artifacts. */
-export type StageCapture = () => Promise<StageImage | null>;
 
 const KIND_LABEL: Record<ArtifactView["kind"], string> = {
   plan: "Plan",
@@ -22,17 +18,16 @@ export function Stage({
   expanded,
   onShow,
   onToggleExpanded,
-  captureRef,
+  onClose,
 }: {
   token: string;
   session: SessionView;
   expanded: boolean;
   onShow(artifactId: string): void;
   onToggleExpanded(): void;
-  captureRef: RefObject<StageCapture | null>;
+  onClose(): void;
 }) {
   const shown = shownArtifact(session);
-  const frameRef = useRef<HTMLIFrameElement | null>(null);
   const imageUrl = useMemo(
     () =>
       shown?.format === "svg" && shown.content
@@ -40,14 +35,6 @@ export function Stage({
         : null,
     [shown?.format, shown?.content],
   );
-  useEffect(() => {
-    captureRef.current = async () => {
-      if (imageUrl) return captureImage(imageUrl);
-      if (shown?.format === "html" && frameRef.current)
-        return captureFrame(frameRef.current);
-      return null;
-    };
-  }, [captureRef, shown, imageUrl]);
   const source =
     shown && session.stage?.artifactId === shown.id
       ? session.stage.source
@@ -80,9 +67,7 @@ export function Stage({
           ))}
         </div>
         {source && source !== "user" && (
-          <span className="stage-source">
-            via {source === "gemini" ? "Gemini" : "agent"}
-          </span>
+          <span className="stage-source">via agent</span>
         )}
         <button
           type="button"
@@ -91,6 +76,15 @@ export function Stage({
           title={expanded ? "Show questions (Esc)" : "Hide questions"}
         >
           {expanded ? "Collapse" : "Expand"}
+        </button>
+        <button
+          type="button"
+          className="stage-close"
+          onClick={onClose}
+          aria-label="Hide the workspace"
+          title="Hide the workspace"
+        >
+          ×
         </button>
       </div>
       {shown && (
@@ -103,7 +97,6 @@ export function Stage({
               // A fresh frame per URL: re-pointing a loaded frame between
               // archify's embed and full viewers has left it blank.
               key={frameUrl}
-              ref={frameRef}
               className="artifact-frame"
               title={shown.title}
               // No sandbox attribute: the server's CSP sandbox header isolates

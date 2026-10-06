@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -9,33 +10,30 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { basename, dirname, join } from "node:path";
 import envPaths from "env-paths";
-import { geminiKeyFile } from "./server/config.js";
+import { normalizeRemote } from "./shared/remote.js";
 
-const defaultBase = process.env.INTERVIEWER_URL ?? "http://127.0.0.1:47831";
+const defaultBase = (
+  process.env.INTERVIEWER_URL ?? "https://interviewer.zerobsai.com"
+).replace(/\/+$/, "");
 
 async function main(args: string[]): Promise<void> {
   if (!args.length || args.includes("--help") || args[0] === "help")
     return printHelp();
   const [group, action, ...rest] = args;
-  // These manage the daemon itself, so they must not start it first.
-  if (group === "daemon") return daemonCommand(action);
-  if (group === "config") return configCommand(action, rest);
-  await ensureDaemon();
+  if (group === "login") return login();
+  if (group === "logout") return logout();
+  if (group === "whoami") return whoami();
   if (group === "session") return sessionCommand(action, rest);
   if (group === "question") return questionCommand(action, rest);
-  if (group === "clarification") return clarificationCommand(action, rest);
   if (group === "artifact") return artifactCommand(action, rest);
+  if (group === "stage") return stageCommand(action, rest);
+  if (group === "project") return projectCommand(action, rest);
   if (group === "plan")
     return planCommand(
-      [action, ...rest].filter((value): value is string => Boolean(value)),
-    );
-  if (group === "note")
-    return noteCommand(
       [action, ...rest].filter((value): value is string => Boolean(value)),
     );
   if (group === "attach")
@@ -51,25 +49,29 @@ async function main(args: string[]): Promise<void> {
 }
 
 async function sessionCommand(action: string | undefined, args: string[]) {
-  if (action === "create")
-    return output(
-      await api("/api/sessions", {
-        method: "POST",
-        body: JSON.stringify({
-          title: flag(args, "--title") ?? "Untitled interview",
-        }),
+  if (action === "create") {
+    const session = await api("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        title: flag(args, "--title") ?? "Untitled interview",
+        stageVisible: args.includes("--open-stage"),
+        origin: detectOrigin(args),
       }),
-    );
+    });
+    return output(session);
+  }
   if (action === "list")
     return output(
       await api(`/api/sessions${args.includes("--all") ? "?all=true" : ""}`),
     );
   const id = positional(args, 0);
   if (action === "show") return output(await api(`/api/sessions/${id}`));
-  if (action === "stop" || action === "resume")
-    return output(
-      await api(`/api/sessions/${id}/${action}`, { method: "POST" }),
-    );
+  if (action === "stop" || action === "resume") {
+    const result = await api(`/api/sessions/${id}/${action}`, {
+      method: "POST",
+    });
+    return output(result);
+  }
   if (action === "delete")
     return output(await api(`/api/sessions/${id}`, { method: "DELETE" }));
   throw new Error(`Unknown session action: ${action ?? ""}`);
@@ -354,55 +356,109 @@ async function planCommand(args: string[]) {
   );
 }
 
-async function noteCommand(args: string[]) {
-  const sessionId = positional(args, 0);
-  const text = flag(args, "--text");
-  if (!text) throw new Error("--text is required");
-  return output(
-    await api(`/api/sessions/${sessionId}/notes`, {
-      method: "POST",
-      body: JSON.stringify({
-        text,
-        questionId: flag(args, "--question") ?? null,
-        speak: args.includes("--speak"),
-      }),
-    }),
-  );
+function git(...args: string[]): string | null {
+  try {
+    return (
+      execFileSync("git", args, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim() || null
+    );
+  } catch {
+    return null;
+  }
 }
 
-async function clarificationCommand(
-  action: string | undefined,
-  args: string[],
-) {
-  if (action !== "reply")
-    throw new Error(`Unknown clarification action: ${action ?? ""}`);
-  const sessionId = positional(args, 0);
-  const requestId = positional(args, 1);
-  const response =
-    flag(args, "--text") ??
-    String(
-      ((await jsonInput(args)) as { response?: string } | null)?.response ?? "",
+/** "claude-code_2-1-286_agent" → "Claude Code", from the shared AI_AGENT convention. */
+function agentName(): string | undefined {
+  const raw = process.env.AI_AGENT?.split("_")[0];
+  if (raw)
+    return raw
+      .split("-")
+      .map((word) => word[0]!.toUpperCase() + word.slice(1))
+      .join(" ");
+  if (process.env.CLAUDECODE) return "Claude Code";
+  return undefined;
+}
+
+/**
+ * Where this interview runs. The project is the git remote, so every
+ * worktree and cloud session of a repo lands in one project; without a
+ * remote it is the main checkout's folder. --project names one explicitly.
+ */
+function detectOrigin(args: string[]): Record<string, string> {
+  const origin: Record<string, string> = {};
+  const set = (key: string, value: string | null | undefined) => {
+    if (value) origin[key] = value;
+  };
+  const remote = git("remote", "get-url", "origin");
+  const common = git("rev-parse", "--path-format=absolute", "--git-common-dir");
+  if (remote) set("projectKey", normalizeRemote(remote));
+  else if (common)
+    set("projectKey", `local/${basename(dirname(common)).toLowerCase()}`);
+  set("project", flag(args, "--project"));
+  set("branch", git("rev-parse", "--abbrev-ref", "HEAD"));
+  const top = git("rev-parse", "--show-toplevel");
+  if (top) set("worktree", basename(top));
+  set("agent", flag(args, "--agent") ?? agentName());
+  set("agentSession", flag(args, "--agent-session"));
+  set("agentSessionId", process.env.CLAUDE_CODE_SESSION_ID);
+  const location =
+    flag(args, "--location") ??
+    (process.env.CLAUDE_CODE_REMOTE === "true" ? "cloud" : undefined);
+  set("location", location ?? (process.env.CLAUDECODE ? "local" : undefined));
+  return origin;
+}
+
+async function projectCommand(action: string | undefined, args: string[]) {
+  if (action === "list") return output(await api("/api/sessions/projects"));
+  if (action === "rename" || action === "color") {
+    const value = flag(args, action === "rename" ? "--name" : "--color");
+    if (!value)
+      throw new Error(
+        action === "rename" ? "--name is required" : "--color is required",
+      );
+    return output(
+      await api("/api/sessions/projects/update", {
+        method: "POST",
+        body: JSON.stringify({
+          project: positional(args, 0),
+          [action === "rename" ? "name" : "color"]: value,
+        }),
+      }),
     );
-  if (!response) throw new Error("--text or JSON response is required");
+  }
+  throw new Error(`Unknown project action: ${action ?? ""}`);
+}
+
+/** Opens or closes the workspace column beside the questions. */
+async function stageCommand(action: string | undefined, args: string[]) {
+  if (action !== "open" && action !== "close")
+    throw new Error(`Unknown stage action: ${action ?? ""}`);
   return output(
-    await api(`/api/sessions/${sessionId}/clarifications/${requestId}/reply`, {
+    await api(`/api/sessions/${positional(args, 0)}/stage/visibility`, {
       method: "POST",
-      body: JSON.stringify({ response }),
+      body: JSON.stringify({ visible: action === "open" }),
     }),
   );
 }
 
 async function attach(args: string[]) {
   const id = positional(args, 0);
-  const response = await fetch(`${defaultBase}/api/sessions/${id}/attach`);
+  const response = await authorizedFetch(`/api/sessions/${id}/attach`);
   if (!response.ok) throw new Error(await errorMessage(response));
   if (!response.body) throw new Error("Attach stream unavailable");
   process.stdout.on("error", () => process.exit(0));
-  const reader = response.body.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    process.stdout.write(value);
+  const decoder = new TextDecoder();
+  let buffered = "";
+  for await (const chunk of response.body) {
+    buffered += decoder.decode(chunk, { stream: true });
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    for (const line of lines)
+      // Heartbeats only keep the connection open through proxies.
+      if (line && !line.startsWith('{"type":"heartbeat"'))
+        process.stdout.write(`${line}\n`);
   }
 }
 
@@ -416,204 +472,266 @@ async function eventsNext(args: string[]) {
   );
 }
 
-interface DaemonInfo {
-  pid: number;
-  version: string;
-  startedAt: string;
-  geminiKey: boolean;
-}
-
-async function daemonInfo(): Promise<DaemonInfo | null> {
-  try {
-    const response = await fetch(`${defaultBase}/api/daemon`, {
-      signal: AbortSignal.timeout(500),
-    });
-    return response.ok ? ((await response.json()) as DaemonInfo) : null;
-  } catch {
-    return null;
-  }
-}
-
-async function healthy(): Promise<boolean> {
-  try {
-    return (
-      await fetch(`${defaultBase}/health`, {
-        signal: AbortSignal.timeout(300),
-      })
-    ).ok;
-  } catch {
-    return false;
-  }
-}
-
-/** The daemon's pid, falling back to its runtime file for builds without /api/daemon. */
-async function daemonPid(): Promise<number | null> {
-  const info = await daemonInfo();
-  if (info) return info.pid;
-  if (!(await healthy())) return null;
-  try {
-    const runtime = JSON.parse(
-      readFileSync(join(envPaths("interviewer").temp, "daemon.json"), "utf8"),
-    ) as { pid?: number };
-    return runtime.pid ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function stopDaemon(): Promise<boolean> {
-  const pid = await daemonPid();
-  if (!pid) return false;
-  process.kill(pid, "SIGTERM");
-  for (let attempt = 0; attempt < 50; attempt++) {
-    await delay(100);
-    if (!(await healthy())) return true;
-  }
-  throw new Error(`Daemon ${pid} did not stop`);
-}
-
-/** Restart after a rebuild so the daemon runs the new code. */
-async function daemonCommand(action: string | undefined) {
-  if (action === "status") {
-    const info = await daemonInfo();
-    return output(info ? { running: true, ...info } : { running: false });
-  }
-  if (action === "stop") return output({ stopped: await stopDaemon() });
-  if (action === "restart") {
-    await stopDaemon();
-    await ensureDaemon();
-    return output({ running: true, ...(await daemonInfo()) });
-  }
-  throw new Error(`Unknown daemon action: ${action ?? ""}`);
-}
-
-/** Reads a secret without echoing it at a terminal, or from piped stdin. */
-async function readSecret(prompt: string): Promise<string> {
-  const stdin = process.stdin;
-  if (!stdin.isTTY) {
-    let text = "";
-    for await (const chunk of stdin) text += chunk;
-    return text.trim();
-  }
-  process.stderr.write(prompt);
-  stdin.setRawMode(true);
-  stdin.setEncoding("utf8");
-  stdin.resume();
-  return new Promise((resolve, reject) => {
-    let value = "";
-    const finish = (error?: Error) => {
-      stdin.setRawMode(false);
-      stdin.pause();
-      stdin.off("data", onData);
-      process.stderr.write("\n");
-      if (error) reject(error);
-      else resolve(value.trim());
-    };
-    const onData = (chunk: string) => {
-      for (const character of chunk) {
-        if (character === "\r" || character === "\n") return finish();
-        if (character === "\u0003") return finish(new Error("Cancelled"));
-        if (character === "\u007f" || character === "\b")
-          value = value.slice(0, -1);
-        else value += character;
-      }
-    };
-    stdin.on("data", onData);
-  });
-}
-
-async function configCommand(action: string | undefined, args: string[]) {
-  if (action !== "gemini-key")
-    throw new Error(`Unknown config setting: ${action ?? ""}`);
-  const file = geminiKeyFile();
-  if (args.includes("--clear")) {
-    rmSync(file, { force: true });
-    return output({ ok: true, cleared: file });
-  }
-  const key = await readSecret("Gemini API key (input hidden): ");
-  if (!key) throw new Error("No key entered");
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${key}\n`, { mode: 0o600 });
-  chmodSync(file, 0o600);
-  // The daemon reads the file on each voice start; no restart needed.
-  return output({ ok: true, file });
-}
-
-/** Node's fetch abandons responses after ~5 minutes, so long waits are chained. */
-const WAIT_REQUEST_MS = 240_000;
+/**
+ * Cloudflare drops a response that sends nothing for 100 s, so a long wait
+ * is a chain of shorter requests. Each but the last asks for a partial
+ * result, which leaves events queued rather than ending the batch early.
+ */
+const WAIT_REQUEST_MS = 60_000;
 
 async function waitForBatch(args: string[]) {
   const id = positional(args, 0);
   const idle = flag(args, "--idle") ?? "15000";
   const deadline = Date.now() + Number(flag(args, "--timeout") ?? 600_000);
   for (;;) {
-    const timeout = Math.max(
-      0,
-      Math.min(WAIT_REQUEST_MS, deadline - Date.now()),
-    );
+    const remaining = Math.max(0, deadline - Date.now());
+    const last = remaining <= WAIT_REQUEST_MS;
     const batch = (await api(
-      `/api/sessions/${id}/wait?idle=${encodeURIComponent(idle)}&timeout=${timeout}`,
-    )) as { events: unknown[] };
-    if (batch.events.length || Date.now() >= deadline) return output(batch);
+      `/api/sessions/${id}/wait?idle=${encodeURIComponent(idle)}&timeout=${Math.min(remaining, WAIT_REQUEST_MS)}${last ? "" : "&partial=1"}`,
+    )) as { partial?: boolean };
+    if (!batch.partial) return output(batch);
   }
 }
 
 async function api(path: string, init?: RequestInit): Promise<unknown> {
-  const request = init?.body
-    ? { ...init, headers: { "content-type": "application/json" } }
-    : init;
-  const response = await fetch(`${defaultBase}${path}`, request);
+  const response = await authorizedFetch(path, init);
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json();
 }
 async function errorMessage(response: Response): Promise<string> {
+  if (response.status === 401)
+    return "Not signed in. Run `interviewer login` in a terminal.";
   const value = (await response
     .json()
     .catch(() => ({ error: response.statusText }))) as { error?: string };
   return value.error ?? `HTTP ${response.status}`;
 }
 
-async function ensureDaemon(): Promise<void> {
+/** A request with the stored access token, refreshed when it is about to expire or is refused. */
+async function authorizedFetch(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const send = (token: string | null) =>
+    fetch(`${defaultBase}${path}`, {
+      ...init,
+      headers: {
+        ...(init?.body ? { "content-type": "application/json" } : {}),
+        ...(init?.headers as Record<string, string> | undefined),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  const response = await send(await accessToken(false));
+  if (response.status !== 401) return response;
+  const refreshed = await accessToken(true);
+  return refreshed ? send(refreshed) : response;
+}
+
+interface Credentials {
+  clientId: string;
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: number;
+}
+
+const credentialsFile = () =>
+  join(envPaths("interviewer").config, "credentials.json");
+
+/** Sign-ins by service URL, so a local Worker and the deployed one can coexist. */
+function readCredentials(): Record<string, Credentials> {
   try {
-    if (
-      (
-        await fetch(`${defaultBase}/health`, {
-          signal: AbortSignal.timeout(300),
-        })
-      ).ok
-    )
-      return;
+    return JSON.parse(readFileSync(credentialsFile(), "utf8")) as Record<
+      string,
+      Credentials
+    >;
   } catch {
-    /* start it */
+    return {};
   }
-  if (process.env.INTERVIEWER_URL)
-    throw new Error(`Interviewer service is unavailable at ${defaultBase}`);
-  const here = dirname(fileURLToPath(import.meta.url));
-  const server = join(here, "server", "main.js");
-  if (!existsSync(server))
-    throw new Error("Built daemon not found. Run npm run build first.");
-  const child = spawn(process.execPath, [server], {
-    detached: true,
-    stdio: "ignore",
-    env: process.env,
+}
+
+function writeCredentials(credentials: Credentials | null): void {
+  const all = readCredentials();
+  if (credentials) all[defaultBase] = credentials;
+  else delete all[defaultBase];
+  const file = credentialsFile();
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(file, 0o600);
+}
+
+async function accessToken(forceRefresh: boolean): Promise<string | null> {
+  if (process.env.INTERVIEWER_TOKEN) return process.env.INTERVIEWER_TOKEN;
+  const stored = readCredentials()[defaultBase];
+  if (!stored) return null;
+  if (!forceRefresh && stored.expiresAt - Date.now() > 60_000)
+    return stored.accessToken;
+  if (!stored.refreshToken) return null;
+  const response = await fetch(`${defaultBase}/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: stored.refreshToken,
+      client_id: stored.clientId,
+    }),
   });
-  child.unref();
-  for (let attempt = 0; attempt < 40; attempt++) {
-    await delay(100);
-    try {
-      if (
-        (
-          await fetch(`${defaultBase}/health`, {
-            signal: AbortSignal.timeout(300),
-          })
-        ).ok
-      )
-        return;
-    } catch {
-      /* retry */
+  if (!response.ok) return null;
+  const tokens = (await response.json()) as TokenResponse;
+  writeCredentials(credentialsFrom(stored.clientId, tokens, stored));
+  return tokens.access_token;
+}
+
+interface TokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+}
+
+function credentialsFrom(
+  clientId: string,
+  tokens: TokenResponse,
+  previous?: Credentials,
+): Credentials {
+  return {
+    clientId,
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token ?? previous?.refreshToken ?? null,
+    expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+  };
+}
+
+/**
+ * Signs in through the browser: the Worker's Cloudflare Access login, then
+ * OAuth (authorization code with PKCE) back to a one-off loopback callback.
+ */
+async function login() {
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const state = randomBytes(16).toString("base64url");
+  let finish!: (result: { code?: string; error?: string }) => void;
+  const result = new Promise<{ code?: string; error?: string }>((resolve) => {
+    finish = resolve;
+  });
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (url.pathname !== "/callback") {
+      response.writeHead(404).end();
+      return;
     }
+    const code = url.searchParams.get("code");
+    const ok = url.searchParams.get("state") === state && code !== null;
+    response
+      .writeHead(ok ? 200 : 400, { "content-type": "text/html" })
+      .end(
+        `<!doctype html><meta charset="utf-8"><p style="font:16px system-ui;margin:3rem">${ok ? "Signed in. You can close this tab." : "Sign-in failed. Check the terminal."}</p>`,
+      );
+    finish(
+      ok
+        ? { code }
+        : {
+            error:
+              url.searchParams.get("error_description") ??
+              url.searchParams.get("error") ??
+              "State mismatch",
+          },
+    );
+  });
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const port = (server.address() as { port: number }).port;
+  const redirectUri = `http://127.0.0.1:${port}/callback`;
+  try {
+    const registration = await fetch(`${defaultBase}/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "interviewer CLI",
+        redirect_uris: [redirectUri],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      }),
+    });
+    if (!registration.ok)
+      throw new Error(
+        `Client registration failed: ${await registration.text()}`,
+      );
+    const { client_id: clientId } = (await registration.json()) as {
+      client_id: string;
+    };
+    const authorizeUrl = new URL(`${defaultBase}/authorize`);
+    authorizeUrl.search = new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope: "interviews",
+      state,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+    }).toString();
+    process.stderr.write(
+      `Opening your browser to sign in. If it doesn't open, visit:\n${authorizeUrl}\n`,
+    );
+    openBrowser(authorizeUrl.toString());
+    const timeout = setTimeout(
+      () => finish({ error: "Timed out waiting for sign-in" }),
+      300_000,
+    );
+    const { code, error } = await result;
+    clearTimeout(timeout);
+    if (!code) throw new Error(error ?? "Sign-in failed");
+    const response = await fetch(`${defaultBase}/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: redirectUri,
+        client_id: clientId,
+        code_verifier: verifier,
+      }),
+    });
+    if (!response.ok)
+      throw new Error(`Token exchange failed: ${await response.text()}`);
+    writeCredentials(
+      credentialsFrom(clientId, (await response.json()) as TokenResponse),
+    );
+    return output({ ok: true, url: defaultBase });
+  } finally {
+    server.close();
   }
-  throw new Error("Interviewer daemon did not start");
+}
+
+function openBrowser(url: string): void {
+  const command =
+    process.platform === "darwin"
+      ? "open"
+      : process.platform === "win32"
+        ? "explorer"
+        : "xdg-open";
+  try {
+    spawn(command, [url], { stdio: "ignore", detached: true }).unref();
+  } catch {
+    /* the URL is printed */
+  }
+}
+
+async function logout() {
+  writeCredentials(null);
+  return output({ ok: true, url: defaultBase });
+}
+
+async function whoami() {
+  const stored = readCredentials()[defaultBase];
+  const signedIn = (await authorizedFetch("/api/sessions")).ok;
+  return output({
+    url: defaultBase,
+    signedIn,
+    ...(stored
+      ? { tokenExpiresAt: new Date(stored.expiresAt).toISOString() }
+      : {}),
+  });
 }
 
 async function jsonInput(args: string[]): Promise<unknown | null> {
@@ -649,7 +767,7 @@ function questionFromFlags(args: string[]): Record<string, unknown> {
   return result;
 }
 /** Flags that take no value, so the next argument stays positional. */
-const BOOLEAN_FLAGS = new Set(["--all", "--show", "--speak", "--stdin"]);
+const BOOLEAN_FLAGS = new Set(["--all", "--show", "--stdin", "--open-stage"]);
 
 function positional(args: string[], index: number): string {
   const values: string[] = [];
@@ -680,7 +798,31 @@ function output(value: unknown): void {
 }
 function printHelp(): void {
   process.stdout.write(
-    `interviewer — local agent-driven interviews\n\nCommands:\n  session create --title <text>\n  session list [--all]|show <id>|stop <id>|resume <id>|delete <id>\n  question add <session> --prompt <text> [--type <type>] [--option <text>] [--default <text>] [--recommendation <text>] [--artifact <id>]\n  types: text, single-choice, multiple-choice, yes-no, number; repeat --option/--default\n  question add|update <session> [question] --json '<object>'  (use --json - for stdin)\n  question delete|focus|reorder <session> <question> [--position N]\n  wait <session> [--idle MS] [--timeout MS]   one batch of answers once the user pauses\n  attach <session>\n  events next <session> [--timeout MS]\n  clarification reply <session> <request> --text <response>\n  note <session> --text <text> [--question <id>] [--speak]   message voice; --speak relays it right away\n  daemon status|restart|stop   restart after a rebuild to run the new code\n  config gemini-key [--clear]   store the key voice uses (typed hidden, or piped)\n  plan <session> --file <path|-> | --content <md> [--show]   create or replace the plan document\n  artifact add <session> --file <path|-> [--kind document|diagram|mockup] [--title T] [--description D] [--show]\n    diagrams: an archify spec (.json with diagram_type) is validated and rendered; also archify HTML or SVG\n  artifact update <session> <artifact> [--file|--content] [--title] [--description] [--show] [--quality showcase]\n  artifact show <session> <artifact|none>   put it on screen\n  artifact delete <session> <artifact>\n`,
+    `interviewer — agent-driven interviews (${defaultBase})
+
+Commands:
+  login | logout | whoami   sign in through the browser (Cloudflare Access, then OAuth)
+  session create --title <text> [--open-stage] [--agent-session <your session title>] [--project <name>]
+    the workspace column starts closed unless --open-stage; the project comes from the git remote
+  project list | rename <project> --name <name> | color <project> --color <#hex>
+  session list [--all]|show <id>|stop <id>|resume <id>|delete <id>
+  question add <session> --prompt <text> [--type <type>] [--option <text>] [--default <text>] [--recommendation <text>] [--artifact <id>]
+  types: text, single-choice, multiple-choice, yes-no, number; repeat --option/--default
+  question add|update <session> [question] --json '<object>'  (use --json - for stdin)
+  question delete|focus|reorder <session> <question> [--position N]
+  wait <session> [--idle MS] [--timeout MS]   one batch of answers once the user pauses
+  attach <session>
+  events next <session> [--timeout MS]
+  plan <session> --file <path|-> | --content <md> [--show]   create or replace the plan document
+  artifact add <session> --file <path|-> [--kind document|diagram|mockup] [--title T] [--description D] [--show]
+    diagrams: an archify spec (.json with diagram_type) is validated and rendered; also archify HTML or SVG
+  artifact update <session> <artifact> [--file|--content] [--title] [--description] [--show] [--quality showcase]
+  artifact show <session> <artifact|none>   choose what the workspace shows
+  artifact delete <session> <artifact>
+  stage open|close <session>   show or hide the workspace column
+
+INTERVIEWER_URL points at another deployment, such as wrangler dev.
+`,
   );
 }
 

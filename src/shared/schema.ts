@@ -12,6 +12,28 @@ export type QuestionType = z.infer<typeof QuestionTypeSchema>;
 
 export const SessionInputSchema = z.object({
   title: z.string().trim().min(1).max(200).default("Untitled interview"),
+  /**
+   * Whether the workspace column starts open. Closed by default, since the
+   * user may follow the plan elsewhere, such as a Markdown file or a design.
+   */
+  stageVisible: z.boolean().default(false),
+  /** Where the interview runs; the CLI detects it from git and the environment. */
+  origin: z
+    .object({
+      /** Normalized git remote, e.g. github.com/owner/repo, or local/<folder>. */
+      projectKey: z.string().trim().min(1).max(300).optional(),
+      /** Name for a project this key creates. */
+      projectName: z.string().trim().min(1).max(100).optional(),
+      /** An existing project's name or key, chosen by the agent; wins over projectKey. */
+      project: z.string().trim().min(1).max(300).optional(),
+      branch: z.string().trim().min(1).max(300).optional(),
+      worktree: z.string().trim().min(1).max(300).optional(),
+      agent: z.string().trim().min(1).max(100).optional(),
+      agentSession: z.string().trim().min(1).max(200).optional(),
+      agentSessionId: z.string().trim().min(1).max(200).optional(),
+      location: z.enum(["local", "cloud"]).optional(),
+    })
+    .default({}),
 });
 
 const DefaultValueSchema = z.union([
@@ -64,9 +86,9 @@ export const ARTIFACT_MAX_BYTES = 4_000_000;
 const artifactFields = {
   title: z.string().trim().min(1).max(200),
   content: z.string().max(ARTIFACT_MAX_BYTES),
-  /** Read to voice in place of content it can't use directly, such as mockup HTML. */
+  /** A summary of what the artifact shows, e.g. a mockup's layout. */
   description: z.string().trim().max(5_000).nullable(),
-  /** What a rendered artifact was built from, e.g. an archify diagram's JSON spec; voice reads it. */
+  /** What a rendered artifact was built from, e.g. an archify diagram's JSON spec. */
   source: z.string().max(ARTIFACT_MAX_BYTES).nullable(),
   /** Put the artifact on screen as part of this change. */
   show: z.boolean(),
@@ -87,26 +109,11 @@ export const AnswerInputSchema = z
   .object({
     answer: z.string().max(100_000).default(""),
     skipped: z.boolean().default(false),
-    callId: z.string().max(500).optional(),
   })
   .refine((value) => value.skipped || value.answer.trim().length > 0, {
     message: "An answer is required unless the question is skipped",
     path: ["answer"],
   });
-
-export const NoteInputSchema = z.object({
-  text: z.string().trim().min(1).max(20_000),
-  questionId: z.string().uuid().nullable().optional(),
-  /** Agent notes only: prompt voice to relay the note as soon as it is idle. */
-  speak: z.boolean().default(false),
-  callId: z.string().trim().min(1).max(500).optional(),
-});
-
-export const ClarificationInputSchema = z.object({
-  questionId: z.string().uuid(),
-  request: z.string().trim().min(1).max(20_000),
-  callId: z.string().trim().min(1).max(500),
-});
 
 export type SessionStatus = "active" | "stopped";
 export interface AnswerView {
@@ -152,23 +159,35 @@ export interface ArtifactView {
   updatedAt: string;
 }
 export type ArtifactFormat = "markdown" | "html" | "svg" | "text";
-export type StageSource = "agent" | "gemini" | "user";
-export interface ClarificationView {
+export type StageSource = "agent" | "user";
+/** A codebase interviews belong to, with a colour that stays the same everywhere. */
+export interface ProjectView {
   id: string;
-  questionId: string;
-  callId: string;
-  request: string;
-  response: string | null;
-  status: "pending" | "answered" | "cancelled";
+  key: string;
+  name: string;
+  color: string;
 }
-/** A message between voice and the interviewing agent that isn't an answer. */
-export interface NoteView {
+/** Where an interview is running: the worktree and the agent session that started it. */
+export interface OriginView {
+  branch: string | null;
+  worktree: string | null;
+  agent: string | null;
+  agentSession: string | null;
+  location: "local" | "cloud" | null;
+}
+/** One interview in the switcher and on the home page. */
+export interface SessionSummary {
   id: string;
-  from: "voice" | "agent";
-  text: string;
-  questionId: string | null;
-  speak: boolean;
-  createdAt: string;
+  token: string;
+  title: string;
+  status: SessionStatus;
+  project: ProjectView | null;
+  origin: OriginView;
+  answered: number;
+  total: number;
+  /** Unanswered questions in an active interview: they wait on the user. */
+  open: number;
+  lastActivity: string;
 }
 export interface SessionView {
   id: string;
@@ -181,19 +200,16 @@ export interface SessionView {
   focusedQuestionId: string | null;
   /** Every question in the focused group; the first is focusedQuestionId. */
   focusedQuestionIds: string[];
-  focusSource: "agent" | "gemini" | null;
   questions: QuestionView[];
-  clarifications: ClarificationView[];
-  /** The most recent notes, oldest first. */
-  notes: NoteView[];
   /** The plan first, then other artifacts in the order they were added. */
   artifacts: ArtifactView[];
   /** The artifact someone put on screen; null means the default (see shownArtifact). */
   stage: { artifactId: string; source: StageSource } | null;
-  voice: {
-    transcript: Array<{ role: "user" | "model"; text: string }>;
-    resumptionHandle: string | null;
-  };
+  /** Whether the workspace column is open, and who last opened or closed it. */
+  stageVisible: boolean;
+  stageVisibilitySource: StageSource | null;
+  project: ProjectView | null;
+  origin: OriginView;
 }
 export interface InterviewEvent {
   id: number;

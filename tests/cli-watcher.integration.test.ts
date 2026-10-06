@@ -1,17 +1,12 @@
 import { execFile } from "node:child_process";
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { serve } from "@hono/node-server";
 import { afterEach, describe, expect, it } from "vitest";
-import { createApp } from "../src/server/app.js";
-import { InterviewStore } from "../src/server/store.js";
+import { hubHarness } from "./helpers/harness.js";
 
 const exec = promisify(execFile);
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -19,20 +14,22 @@ afterEach(async () => {
   while (cleanups.length) await cleanups.pop()?.();
 });
 
+/** The hub served over real HTTP, without auth, as the CLI sees a local Worker. */
 async function listeningHarness() {
-  const store = new InterviewStore(":memory:");
-  const app = await createApp({
-    store,
-    port: 47831,
-    webRoot: "/missing",
-    geminiKeyFile: "/missing/gemini-api-key",
+  const { app, sql } = hubHarness();
+  const server = await new Promise<ReturnType<typeof serve>>((resolve) => {
+    const started = serve(
+      { fetch: app.fetch, hostname: "127.0.0.1", port: 0 },
+      () => resolve(started),
+    );
   });
-  const address = await app.listen({ host: "127.0.0.1", port: 0 });
+  const { port } = server.address() as AddressInfo;
   cleanups.push(async () => {
-    await app.close();
-    store.close();
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    sql.close();
   });
-  return { app, address };
+  return { address: `http://127.0.0.1:${port}` };
 }
 
 describe("spawned CLI seam", () => {
@@ -44,13 +41,24 @@ describe("spawned CLI seam", () => {
     const created = await exec(
       process.execPath,
       [tsx, cli, "session", "create", "--title", "Todo list product interview"],
-      { env: { ...process.env, INTERVIEWER_URL: address } },
+      {
+        env: {
+          ...process.env,
+          INTERVIEWER_URL: address,
+          INTERVIEWER_COMPANION: "off",
+        },
+      },
     );
     const session = JSON.parse(created.stdout);
-    expect(session.url).toMatch(/^http:\/\/127\.0\.0\.1:/);
+    expect(session.url).toMatch(/^https:\/\/interviewer\.test\/s\//);
+    expect(session.stageVisible).toBe(false);
     expect(session.title).toBe("Todo list product interview");
     const listed = await exec(process.execPath, [tsx, cli, "session", "list"], {
-      env: { ...process.env, INTERVIEWER_URL: address },
+      env: {
+        ...process.env,
+        INTERVIEWER_URL: address,
+        INTERVIEWER_COMPANION: "off",
+      },
     });
     expect(
       JSON.parse(listed.stdout).map((item: { id: string }) => item.id),
@@ -58,27 +66,28 @@ describe("spawned CLI seam", () => {
   });
 });
 
-describe("stored Gemini key", () => {
-  it("stores a piped key privately and never prints it", async () => {
-    const home = mkdtempSync(join(tmpdir(), "interviewer-home-"));
-    cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+describe("workspace through the CLI", () => {
+  it("opens and closes the workspace column", async () => {
+    const { address } = await listeningHarness();
     const tsx = new URL("../node_modules/tsx/dist/cli.mjs", import.meta.url)
       .pathname;
     const cli = new URL("../src/cli.ts", import.meta.url).pathname;
-    const stdout = await new Promise<string>((resolve, reject) => {
-      const child = execFile(
-        process.execPath,
-        [tsx, cli, "config", "gemini-key"],
-        { env: { ...process.env, HOME: home } },
-        (error, out) => (error ? reject(error) : resolve(out)),
+    const run = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await exec(process.execPath, [tsx, cli, ...args], {
+            env: {
+              ...process.env,
+              INTERVIEWER_URL: address,
+              INTERVIEWER_COMPANION: "off",
+            },
+          })
+        ).stdout,
       );
-      child.stdin!.end("secret-key-123\n");
-    });
-    const { file } = JSON.parse(stdout) as { file: string };
-    expect(stdout).not.toContain("secret-key-123");
-    expect(file.startsWith(home)).toBe(true);
-    expect(readFileSync(file, "utf8").trim()).toBe("secret-key-123");
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    const session = await run("session", "create", "--open-stage");
+    expect(session.stageVisible).toBe(true);
+    await run("stage", "close", session.id);
+    expect((await run("session", "show", session.id)).stageVisible).toBe(false);
   });
 });
 
@@ -113,6 +122,7 @@ if (command === "validate") {
         env: {
           ...process.env,
           INTERVIEWER_URL: address,
+          INTERVIEWER_COMPANION: "off",
           INTERVIEWER_ARCHIFY: archify,
         },
       });

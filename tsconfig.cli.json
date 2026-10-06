@@ -4,8 +4,14 @@
     "outDir": "dist",
     "rootDir": "src",
     "sourceMap": true,
-    "declaration": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "ES2022"
+    ]
   },
-  "include": ["src/cli.ts", "src/server/**/*.ts", "src/shared/**/*.ts"]
+  "include": [
+    "src/cli.ts"
+  ]
 }

@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "interviewer",
+  "account_id": "374784ce2915a597adcecf9bcb2c5ee6",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [{ "pattern": "interviewer.zerobsai.com", "custom_domain": true }],
+  "assets": {
+    "directory": "./web-dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "InterviewHub" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["InterviewHub"] }],
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV", "id": "362d9bb9c4cb4509a8d8d3a540dad73c" },
+  ],
+  "vars": {
+    "PUBLIC_URL": "https://interviewer.zerobsai.com",
+    "ALLOWED_EMAIL": "tim.oconnell.australia@gmail.com",
+    "ACCESS_TEAM_DOMAIN": "timoconnellaus.cloudflareaccess.com",
+    "ACCESS_AUD": "75090c8c3ba047cd1cc5bae6416450f9cbfd1f71567be1def519e6304b0c9e64",
+  },
+  "observability": { "enabled": true },
+}

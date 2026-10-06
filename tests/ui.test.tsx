@@ -9,7 +9,8 @@ import {
   fireEvent,
 } from "@testing-library/react";
 import { App } from "../src/web/App.js";
-import type { SessionView } from "../src/shared/schema.js";
+import type { SessionSummary, SessionView } from "../src/shared/schema.js";
+import { Home } from "../src/web/Home.js";
 
 const state: SessionView = {
   id: "s1",
@@ -21,7 +22,6 @@ const state: SessionView = {
   updatedAt: "",
   focusedQuestionId: null,
   focusedQuestionIds: [],
-  focusSource: null,
   questions: [
     {
       id: "q1",
@@ -45,12 +45,39 @@ const state: SessionView = {
       },
     },
   ],
-  clarifications: [],
-  notes: [],
   artifacts: [],
   stage: null,
-  voice: { transcript: [], resumptionHandle: null },
+  stageVisible: false,
+  stageVisibilitySource: null,
+  project: {
+    id: "p1",
+    key: "github.com/o/interviewer",
+    name: "Interviewer",
+    color: "#0f6b62",
+  },
+  origin: {
+    branch: "claude/switcher",
+    worktree: "interviewer-switcher",
+    agent: "Claude Code",
+    agentSession: "Switcher",
+    location: "local",
+  },
 };
+
+const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
+  id: "s1",
+  token: "token",
+  title: "Todo list product interview",
+  status: "active",
+  project: state.project,
+  origin: state.origin,
+  answered: 1,
+  total: 1,
+  open: 0,
+  lastActivity: new Date().toISOString(),
+  ...overrides,
+});
+let overview: SessionSummary[] = [summary({})];
 
 class FakeSocket {
   static CONNECTING = 0;
@@ -73,9 +100,17 @@ class FakeSocket {
 
 beforeEach(() => {
   vi.stubGlobal("WebSocket", FakeSocket);
+  overview = [summary({})];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => ({ ok: true, json: async () => structuredClone(state) })),
+    vi.fn(async (url: string) =>
+      String(url).endsWith("/overview")
+        ? {
+            ok: true,
+            json: async () => ({ sessions: structuredClone(overview) }),
+          }
+        : { ok: true, json: async () => structuredClone(state) },
+    ),
   );
 });
 afterEach(() => {
@@ -125,7 +160,7 @@ describe("questionnaire UI seam", () => {
     const { container } = render(<App />);
     expect(await screen.findByText("Choose a direction")).toBeInTheDocument();
     expect(container.querySelector(".answer-summary")).toHaveTextContent("A");
-    expect(screen.getByLabelText("Saved locally")).toBeInTheDocument();
+    expect(screen.getByLabelText("Saved")).toBeInTheDocument();
     expect(container.querySelector(".question")).toHaveClass("received");
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(screen.getByText("A", { selector: "strong" })).toBeInTheDocument();
@@ -161,39 +196,47 @@ describe("questionnaire UI seam", () => {
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
   });
 
-  it("marks and scrolls to the question Gemini is discussing", async () => {
-    const focused = structuredClone(state);
-    focused.focusedQuestionId = "q1";
-    focused.focusedQuestionIds = ["q1"];
-    focused.focusSource = "gemini";
-    const scrollIntoView = vi.fn();
-    Element.prototype.scrollIntoView = scrollIntoView;
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      json: async () => structuredClone(focused),
-    } as Response);
-
-    const { container } = render(<App />);
-    await screen.findByText("Choose a direction");
-
-    expect(container.querySelector(".question")).toHaveClass("gemini-focused");
-    expect(screen.getByText("Gemini")).toBeInTheDocument();
-    // Scrolling happens in an effect, which may run after the text appears.
-    await vi.waitFor(() =>
-      expect(scrollIntoView).toHaveBeenCalledWith({
-        behavior: "smooth",
-        block: "center",
+  it("marks the switcher when another interview is waiting on the user", async () => {
+    overview = [
+      summary({}),
+      summary({
+        id: "s2",
+        token: "other",
+        title: "Checkout flow",
+        open: 3,
+        answered: 0,
+        total: 3,
+        project: {
+          id: "p2",
+          key: "github.com/o/frockbot",
+          name: "FrockBot",
+          color: "#7a2e8f",
+        },
       }),
-    );
-  });
-
-  it("exposes one microphone control without rendering a transcript", async () => {
+      summary({
+        id: "s3",
+        token: "done",
+        title: "Old one",
+        status: "stopped",
+        open: 0,
+      }),
+    ];
     render(<App />);
-    await screen.findByText("Choose a direction");
     expect(
-      screen.getAllByRole("button", { name: "Start voice conversation" }),
-    ).toHaveLength(1);
-    expect(screen.queryByText(/Recent conversation/)).not.toBeInTheDocument();
+      await screen.findByLabelText("1 other interview waiting on you"),
+    ).toHaveTextContent("1");
+    fireEvent.click(
+      screen.getByRole("button", { name: /Todo list product interview/ }),
+    );
+    const menu = screen.getByRole("dialog", { name: "Switch interview" });
+    expect(menu).toHaveTextContent("FrockBot");
+    expect(menu).toHaveTextContent("3 open");
+    expect(menu).toHaveTextContent("Finished");
+    fireEvent.change(screen.getByLabelText("Search interviews"), {
+      target: { value: "frock" },
+    });
+    expect(menu).not.toHaveTextContent("Old one");
+    expect(menu).toHaveTextContent("Checkout flow");
   });
 
   it("pre-selects and marks the default, then accepts it in one click", async () => {
@@ -340,34 +383,6 @@ describe("questionnaire UI seam", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
-  it("highlights every question in the group voice is discussing", async () => {
-    const grouped = structuredClone(state);
-    const base = grouped.questions[0]!;
-    grouped.questions = [
-      { ...base, id: "q1", prompt: "First" },
-      { ...base, id: "q2", prompt: "Second" },
-      { ...base, id: "q3", prompt: "Third" },
-    ];
-    grouped.focusedQuestionId = "q1";
-    grouped.focusedQuestionIds = ["q1", "q2"];
-    grouped.focusSource = "gemini";
-    Element.prototype.scrollIntoView = vi.fn();
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      json: async () => structuredClone(grouped),
-    } as Response);
-    const { container } = render(<App />);
-    await screen.findByText("First");
-
-    const cards = container.querySelectorAll(".question");
-    expect(
-      Array.from(cards).map((card) =>
-        card.classList.contains("gemini-focused"),
-      ),
-    ).toEqual([true, true, false]);
-    expect(screen.getAllByText("Gemini")).toHaveLength(1);
-  });
-
   describe("workspace", () => {
     const artifact = (
       overrides: Partial<SessionView["artifacts"][number]>,
@@ -385,6 +400,7 @@ describe("questionnaire UI seam", () => {
     });
     const workspace = () => {
       const next = structuredClone(state);
+      next.stageVisible = true;
       next.artifacts = [
         artifact({
           content:
@@ -411,11 +427,38 @@ describe("questionnaire UI seam", () => {
         ok: true,
         json: async () => structuredClone(session),
       } as Response);
-    const stagePosts = () =>
+    const posts = (suffix: string) =>
       vi
         .mocked(fetch)
-        .mock.calls.filter(([url]) => String(url).endsWith("/stage"))
+        .mock.calls.filter(([url]) => String(url).endsWith(suffix))
         .map(([, init]) => JSON.parse(String(init?.body)));
+    const stagePosts = () => posts("/stage");
+
+    it("keeps the workspace closed until someone opens it", async () => {
+      const closed = workspace();
+      closed.stageVisible = false;
+      serve(closed);
+      render(<App />);
+      await screen.findByText("Choose a direction");
+      expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+      const toggle = screen.getByRole("button", { name: /Workspace/ });
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(toggle);
+      await vi.waitFor(() =>
+        expect(posts("/stage/visibility")).toEqual([{ visible: true }]),
+      );
+    });
+
+    it("closes the workspace from its own bar", async () => {
+      serve(workspace());
+      render(<App />);
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Hide the workspace" }),
+      );
+      await vi.waitFor(() =>
+        expect(posts("/stage/visibility")).toEqual([{ visible: false }]),
+      );
+    });
 
     it("shows the plan beside the questions and switches items for everyone", async () => {
       serve(workspace());
@@ -435,7 +478,7 @@ describe("questionnaire UI seam", () => {
 
     it("loads a staged mockup from its own sandboxed URL", async () => {
       const staged = workspace();
-      staged.stage = { artifactId: "a", source: "gemini" };
+      staged.stage = { artifactId: "a", source: "agent" };
       serve(staged);
       render(<App />);
       const frame = await screen.findByTitle("Layout A");
@@ -446,7 +489,7 @@ describe("questionnaire UI seam", () => {
       // to load frames that also carry the sandbox attribute.
       expect(frame).not.toHaveAttribute("sandbox");
       expect(screen.getByText("Sidebar navigation")).toBeInTheDocument();
-      expect(screen.getByText("via Gemini")).toBeInTheDocument();
+      expect(screen.getByText("via agent")).toBeInTheDocument();
     });
 
     it("shows archify diagrams compactly, and in the full viewer when expanded", async () => {
@@ -503,5 +546,25 @@ describe("questionnaire UI seam", () => {
         ]),
       );
     });
+  });
+});
+
+describe("home page", () => {
+  it("groups every interview by project with what each needs", async () => {
+    overview = [
+      summary({ title: "Checkout flow", open: 2, answered: 1, total: 3 }),
+      summary({ id: "s2", title: "Data import", project: null, open: 0 }),
+    ];
+    render(<Home />);
+    expect(
+      await screen.findByRole("region", { name: "Interviewer" }),
+    ).toHaveTextContent("1 needs you");
+    expect(screen.getByRole("link", { name: "Answer 2" })).toHaveAttribute(
+      "href",
+      "/s/token",
+    );
+    expect(
+      screen.getByRole("region", { name: "No project" }),
+    ).toHaveTextContent("Data import");
   });
 });

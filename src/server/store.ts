@@ -1,190 +1,316 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { randomBytes, randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
-import envPaths from "env-paths";
 import {
   AnswerInputSchema,
   ArtifactInputSchema,
   ArtifactPatchSchema,
-  ClarificationInputSchema,
-  NoteInputSchema,
   normalizeDefault,
   QuestionInputSchema,
   QuestionPatchSchema,
   SessionInputSchema,
   type ArtifactView,
   type InterviewEvent,
-  type NoteView,
+  type OriginView,
+  type ProjectView,
+  type SessionSummary,
   type StageSource,
   type QuestionView,
   type SessionView,
 } from "../shared/schema.js";
 import { artifactFormat } from "../shared/workspace.js";
+import { first, type Row, type Sql } from "./sql.js";
 
 const now = () => new Date().toISOString();
-const json = <T>(value: string): T => JSON.parse(value) as T;
+const json = <T>(value: unknown): T => JSON.parse(String(value)) as T;
+const optional = (value: unknown) => (value === null ? null : String(value));
 
-export function defaultDatabasePath(): string {
-  return `${envPaths("interviewer").data}/interviewer.sqlite`;
+/**
+ * Project colours: dark enough for white text, and different in lightness as
+ * well as hue so they stay distinguishable without colour vision.
+ */
+export const PROJECT_COLORS = [
+  "#0f6b62",
+  "#7a2e8f",
+  "#2550b8",
+  "#b4520f",
+  "#a3243b",
+  "#3d6b1f",
+  "#5b4bb7",
+  "#00708a",
+  "#8a6200",
+  "#6b4a3a",
+];
+
+/** "frockbot" → "Frockbot"; the user can rename it later. */
+function projectName(key: string): string {
+  const last = key.split(/[/:]/).filter(Boolean).at(-1) ?? key;
+  const words = last
+    .replace(/\.git$/, "")
+    .split(/[-_\s]+/)
+    .filter(Boolean);
+  return words.map((word) => word[0]!.toUpperCase() + word.slice(1)).join(" ");
+}
+
+const ORIGIN_COLUMNS = [
+  "project_id",
+  "branch",
+  "worktree",
+  "agent",
+  "agent_session",
+  "agent_session_id",
+  "location",
+] as const;
+
+/** 192 random bits, URL-safe: the secret part of a session's browser URL. */
+function sessionToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 export class InterviewStore {
-  readonly db: DatabaseSync;
   private readonly listeners = new Set<(event: InterviewEvent) => void>();
 
-  constructor(path = defaultDatabasePath()) {
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    this.db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
-    this.db.exec(`
+  constructor(private readonly sql: Sql) {
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'Untitled interview', token TEXT UNIQUE NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active', focused_question_id TEXT, focus_source TEXT,
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-        transcript TEXT NOT NULL DEFAULT '[]', resumption_handle TEXT
+        status TEXT NOT NULL DEFAULT 'active', focused_question_id TEXT, focused_question_ids TEXT NOT NULL DEFAULT '[]',
+        stage_artifact_id TEXT, stage_source TEXT,
+        stage_visible INTEGER NOT NULL DEFAULT 0, stage_visibility_source TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS questions (
-        id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-        type TEXT NOT NULL, prompt TEXT NOT NULL, recommendation TEXT, options TEXT NOT NULL DEFAULT '[]',
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+        type TEXT NOT NULL, prompt TEXT NOT NULL, recommendation TEXT, default_answer TEXT,
+        options TEXT NOT NULL DEFAULT '[]', artifact_id TEXT, option_artifacts TEXT NOT NULL DEFAULT '{}',
         min REAL, max REAL, step REAL, position INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS answers (
-        question_id TEXT PRIMARY KEY REFERENCES questions(id) ON DELETE CASCADE,
+        question_id TEXT PRIMARY KEY,
         text TEXT NOT NULL, skipped INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL,
         delivered INTEGER NOT NULL DEFAULT 0, event_id INTEGER, updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
         type TEXT NOT NULL, payload TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS clarifications (
-        id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-        question_id TEXT NOT NULL, call_id TEXT NOT NULL, request TEXT NOT NULL, response TEXT,
-        status TEXT NOT NULL DEFAULT 'pending', event_id INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-        UNIQUE(session_id, call_id)
-      );
-      CREATE TABLE IF NOT EXISTS notes (
-        id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-        sender TEXT NOT NULL, text TEXT NOT NULL, question_id TEXT, speak INTEGER NOT NULL DEFAULT 0,
-        call_id TEXT, created_at TEXT NOT NULL, UNIQUE(session_id, call_id)
-      );
       CREATE TABLE IF NOT EXISTS artifacts (
-        id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
         kind TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, description TEXT, source TEXT,
         revision INTEGER NOT NULL DEFAULT 1, deleted INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS tool_calls (
-        session_id TEXT NOT NULL, call_id TEXT NOT NULL, name TEXT NOT NULL, result TEXT NOT NULL,
-        cancelled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, PRIMARY KEY(session_id, call_id)
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, name TEXT NOT NULL, color TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS questions_session ON questions(session_id);
+      CREATE INDEX IF NOT EXISTS events_session ON events(session_id, delivered);
+      CREATE INDEX IF NOT EXISTS artifacts_session ON artifacts(session_id);
     `);
-    const sessionColumns = this.db
-      .prepare("PRAGMA table_info(sessions)")
-      .all() as Array<{
-      name: string;
-    }>;
-    if (!sessionColumns.some((column) => column.name === "title"))
-      this.db.exec(
-        "ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT 'Untitled interview'",
-      );
-    if (!sessionColumns.some((column) => column.name === "focus_source"))
-      this.db.exec("ALTER TABLE sessions ADD COLUMN focus_source TEXT");
-    if (
-      !sessionColumns.some((column) => column.name === "focused_question_ids")
-    )
-      this.db.exec(
-        "ALTER TABLE sessions ADD COLUMN focused_question_ids TEXT NOT NULL DEFAULT '[]'",
-      );
-    const questionColumns = this.db
-      .prepare("PRAGMA table_info(questions)")
-      .all() as Array<{ name: string }>;
-    if (!questionColumns.some((column) => column.name === "default_answer"))
-      this.db.exec("ALTER TABLE questions ADD COLUMN default_answer TEXT");
-    if (!questionColumns.some((column) => column.name === "artifact_id"))
-      this.db.exec(
-        "ALTER TABLE questions ADD COLUMN artifact_id TEXT; ALTER TABLE questions ADD COLUMN option_artifacts TEXT NOT NULL DEFAULT '{}';",
-      );
-    const artifactColumns = this.db
-      .prepare("PRAGMA table_info(artifacts)")
-      .all() as Array<{ name: string }>;
-    if (!artifactColumns.some((column) => column.name === "source"))
-      this.db.exec("ALTER TABLE artifacts ADD COLUMN source TEXT");
-    if (!sessionColumns.some((column) => column.name === "stage_artifact_id"))
-      this.db.exec(
-        "ALTER TABLE sessions ADD COLUMN stage_artifact_id TEXT; ALTER TABLE sessions ADD COLUMN stage_source TEXT;",
-      );
+    // Columns added after the first deploy; adding one that exists throws.
+    for (const column of ORIGIN_COLUMNS)
+      try {
+        sql.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
+      } catch {
+        /* already there */
+      }
   }
 
-  close(): void {
-    this.db.close();
-  }
   subscribe(listener: (event: InterviewEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   createSession(baseUrl: string, input: unknown = {}): SessionView {
-    const { title } = SessionInputSchema.parse(input);
-    const id = randomUUID();
-    const token = randomBytes(24).toString("base64url");
+    const { title, stageVisible, origin } = SessionInputSchema.parse(input);
+    const id = crypto.randomUUID();
     const time = now();
-    this.db
-      .prepare(
-        "INSERT INTO sessions (id, title, token, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-      )
-      .run(id, title, token, time, time);
+    const projectId = this.resolveProject(origin);
+    this.sql.all(
+      `INSERT INTO sessions (id, title, token, stage_visible, stage_visibility_source, created_at, updated_at,
+        project_id, branch, worktree, agent, agent_session, agent_session_id, location)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      title,
+      sessionToken(),
+      stageVisible ? 1 : 0,
+      stageVisible ? "agent" : null,
+      time,
+      time,
+      projectId,
+      origin.branch ?? null,
+      origin.worktree ?? null,
+      origin.agent ?? null,
+      origin.agentSession ?? null,
+      origin.agentSessionId ?? null,
+      origin.location ?? null,
+    );
     this.emit(id, "session.created", { id });
     return this.getSession(id, baseUrl);
   }
 
+  /**
+   * The project an interview belongs to. A name the agent chose matches an
+   * existing project; otherwise the detected key finds or creates one, so
+   * every worktree and cloud session of a repo shares it.
+   */
+  private resolveProject(origin: {
+    project?: string | undefined;
+    projectKey?: string | undefined;
+    projectName?: string | undefined;
+  }): string | null {
+    if (origin.project) {
+      const found = first(
+        this.sql,
+        "SELECT id FROM projects WHERE lower(name) = lower(?) OR key = ?",
+        origin.project,
+        origin.project,
+      );
+      if (found) return String(found.id);
+      return this.createProject(
+        `name:${origin.project.toLowerCase()}`,
+        origin.project,
+      );
+    }
+    if (!origin.projectKey) return null;
+    const found = first(
+      this.sql,
+      "SELECT id FROM projects WHERE key = ?",
+      origin.projectKey,
+    );
+    if (found) return String(found.id);
+    return this.createProject(
+      origin.projectKey,
+      origin.projectName ?? projectName(origin.projectKey),
+    );
+  }
+
+  /** A new project takes the first colour no project has yet. */
+  private createProject(key: string, name: string): string {
+    const used = new Set(
+      this.sql
+        .all("SELECT color FROM projects")
+        .map((row) => String(row.color)),
+    );
+    const count = this.sql.all("SELECT COUNT(*) n FROM projects")[0]!.n;
+    const color =
+      PROJECT_COLORS.find((candidate) => !used.has(candidate)) ??
+      PROJECT_COLORS[Number(count) % PROJECT_COLORS.length]!;
+    const id = crypto.randomUUID();
+    this.sql.all(
+      "INSERT INTO projects (id, key, name, color, created_at) VALUES (?, ?, ?, ?, ?)",
+      id,
+      key,
+      name,
+      color,
+      now(),
+    );
+    return id;
+  }
+
+  listProjects(): ProjectView[] {
+    return this.sql
+      .all("SELECT * FROM projects ORDER BY lower(name)")
+      .map(mapProject);
+  }
+
+  /** Renames or recolours a project, found by its name or key. */
+  updateProject(
+    project: string,
+    patch: { name?: string | undefined; color?: string | undefined },
+  ): ProjectView {
+    const row = first(
+      this.sql,
+      "SELECT * FROM projects WHERE lower(name) = lower(?) OR key = ? OR id = ?",
+      project,
+      project,
+      project,
+    );
+    if (!row) throw new Error("Project not found");
+    const name = patch.name?.trim() || String(row.name);
+    const color = patch.color ?? String(row.color);
+    if (!/^#[0-9a-f]{6}$/i.test(color))
+      throw new Error("A project colour is a hex value like #2550b8");
+    this.sql.all(
+      "UPDATE projects SET name = ?, color = ? WHERE id = ?",
+      name,
+      color,
+      String(row.id),
+    );
+    return { ...mapProject(row), name, color };
+  }
+
+  /** Every interview, most recently active first, for the switcher and home page. */
+  summaries(): SessionSummary[] {
+    return this.sql
+      .all(
+        `SELECT s.*, p.id p_id, p.key p_key, p.name p_name, p.color p_color,
+          (SELECT COUNT(*) FROM questions q WHERE q.session_id = s.id AND q.deleted = 0) total,
+          (SELECT COUNT(*) FROM questions q JOIN answers a ON a.question_id = q.id
+            WHERE q.session_id = s.id AND q.deleted = 0) answered,
+          (SELECT MAX(created_at) FROM events e WHERE e.session_id = s.id) last_event
+        FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
+        ORDER BY COALESCE(last_event, s.updated_at) DESC LIMIT 200`,
+      )
+      .map((row) => {
+        const total = Number(row.total);
+        const answered = Number(row.answered);
+        const status = row.status as SessionSummary["status"];
+        return {
+          id: String(row.id),
+          token: String(row.token),
+          title: String(row.title),
+          status,
+          project: row.p_id
+            ? mapProject({
+                id: row.p_id,
+                key: row.p_key ?? null,
+                name: row.p_name ?? null,
+                color: row.p_color ?? null,
+              })
+            : null,
+          origin: mapOrigin(row),
+          answered,
+          total,
+          open: status === "active" ? total - answered : 0,
+          lastActivity: String(row.last_event ?? row.updated_at),
+        };
+      });
+  }
+
   listSessions(baseUrl: string, all = false): SessionView[] {
-    const rows = this.db
-      .prepare(
+    return this.sql
+      .all(
         `SELECT id FROM sessions ${all ? "" : "WHERE status = 'active'"} ORDER BY created_at DESC`,
       )
-      .all() as Array<{ id: string }>;
-    return rows.map((row) => this.getSession(row.id, baseUrl));
+      .map((row) => this.getSession(String(row.id), baseUrl));
   }
 
   sessionIdForToken(token: string): string | null {
-    const row = this.db
-      .prepare("SELECT id FROM sessions WHERE token = ?")
-      .get(token) as { id: string } | undefined;
-    return row?.id ?? null;
+    const row = first(
+      this.sql,
+      "SELECT id FROM sessions WHERE token = ?",
+      token,
+    );
+    return row ? String(row.id) : null;
   }
 
   getSession(id: string, baseUrl: string): SessionView {
-    const session = this.db
-      .prepare("SELECT * FROM sessions WHERE id = ?")
-      .get(id) as Record<string, unknown> | undefined;
+    const session = first(this.sql, "SELECT * FROM sessions WHERE id = ?", id);
     if (!session) throw new Error("Session not found");
-    const questions = this.db
-      .prepare(
-        `SELECT q.*, a.text answer_text, a.skipped, a.revision, a.delivered, a.updated_at answer_updated_at
+    const questions = this.sql.all(
+      `SELECT q.*, a.text answer_text, a.skipped, a.revision, a.delivered, a.updated_at answer_updated_at
       FROM questions q LEFT JOIN answers a ON a.question_id = q.id
       WHERE q.session_id = ? AND q.deleted = 0 ORDER BY q.position, q.created_at`,
-      )
-      .all(id) as Array<Record<string, unknown>>;
-    const clarifications = this.db
-      .prepare(
-        "SELECT * FROM clarifications WHERE session_id = ? ORDER BY created_at",
-      )
-      .all(id) as Array<Record<string, unknown>>;
-    const notes = (
-      this.db
-        .prepare(
-          "SELECT * FROM notes WHERE session_id = ? ORDER BY rowid DESC LIMIT 50",
-        )
-        .all(id) as Array<Record<string, unknown>>
-    ).reverse();
-    const artifacts = this.db
-      .prepare(
-        "SELECT * FROM artifacts WHERE session_id = ? AND deleted = 0 ORDER BY kind = 'plan' DESC, created_at, rowid",
-      )
-      .all(id) as Array<Record<string, unknown>>;
+      id,
+    );
+    const artifacts = this.sql.all(
+      "SELECT * FROM artifacts WHERE session_id = ? AND deleted = 0 ORDER BY kind = 'plan' DESC, created_at, rowid",
+      id,
+    );
     return {
       id: String(session.id),
       title: String(session.title),
@@ -193,34 +319,24 @@ export class InterviewStore {
       url: `${baseUrl}/s/${String(session.token)}`,
       createdAt: String(session.created_at),
       updatedAt: String(session.updated_at),
-      focusedQuestionId: session.focused_question_id
-        ? String(session.focused_question_id)
-        : null,
-      focusedQuestionIds: json<string[]>(String(session.focused_question_ids)),
-      focusSource: session.focus_source
-        ? (String(session.focus_source) as "agent" | "gemini")
-        : null,
+      focusedQuestionId: optional(session.focused_question_id),
+      focusedQuestionIds: json<string[]>(session.focused_question_ids),
       questions: questions.map((row): QuestionView => ({
         id: String(row.id),
-        // "range" was retired; its questions render as free-text numbers.
-        type:
-          row.type === "range" ? "number" : (row.type as QuestionView["type"]),
+        type: row.type as QuestionView["type"],
         prompt: String(row.prompt),
-        recommendation:
-          row.recommendation === null ? null : String(row.recommendation),
+        recommendation: optional(row.recommendation),
         default:
           row.default_answer === null
             ? null
-            : json<string[]>(String(row.default_answer)),
-        options: json<string[]>(String(row.options)),
+            : json<string[]>(row.default_answer),
+        options: json<string[]>(row.options),
         min: row.min === null ? null : Number(row.min),
         max: row.max === null ? null : Number(row.max),
         step: row.step === null ? null : Number(row.step),
         position: Number(row.position),
-        artifactId: row.artifact_id === null ? null : String(row.artifact_id),
-        optionArtifacts: json<Record<string, string>>(
-          String(row.option_artifacts),
-        ),
+        artifactId: optional(row.artifact_id),
+        optionArtifacts: json<Record<string, string>>(row.option_artifacts),
         answer:
           row.revision === null
             ? null
@@ -232,22 +348,6 @@ export class InterviewStore {
                 updatedAt: String(row.answer_updated_at),
               },
       })),
-      clarifications: clarifications.map((row) => ({
-        id: String(row.id),
-        questionId: String(row.question_id),
-        callId: String(row.call_id),
-        request: String(row.request),
-        response: row.response === null ? null : String(row.response),
-        status: row.status as "pending" | "answered" | "cancelled",
-      })),
-      notes: notes.map((row): NoteView => ({
-        id: String(row.id),
-        from: row.sender === "voice" ? "voice" : "agent",
-        text: String(row.text),
-        questionId: row.question_id === null ? null : String(row.question_id),
-        speak: Boolean(row.speak),
-        createdAt: String(row.created_at),
-      })),
       artifacts: artifacts.map(this.mapArtifact),
       stage: session.stage_artifact_id
         ? {
@@ -255,20 +355,33 @@ export class InterviewStore {
             source: String(session.stage_source) as StageSource,
           }
         : null,
-      voice: {
-        transcript: json(String(session.transcript)),
-        resumptionHandle: session.resumption_handle
-          ? String(session.resumption_handle)
-          : null,
-      },
+      stageVisible: Boolean(session.stage_visible),
+      stageVisibilitySource: optional(
+        session.stage_visibility_source,
+      ) as StageSource | null,
+      project: this.projectFor(session.project_id),
+      origin: mapOrigin(session),
     };
+  }
+
+  private projectFor(projectId: unknown): ProjectView | null {
+    if (!projectId) return null;
+    const row = first(
+      this.sql,
+      "SELECT * FROM projects WHERE id = ?",
+      String(projectId),
+    );
+    return row ? mapProject(row) : null;
   }
 
   setSessionStatus(id: string, status: "active" | "stopped"): void {
     this.requireSession(id);
-    this.db
-      .prepare("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?")
-      .run(status, now(), id);
+    this.sql.all(
+      "UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?",
+      status,
+      now(),
+      id,
+    );
     this.emit(
       id,
       status === "active" ? "session.resumed" : "session.stopped",
@@ -278,7 +391,15 @@ export class InterviewStore {
 
   deleteSession(id: string): void {
     this.requireSession(id);
-    this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+    this.sql.transaction(() => {
+      this.sql.all(
+        "DELETE FROM answers WHERE question_id IN (SELECT id FROM questions WHERE session_id = ?)",
+        id,
+      );
+      for (const table of ["questions", "events", "artifacts"])
+        this.sql.all(`DELETE FROM ${table} WHERE session_id = ?`, id);
+      this.sql.all("DELETE FROM sessions WHERE id = ?", id);
+    });
   }
 
   addQuestions(sessionId: string, inputs: unknown[]): QuestionView[] {
@@ -300,48 +421,38 @@ export class InterviewStore {
         ),
       };
     });
-    const maxRow = this.db
-      .prepare(
-        "SELECT COALESCE(MAX(position), -1) max FROM questions WHERE session_id = ? AND deleted = 0",
-      )
-      .get(sessionId) as { max: number };
-    let next = maxRow.max + 1;
-    const created: string[] = [];
-    this.db.exec("BEGIN");
-    try {
-      for (const input of parsed) {
-        const id = randomUUID();
+    const maxRow = first(
+      this.sql,
+      "SELECT COALESCE(MAX(position), -1) max FROM questions WHERE session_id = ? AND deleted = 0",
+      sessionId,
+    )!;
+    let next = Number(maxRow.max) + 1;
+    const created = this.sql.transaction(() =>
+      parsed.map((input) => {
+        const id = crypto.randomUUID();
         const time = now();
-        const position = input.position ?? next++;
-        this.db
-          .prepare(
-            `INSERT INTO questions (id, session_id, type, prompt, recommendation, default_answer, options, artifact_id, option_artifacts, min, max, step, position, created_at, updated_at)
+        this.sql.all(
+          `INSERT INTO questions (id, session_id, type, prompt, recommendation, default_answer, options, artifact_id, option_artifacts, min, max, step, position, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            id,
-            sessionId,
-            input.type,
-            input.prompt,
-            input.recommendation ?? null,
-            input.default ? JSON.stringify(input.default) : null,
-            JSON.stringify(input.options),
-            input.artifactId ?? null,
-            JSON.stringify(input.optionArtifacts ?? {}),
-            input.min ?? null,
-            input.max ?? null,
-            input.step ?? null,
-            position,
-            time,
-            time,
-          );
-        created.push(id);
-      }
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+          id,
+          sessionId,
+          input.type,
+          input.prompt,
+          input.recommendation ?? null,
+          input.default ? JSON.stringify(input.default) : null,
+          JSON.stringify(input.options),
+          input.artifactId ?? null,
+          JSON.stringify(input.optionArtifacts ?? {}),
+          input.min ?? null,
+          input.max ?? null,
+          input.step ?? null,
+          input.position ?? next++,
+          time,
+          time,
+        );
+        return id;
+      }),
+    );
     for (const id of created)
       this.emit(sessionId, "question.added", { questionId: id });
     const view = this.getSession(sessionId, "").questions;
@@ -356,87 +467,53 @@ export class InterviewStore {
     this.requireActive(sessionId);
     const current = this.questionRow(sessionId, questionId);
     const parsed = QuestionPatchSchema.parse(patch);
-    const fields = {
-      type: parsed.type ?? String(current.type),
-      prompt: parsed.prompt ?? String(current.prompt),
-      recommendation:
-        parsed.recommendation === undefined
-          ? current.recommendation === null
-            ? null
-            : String(current.recommendation)
-          : parsed.recommendation,
-      options:
-        parsed.options === undefined
-          ? String(current.options)
-          : JSON.stringify(parsed.options),
-      default:
-        parsed.default === undefined
-          ? current.default_answer === null
-            ? null
-            : json<string[]>(String(current.default_answer))
-          : parsed.default,
-      min:
-        parsed.min === undefined
-          ? current.min === null
-            ? null
-            : Number(current.min)
-          : parsed.min,
-      max:
-        parsed.max === undefined
-          ? current.max === null
-            ? null
-            : Number(current.max)
-          : parsed.max,
-      step:
-        parsed.step === undefined
-          ? current.step === null
-            ? null
-            : Number(current.step)
-          : parsed.step,
-      position: parsed.position ?? Number(current.position),
-      artifactId:
-        parsed.artifactId === undefined
-          ? current.artifact_id === null
-            ? null
-            : String(current.artifact_id)
-          : parsed.artifactId,
-      optionArtifacts:
-        parsed.optionArtifacts ??
-        json<Record<string, string>>(String(current.option_artifacts)),
-    };
-    const type = fields.type === "range" ? "number" : fields.type;
-    const options = json<string[]>(fields.options);
+    // An omitted field keeps the stored value; an explicit null clears it.
+    const keep = <T>(
+      value: T | null | undefined,
+      column: unknown,
+      read: (stored: string) => T,
+    ): T | null =>
+      value === undefined
+        ? column === null
+          ? null
+          : read(String(column))
+        : value;
+    const type = parsed.type ?? (String(current.type) as QuestionView["type"]);
+    const options = parsed.options ?? json<string[]>(current.options);
     const defaultAnswer = normalizeDefault(
-      type as QuestionView["type"],
+      type,
       options,
-      fields.default,
+      keep(parsed.default, current.default_answer, (v) => json<string[]>(v)),
     );
     // Options may have been renamed; links to vanished labels are dropped.
     const optionArtifacts = Object.fromEntries(
-      Object.entries(fields.optionArtifacts).filter(([label]) =>
-        options.includes(label),
-      ),
+      Object.entries(
+        parsed.optionArtifacts ??
+          json<Record<string, string>>(current.option_artifacts),
+      ).filter(([label]) => options.includes(label)),
     );
-    this.validateLinks(sessionId, fields.artifactId, optionArtifacts, options);
-    this.db
-      .prepare(
-        `UPDATE questions SET type=?, prompt=?, recommendation=?, default_answer=?, options=?, artifact_id=?, option_artifacts=?, min=?, max=?, step=?, position=?, updated_at=? WHERE id=?`,
-      )
-      .run(
-        type,
-        fields.prompt,
-        fields.recommendation,
-        defaultAnswer ? JSON.stringify(defaultAnswer) : null,
-        fields.options,
-        fields.artifactId,
-        JSON.stringify(optionArtifacts),
-        fields.min,
-        fields.max,
-        fields.step,
-        fields.position,
-        now(),
-        questionId,
-      );
+    const artifactId = keep<string>(
+      parsed.artifactId,
+      current.artifact_id,
+      String,
+    );
+    this.validateLinks(sessionId, artifactId, optionArtifacts, options);
+    this.sql.all(
+      `UPDATE questions SET type=?, prompt=?, recommendation=?, default_answer=?, options=?, artifact_id=?, option_artifacts=?, min=?, max=?, step=?, position=?, updated_at=? WHERE id=?`,
+      type,
+      parsed.prompt ?? String(current.prompt),
+      keep(parsed.recommendation, current.recommendation, String),
+      defaultAnswer ? JSON.stringify(defaultAnswer) : null,
+      JSON.stringify(options),
+      artifactId,
+      JSON.stringify(optionArtifacts),
+      keep(parsed.min, current.min, Number),
+      keep(parsed.max, current.max, Number),
+      keep(parsed.step, current.step, Number),
+      parsed.position ?? Number(current.position),
+      now(),
+      questionId,
+    );
     this.emit(sessionId, "question.updated", { questionId });
     return this.getSession(sessionId, "").questions.find(
       (q) => q.id === questionId,
@@ -446,126 +523,86 @@ export class InterviewStore {
   deleteQuestion(sessionId: string, questionId: string): void {
     this.requireActive(sessionId);
     this.questionRow(sessionId, questionId);
-    this.db
-      .prepare("UPDATE questions SET deleted=1, updated_at=? WHERE id=?")
-      .run(now(), questionId);
+    this.sql.all(
+      "UPDATE questions SET deleted=1, updated_at=? WHERE id=?",
+      now(),
+      questionId,
+    );
     const focus = this.getSession(sessionId, "");
     if (focus.focusedQuestionIds.includes(questionId))
       this.writeFocus(
         sessionId,
         focus.focusedQuestionIds.filter((id) => id !== questionId),
-        focus.focusSource ?? "agent",
       );
     this.emit(sessionId, "question.deleted", { questionId });
   }
 
-  focusQuestion(
-    sessionId: string,
-    questionId: string | null,
-    source: "agent" | "gemini" = "agent",
-  ): void {
-    this.focusQuestions(sessionId, questionId ? [questionId] : [], source);
-  }
-
-  /** Focuses a group of questions, e.g. the ones voice is discussing together. */
-  focusQuestions(
-    sessionId: string,
-    questionIds: string[],
-    source: "agent" | "gemini" = "agent",
-  ): void {
+  /** Focuses a group of questions the agent wants answered next. */
+  focusQuestions(sessionId: string, questionIds: string[]): void {
     this.requireActive(sessionId);
     const ids = [...new Set(questionIds)];
     for (const id of ids) this.questionRow(sessionId, id);
-    this.writeFocus(sessionId, ids, source);
+    this.writeFocus(sessionId, ids);
     this.emit(sessionId, "question.focused", {
       questionId: ids[0] ?? null,
       questionIds: ids,
-      source,
     });
     // A question about an artifact brings it on screen.
     const lead = ids[0] ? this.questionRow(sessionId, ids[0]) : null;
     const artifactId = lead?.artifact_id ? String(lead.artifact_id) : null;
-    const staged = this.db
-      .prepare("SELECT stage_artifact_id FROM sessions WHERE id=?")
-      .get(sessionId) as { stage_artifact_id: string | null };
+    const staged = first(
+      this.sql,
+      "SELECT stage_artifact_id FROM sessions WHERE id=?",
+      sessionId,
+    )!;
     if (
       artifactId &&
       artifactId !== staged.stage_artifact_id &&
       this.liveArtifact(sessionId, artifactId)
     )
-      this.showArtifact(sessionId, artifactId, source);
+      this.showArtifact(sessionId, artifactId, "agent");
   }
 
-  private writeFocus(
-    sessionId: string,
-    ids: string[],
-    source: "agent" | "gemini",
-  ): void {
-    this.db
-      .prepare(
-        "UPDATE sessions SET focused_question_id=?, focused_question_ids=?, focus_source=?, updated_at=? WHERE id=?",
-      )
-      .run(
-        ids[0] ?? null,
-        JSON.stringify(ids),
-        ids.length ? source : null,
-        now(),
-        sessionId,
-      );
+  private writeFocus(sessionId: string, ids: string[]): void {
+    this.sql.all(
+      "UPDATE sessions SET focused_question_id=?, focused_question_ids=?, updated_at=? WHERE id=?",
+      ids[0] ?? null,
+      JSON.stringify(ids),
+      now(),
+      sessionId,
+    );
   }
 
   answerQuestion(
     sessionId: string,
     questionId: string,
     input: unknown,
-  ): { revision: number; event: InterviewEvent; duplicate: boolean } {
+  ): { revision: number; event: InterviewEvent } {
     this.requireActive(sessionId);
     this.questionRow(sessionId, questionId);
     const parsed = AnswerInputSchema.parse(input);
-    if (parsed.callId) {
-      const prior = this.db
-        .prepare(
-          "SELECT result, cancelled FROM tool_calls WHERE session_id=? AND call_id=?",
-        )
-        .get(sessionId, parsed.callId) as
-        { result: string; cancelled: number } | undefined;
-      if (prior) return { ...json(prior.result), duplicate: true };
-    }
-    const previous = this.db
-      .prepare("SELECT revision FROM answers WHERE question_id=?")
-      .get(questionId) as { revision: number } | undefined;
-    const revision = (previous?.revision ?? 0) + 1;
+    const previous = first(
+      this.sql,
+      "SELECT revision FROM answers WHERE question_id=?",
+      questionId,
+    );
+    const revision = (previous ? Number(previous.revision) : 0) + 1;
     const event = this.emit(
       sessionId,
       previous ? "answer.revised" : "answer.submitted",
       { questionId, answer: parsed.answer, skipped: parsed.skipped, revision },
     );
-    this.db
-      .prepare(
-        `INSERT INTO answers (question_id,text,skipped,revision,delivered,event_id,updated_at) VALUES (?,?,?,?,0,?,?)
+    this.sql.all(
+      `INSERT INTO answers (question_id,text,skipped,revision,delivered,event_id,updated_at) VALUES (?,?,?,?,0,?,?)
       ON CONFLICT(question_id) DO UPDATE SET text=excluded.text, skipped=excluded.skipped, revision=excluded.revision, delivered=0, event_id=excluded.event_id, updated_at=excluded.updated_at`,
-      )
-      .run(
-        questionId,
-        parsed.answer,
-        parsed.skipped ? 1 : 0,
-        revision,
-        event.id,
-        now(),
-      );
-    if (parsed.callId)
-      this.db
-        .prepare(
-          "INSERT INTO tool_calls (session_id,call_id,name,result,created_at) VALUES (?,?,?,?,?)",
-        )
-        .run(
-          sessionId,
-          parsed.callId,
-          "submit_answer",
-          JSON.stringify({ revision, event }),
-          now(),
-        );
-    return { revision, event, duplicate: false };
+      questionId,
+      parsed.answer,
+      parsed.skipped ? 1 : 0,
+      revision,
+      event.id,
+      now(),
+    );
+    return { revision, event };
   }
 
   /** Adds an artifact. A session has one plan, so adding another plan replaces its content. */
@@ -573,13 +610,13 @@ export class InterviewStore {
     this.requireActive(sessionId);
     const parsed = ArtifactInputSchema.parse(input);
     if (parsed.kind === "plan") {
-      const plan = this.db
-        .prepare(
-          "SELECT id FROM artifacts WHERE session_id=? AND kind='plan' AND deleted=0",
-        )
-        .get(sessionId) as { id: string } | undefined;
+      const plan = first(
+        this.sql,
+        "SELECT id FROM artifacts WHERE session_id=? AND kind='plan' AND deleted=0",
+        sessionId,
+      );
       if (plan)
-        return this.updateArtifact(sessionId, plan.id, {
+        return this.updateArtifact(sessionId, String(plan.id), {
           title: parsed.title,
           content: parsed.content,
           ...(parsed.description !== undefined
@@ -589,23 +626,20 @@ export class InterviewStore {
           show: parsed.show,
         });
     }
-    const id = randomUUID();
+    const id = crypto.randomUUID();
     const time = now();
-    this.db
-      .prepare(
-        "INSERT INTO artifacts (id,session_id,kind,title,content,description,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        sessionId,
-        parsed.kind,
-        parsed.title,
-        parsed.content,
-        parsed.description ?? null,
-        parsed.source ?? null,
-        time,
-        time,
-      );
+    this.sql.all(
+      "INSERT INTO artifacts (id,session_id,kind,title,content,description,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+      id,
+      sessionId,
+      parsed.kind,
+      parsed.title,
+      parsed.content,
+      parsed.description ?? null,
+      parsed.source ?? null,
+      time,
+      time,
+    );
     this.emit(sessionId, "artifact.added", {
       artifactId: id,
       kind: parsed.kind,
@@ -630,22 +664,17 @@ export class InterviewStore {
       parsed.description !== undefined ||
       parsed.source !== undefined;
     if (changed) {
-      this.db
-        .prepare(
-          "UPDATE artifacts SET title=?, content=?, description=?, source=?, revision=revision+1, updated_at=? WHERE id=?",
-        )
-        .run(
-          parsed.title ?? String(current.title),
-          parsed.content ?? String(current.content),
-          parsed.description === undefined
-            ? (current.description as string | null)
-            : parsed.description,
-          parsed.source === undefined
-            ? (current.source as string | null)
-            : parsed.source,
-          now(),
-          artifactId,
-        );
+      this.sql.all(
+        "UPDATE artifacts SET title=?, content=?, description=?, source=?, revision=revision+1, updated_at=? WHERE id=?",
+        parsed.title ?? String(current.title),
+        parsed.content ?? String(current.content),
+        parsed.description === undefined
+          ? optional(current.description)
+          : parsed.description,
+        parsed.source === undefined ? optional(current.source) : parsed.source,
+        now(),
+        artifactId,
+      );
       this.emit(sessionId, "artifact.updated", {
         artifactId,
         revision: Number(current.revision) + 1,
@@ -659,14 +688,16 @@ export class InterviewStore {
     this.requireActive(sessionId);
     if (!this.liveArtifact(sessionId, artifactId))
       throw new Error("Artifact not found");
-    this.db
-      .prepare("UPDATE artifacts SET deleted=1, updated_at=? WHERE id=?")
-      .run(now(), artifactId);
-    this.db
-      .prepare(
-        "UPDATE sessions SET stage_artifact_id=NULL, stage_source=NULL WHERE id=? AND stage_artifact_id=?",
-      )
-      .run(sessionId, artifactId);
+    this.sql.all(
+      "UPDATE artifacts SET deleted=1, updated_at=? WHERE id=?",
+      now(),
+      artifactId,
+    );
+    this.sql.all(
+      "UPDATE sessions SET stage_artifact_id=NULL, stage_source=NULL WHERE id=? AND stage_artifact_id=?",
+      sessionId,
+      artifactId,
+    );
     this.emit(sessionId, "artifact.deleted", { artifactId });
   }
 
@@ -679,30 +710,47 @@ export class InterviewStore {
     this.requireActive(sessionId);
     if (artifactId && !this.liveArtifact(sessionId, artifactId))
       throw new Error("Artifact not found");
-    this.db
-      .prepare(
-        "UPDATE sessions SET stage_artifact_id=?, stage_source=?, updated_at=? WHERE id=?",
-      )
-      .run(artifactId, artifactId ? source : null, now(), sessionId);
+    this.sql.all(
+      "UPDATE sessions SET stage_artifact_id=?, stage_source=?, updated_at=? WHERE id=?",
+      artifactId,
+      artifactId ? source : null,
+      now(),
+      sessionId,
+    );
     this.emit(sessionId, "stage.changed", { artifactId, source });
   }
 
-  private liveArtifact(
+  /** Opens or closes the workspace column; stopped sessions can still be rearranged. */
+  setStageVisible(
     sessionId: string,
-    artifactId: string,
-  ): Record<string, unknown> | undefined {
-    return this.db
-      .prepare(
-        "SELECT * FROM artifacts WHERE id=? AND session_id=? AND deleted=0",
-      )
-      .get(artifactId, sessionId) as Record<string, unknown> | undefined;
+    visible: boolean,
+    source: StageSource,
+  ): void {
+    this.requireSession(sessionId);
+    this.sql.all(
+      "UPDATE sessions SET stage_visible=?, stage_visibility_source=?, updated_at=? WHERE id=?",
+      visible ? 1 : 0,
+      source,
+      now(),
+      sessionId,
+    );
+    this.emit(sessionId, "stage.visibility", { visible, source });
+  }
+
+  private liveArtifact(sessionId: string, artifactId: string): Row | undefined {
+    return first(
+      this.sql,
+      "SELECT * FROM artifacts WHERE id=? AND session_id=? AND deleted=0",
+      artifactId,
+      sessionId,
+    );
   }
 
   private artifactView(sessionId: string, artifactId: string): ArtifactView {
     return this.mapArtifact(this.liveArtifact(sessionId, artifactId)!);
   }
 
-  private mapArtifact = (row: Record<string, unknown>): ArtifactView => ({
+  private mapArtifact = (row: Row): ArtifactView => ({
     id: String(row.id),
     kind: row.kind as ArtifactView["kind"],
     title: String(row.title),
@@ -712,8 +760,8 @@ export class InterviewStore {
     ),
     content: String(row.content),
     size: String(row.content).length,
-    description: row.description === null ? null : String(row.description),
-    source: row.source === null ? null : String(row.source),
+    description: optional(row.description),
+    source: optional(row.source),
     revision: Number(row.revision),
     updatedAt: String(row.updated_at),
   });
@@ -748,181 +796,26 @@ export class InterviewStore {
     }
   }
 
-  /** Records a note from voice (deduplicated by call id) or from the agent. */
-  addNote(
-    sessionId: string,
-    from: "voice" | "agent",
-    input: unknown,
-  ): { id: string; duplicate: boolean } {
-    this.requireActive(sessionId);
-    const parsed = NoteInputSchema.parse(input);
-    if (parsed.questionId) this.questionRow(sessionId, parsed.questionId);
-    if (parsed.callId) {
-      const prior = this.db
-        .prepare("SELECT id FROM notes WHERE session_id=? AND call_id=?")
-        .get(sessionId, parsed.callId) as { id: string } | undefined;
-      if (prior) return { id: prior.id, duplicate: true };
-    }
-    const id = randomUUID();
-    const speak = from === "agent" && parsed.speak;
-    this.db
-      .prepare(
-        "INSERT INTO notes (id,session_id,sender,text,question_id,speak,call_id,created_at) VALUES (?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        sessionId,
-        from,
-        parsed.text,
-        parsed.questionId ?? null,
-        speak ? 1 : 0,
-        parsed.callId ?? null,
-        now(),
-      );
-    this.emit(sessionId, `${from}.note`, {
-      noteId: id,
-      text: parsed.text,
-      questionId: parsed.questionId ?? null,
-      ...(from === "agent" ? { speak } : {}),
-    });
-    return { id, duplicate: false };
-  }
-
-  requestClarification(
-    sessionId: string,
-    input: unknown,
-  ): { id: string; duplicate: boolean } {
-    this.requireActive(sessionId);
-    const parsed = ClarificationInputSchema.parse(input);
-    this.questionRow(sessionId, parsed.questionId);
-    const prior = this.db
-      .prepare("SELECT id FROM clarifications WHERE session_id=? AND call_id=?")
-      .get(sessionId, parsed.callId) as { id: string } | undefined;
-    if (prior) return { id: prior.id, duplicate: true };
-    const id = randomUUID();
-    const time = now();
-    const event = this.emit(sessionId, "clarification.requested", {
-      requestId: id,
-      questionId: parsed.questionId,
-      request: parsed.request,
-      callId: parsed.callId,
-    });
-    this.db
-      .prepare(
-        `INSERT INTO clarifications (id,session_id,question_id,call_id,request,event_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`,
-      )
-      .run(
-        id,
-        sessionId,
-        parsed.questionId,
-        parsed.callId,
-        parsed.request,
-        event.id,
-        time,
-        time,
-      );
-    this.db
-      .prepare(
-        "INSERT INTO tool_calls (session_id,call_id,name,result,created_at) VALUES (?,?,?,?,?)",
-      )
-      .run(
-        sessionId,
-        parsed.callId,
-        "request_clarification",
-        JSON.stringify({ requestId: id }),
-        time,
-      );
-    return { id, duplicate: false };
-  }
-
-  replyClarification(
-    sessionId: string,
-    requestId: string,
-    response: string,
-  ): void {
-    this.requireActive(sessionId);
-    const found = this.db
-      .prepare(
-        "SELECT id FROM clarifications WHERE id=? AND session_id=? AND status='pending'",
-      )
-      .get(requestId, sessionId);
-    if (!found) throw new Error("Pending clarification not found");
-    this.db
-      .prepare(
-        "UPDATE clarifications SET response=?, status='answered', updated_at=? WHERE id=?",
-      )
-      .run(response, now(), requestId);
-    this.emit(sessionId, "clarification.answered", { requestId });
-  }
-
-  cancelToolCall(sessionId: string, callId: string): void {
-    this.db
-      .prepare(
-        "UPDATE tool_calls SET cancelled=1 WHERE session_id=? AND call_id=?",
-      )
-      .run(sessionId, callId);
-    this.db
-      .prepare(
-        "UPDATE clarifications SET status='cancelled', updated_at=? WHERE session_id=? AND call_id=? AND status='pending'",
-      )
-      .run(now(), sessionId, callId);
-    this.emit(sessionId, "tool.cancelled", { callId });
-  }
-
-  updateVoice(
-    sessionId: string,
-    update: {
-      role?: "user" | "model";
-      text?: string;
-      resumptionHandle?: string | null;
-    },
-  ): void {
-    this.requireActive(sessionId);
-    const session = this.db
-      .prepare("SELECT transcript,resumption_handle FROM sessions WHERE id=?")
-      .get(sessionId) as {
-      transcript: string;
-      resumption_handle: string | null;
-    };
-    const transcript = json<Array<{ role: "user" | "model"; text: string }>>(
-      session.transcript,
-    );
-    if (update.role && update.text?.trim())
-      transcript.push({ role: update.role, text: update.text.trim() });
-    const bounded = transcript.slice(-100);
-    this.db
-      .prepare(
-        "UPDATE sessions SET transcript=?, resumption_handle=?, updated_at=? WHERE id=?",
-      )
-      .run(
-        JSON.stringify(bounded),
-        update.resumptionHandle === undefined
-          ? session.resumption_handle
-          : update.resumptionHandle,
-        now(),
-        sessionId,
-      );
-  }
-
   undeliveredEvents(sessionId: string): InterviewEvent[] {
-    return (
-      this.db
-        .prepare(
-          "SELECT * FROM events WHERE session_id=? AND delivered=0 ORDER BY id",
-        )
-        .all(sessionId) as Array<Record<string, unknown>>
-    ).map(this.mapEvent);
+    return this.sql
+      .all(
+        "SELECT * FROM events WHERE session_id=? AND delivered=0 ORDER BY id",
+        sessionId,
+      )
+      .map(this.mapEvent);
   }
 
   markDelivered(sessionId: string, throughId: number): void {
-    this.db
-      .prepare("UPDATE events SET delivered=1 WHERE session_id=? AND id<=?")
-      .run(sessionId, throughId);
-    this.db
-      .prepare(
-        `UPDATE answers SET delivered=1 WHERE event_id IN (SELECT id FROM events WHERE session_id=? AND id<=? AND delivered=1)`,
-      )
-      .run(sessionId, throughId);
+    this.sql.all(
+      "UPDATE events SET delivered=1 WHERE session_id=? AND id<=?",
+      sessionId,
+      throughId,
+    );
+    this.sql.all(
+      `UPDATE answers SET delivered=1 WHERE event_id IN (SELECT id FROM events WHERE session_id=? AND id<=? AND delivered=1)`,
+      sessionId,
+      throughId,
+    );
   }
 
   private emit(
@@ -931,49 +824,62 @@ export class InterviewStore {
     payload: Record<string, unknown>,
   ): InterviewEvent {
     const createdAt = now();
-    const result = this.db
-      .prepare(
-        "INSERT INTO events (session_id,type,payload,created_at) VALUES (?,?,?,?)",
-      )
-      .run(sessionId, type, JSON.stringify(payload), createdAt);
-    const event = {
-      id: Number(result.lastInsertRowid),
+    const row = first(
+      this.sql,
+      "INSERT INTO events (session_id,type,payload,created_at) VALUES (?,?,?,?) RETURNING id",
       sessionId,
       type,
-      payload,
+      JSON.stringify(payload),
       createdAt,
-    };
+    )!;
+    const event = { id: Number(row.id), sessionId, type, payload, createdAt };
     for (const listener of this.listeners) listener(event);
     return event;
   }
-  private mapEvent = (row: Record<string, unknown>): InterviewEvent => ({
+  private mapEvent = (row: Row): InterviewEvent => ({
     id: Number(row.id),
     sessionId: String(row.session_id),
     type: String(row.type),
-    payload: json(String(row.payload)),
+    payload: json(row.payload),
     createdAt: String(row.created_at),
   });
   private requireSession(id: string): void {
-    if (!this.db.prepare("SELECT 1 FROM sessions WHERE id=?").get(id))
+    if (!first(this.sql, "SELECT 1 FROM sessions WHERE id=?", id))
       throw new Error("Session not found");
   }
   private requireActive(id: string): void {
-    const row = this.db
-      .prepare("SELECT status FROM sessions WHERE id=?")
-      .get(id) as { status: string } | undefined;
+    const row = first(this.sql, "SELECT status FROM sessions WHERE id=?", id);
     if (!row) throw new Error("Session not found");
     if (row.status !== "active") throw new Error("Session is stopped");
   }
-  private questionRow(
-    sessionId: string,
-    questionId: string,
-  ): Record<string, unknown> {
-    const row = this.db
-      .prepare(
-        "SELECT * FROM questions WHERE id=? AND session_id=? AND deleted=0",
-      )
-      .get(questionId, sessionId) as Record<string, unknown> | undefined;
+  private questionRow(sessionId: string, questionId: string): Row {
+    const row = first(
+      this.sql,
+      "SELECT * FROM questions WHERE id=? AND session_id=? AND deleted=0",
+      questionId,
+      sessionId,
+    );
     if (!row) throw new Error("Question not found");
     return row;
   }
+}
+
+function mapProject(row: Row): ProjectView {
+  return {
+    id: String(row.id),
+    key: String(row.key),
+    name: String(row.name),
+    color: String(row.color),
+  };
+}
+
+function mapOrigin(row: Row): OriginView {
+  return {
+    branch: optional(row.branch ?? null),
+    worktree: optional(row.worktree ?? null),
+    agent: optional(row.agent ?? null),
+    agentSession: optional(row.agent_session ?? null),
+    location:
+      (optional(row.location ?? null) as OriginView["location"]) ?? null,
+  };
 }

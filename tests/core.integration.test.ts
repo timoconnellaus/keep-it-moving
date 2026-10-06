@@ -1,10 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createApp } from "../src/server/app.js";
-import { geminiApiKey } from "../src/server/config.js";
-import { InterviewStore } from "../src/server/store.js";
+import { hubHarness } from "./helpers/harness.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -12,21 +10,12 @@ afterEach(async () => {
 });
 
 async function harness(path = ":memory:") {
-  const store = new InterviewStore(path);
-  const app = await createApp({
-    store,
-    port: 47831,
-    webRoot: "/missing",
-    geminiKeyFile: "/missing/gemini-api-key",
-  });
-  cleanups.push(async () => {
-    await app.close();
-    store.close();
-  });
+  const { app, store, sql } = hubHarness({ path });
+  cleanups.push(() => sql.close());
   return { app, store };
 }
 
-async function createQuestion(app: Awaited<ReturnType<typeof createApp>>) {
+async function createQuestion(app: ReturnType<typeof hubHarness>["app"]) {
   const session = (
     await app.inject({ method: "POST", url: "/api/sessions" })
   ).json();
@@ -58,15 +47,78 @@ describe("interview HTTP seam", () => {
     expect(session.title).toBe("Todo list product interview");
   });
 
-  it("rejects browser requests from an unapproved local origin", async () => {
+  it("starts with the workspace closed and lets agent and user open it", async () => {
     const { app } = await harness();
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/sessions",
-      headers: { origin: "http://127.0.0.1:51730" },
+    const closed = (
+      await app.inject({ method: "POST", url: "/api/sessions", payload: {} })
+    ).json();
+    expect(closed.stageVisible).toBe(false);
+    const open = (
+      await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { stageVisible: true },
+      })
+    ).json();
+    expect(open).toMatchObject({
+      stageVisible: true,
+      stageVisibilitySource: "agent",
     });
-    expect(response.statusCode).toBe(403);
-    expect(response.json().error).toContain("Origin not allowed");
+
+    await app.inject({
+      method: "POST",
+      url: `/api/sessions/${closed.id}/stage/visibility`,
+      payload: { visible: true },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/api/browser/${closed.token}/stage/visibility`,
+      payload: { visible: false },
+    });
+    const state = (
+      await app.inject({ method: "GET", url: `/api/sessions/${closed.id}` })
+    ).json();
+    expect(state).toMatchObject({
+      stageVisible: false,
+      stageVisibilitySource: "user",
+    });
+    const batch = (
+      await app.inject({
+        method: "GET",
+        url: `/api/sessions/${closed.id}/wait?timeout=1`,
+      })
+    ).json();
+    expect(
+      batch.events
+        .filter((event: { type: string }) => event.type === "stage.visibility")
+        .map((event: { payload: unknown }) => event.payload),
+    ).toEqual([
+      { visible: true, source: "agent" },
+      { visible: false, source: "user" },
+    ]);
+    expect(batch.stageVisible).toBe(false);
+  });
+
+  it("chains partial waits without losing queued events", async () => {
+    const { app } = await harness();
+    const { session } = await createQuestion(app);
+    const partial = (
+      await app.inject({
+        method: "GET",
+        url: `/api/sessions/${session.id}/wait?timeout=20&partial=1`,
+      })
+    ).json();
+    expect(partial).toEqual({ partial: true });
+    const final = (
+      await app.inject({
+        method: "GET",
+        url: `/api/sessions/${session.id}/wait?timeout=20`,
+      })
+    ).json();
+    expect(final.events.map((event: { type: string }) => event.type)).toEqual([
+      "session.created",
+      "question.added",
+    ]);
   });
 
   it("persists revisions and changes the receipt only after delivery", async () => {
@@ -263,7 +315,7 @@ describe("interview HTTP seam", () => {
     ]);
   });
 
-  it("ends a wait promptly when nothing is left open or voice needs the agent", async () => {
+  it("ends a wait promptly when nothing is left open", async () => {
     const { app } = await harness();
     const { session, question } = await createQuestion(app);
     const wait = () =>
@@ -272,8 +324,8 @@ describe("interview HTTP seam", () => {
         url: `/api/sessions/${session.id}/wait?idle=60000&timeout=10000`,
       });
 
-    let started = Date.now();
-    let pending = wait();
+    const started = Date.now();
+    const pending = wait();
     await new Promise((resolve) => setTimeout(resolve, 50));
     await app.inject({
       method: "POST",
@@ -282,81 +334,6 @@ describe("interview HTTP seam", () => {
     });
     expect((await pending).json().openQuestions).toBe(0);
     expect(Date.now() - started).toBeLessThan(3_000);
-
-    started = Date.now();
-    pending = wait();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await app.inject({
-      method: "POST",
-      url: `/api/sessions/${session.id}/questions`,
-      payload: { prompt: "An agent follow-up" },
-    });
-    await app.inject({
-      method: "POST",
-      url: `/api/browser/${session.token}/clarifications`,
-      payload: {
-        questionId: question.id,
-        request: "Why does this matter?",
-        callId: "call-1",
-      },
-    });
-    const urgent = (await pending).json();
-    expect(Date.now() - started).toBeLessThan(3_000);
-    expect(urgent.events.map((event: { type: string }) => event.type)).toEqual([
-      "question.added",
-      "clarification.requested",
-    ]);
-  });
-
-  it("carries notes between voice and the agent", async () => {
-    const { app } = await harness();
-    const { session, question } = await createQuestion(app);
-    await app.inject({
-      method: "GET",
-      url: `/api/sessions/${session.id}/events/next?timeout=1`,
-    });
-    const pending = app.inject({
-      method: "GET",
-      url: `/api/sessions/${session.id}/wait?idle=100&timeout=5000`,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const note = {
-      text: "Offline mode is a must for v1",
-      questionId: question.id,
-      callId: "call-note",
-    };
-    await app.inject({
-      method: "POST",
-      url: `/api/browser/${session.token}/notes`,
-      payload: note,
-    });
-    const duplicate = await app.inject({
-      method: "POST",
-      url: `/api/browser/${session.token}/notes`,
-      payload: note,
-    });
-    expect(duplicate.json().duplicate).toBe(true);
-    expect((await pending).json().notes).toEqual([
-      { text: "Offline mode is a must for v1", questionId: question.id },
-    ]);
-
-    await app.inject({
-      method: "POST",
-      url: `/api/sessions/${session.id}/notes`,
-      payload: { text: "I added a sync diagram.", speak: true },
-    });
-    const state = (
-      await app.inject({ method: "GET", url: `/api/sessions/${session.id}` })
-    ).json();
-    expect(
-      state.notes.map((item: { from: string; speak: boolean }) => [
-        item.from,
-        item.speak,
-      ]),
-    ).toEqual([
-      ["voice", false],
-      ["agent", true],
-    ]);
   });
 
   it("focuses a group of questions and drops deleted ones from it", async () => {
@@ -371,7 +348,7 @@ describe("interview HTTP seam", () => {
     ).json().questions[0];
     await app.inject({
       method: "POST",
-      url: `/api/browser/${session.token}/focus`,
+      url: `/api/sessions/${session.id}/focus`,
       payload: { questionIds: [question.id, second.id] },
     });
     const show = async () =>
@@ -381,7 +358,6 @@ describe("interview HTTP seam", () => {
     expect(await show()).toMatchObject({
       focusedQuestionId: question.id,
       focusedQuestionIds: [question.id, second.id],
-      focusSource: "gemini",
     });
     await app.inject({
       method: "DELETE",
@@ -496,9 +472,8 @@ describe("interview HTTP seam", () => {
       "sandbox allow-scripts",
     );
     expect(view.headers["referrer-policy"]).toBe("no-referrer");
-    expect(view.body).toContain("interviewer:capture");
-    expect(view.body.indexOf("interviewer:capture")).toBeLessThan(
-      view.body.indexOf("</body>"),
+    expect(view.body).toBe(
+      "<!doctype html><html><body><svg></svg></body></html>",
     );
     const notHtml = await app.inject({
       method: "GET",
@@ -533,7 +508,7 @@ describe("interview HTTP seam", () => {
   });
 
   it("links questions to artifacts and shows the artifact when focused", async () => {
-    const { app } = await harness();
+    const { app, store } = await harness();
     const session = (
       await app.inject({ method: "POST", url: "/api/sessions" })
     ).json();
@@ -580,15 +555,11 @@ describe("interview HTTP seam", () => {
     ).json().questions[0];
     expect(question.optionArtifacts).toEqual({ Sidebar: a, Board: b });
 
-    await app.inject({
-      method: "POST",
-      url: `/api/browser/${session.token}/focus`,
-      payload: { questionIds: [question.id] },
-    });
+    store.focusQuestions(session.id, [question.id]);
     const state = (
       await app.inject({ method: "GET", url: `/api/sessions/${session.id}` })
     ).json();
-    expect(state.stage).toEqual({ artifactId: diagram, source: "gemini" });
+    expect(state.stage).toEqual({ artifactId: diagram, source: "agent" });
 
     const renamed = (
       await app.inject({
@@ -681,113 +652,10 @@ describe("interview HTTP seam", () => {
       "question.deleted",
     );
   });
-
-  it("records Gemini question focus separately from agent focus", async () => {
-    const { app } = await harness();
-    const { session, question } = await createQuestion(app);
-    const response = await app.inject({
-      method: "POST",
-      url: `/api/browser/${session.token}/focus`,
-      payload: { questionId: question.id },
-    });
-    expect(response.statusCode).toBe(200);
-    const state = (
-      await app.inject({ method: "GET", url: `/api/sessions/${session.id}` })
-    ).json();
-    expect(state.focusedQuestionId).toBe(question.id);
-    expect(state.focusSource).toBe("gemini");
-  });
-
-  it("deduplicates Gemini calls and correlates delayed clarifications", async () => {
-    const { app } = await harness();
-    const { session, question } = await createQuestion(app);
-    const request = {
-      questionId: question.id,
-      request: "What does direction mean?",
-      callId: "call-1",
-    };
-    const one = (
-      await app.inject({
-        method: "POST",
-        url: `/api/browser/${session.token}/clarifications`,
-        payload: request,
-      })
-    ).json();
-    const two = (
-      await app.inject({
-        method: "POST",
-        url: `/api/browser/${session.token}/clarifications`,
-        payload: request,
-      })
-    ).json();
-    expect(two).toEqual({ id: one.id, duplicate: true });
-    await app.inject({
-      method: "POST",
-      url: `/api/sessions/${session.id}/clarifications/${one.id}/reply`,
-      payload: { response: "It means product strategy." },
-    });
-    const state = (
-      await app.inject({
-        method: "GET",
-        url: `/api/browser/${session.token}/session`,
-      })
-    ).json();
-    expect(state.clarifications[0]).toMatchObject({
-      callId: "call-1",
-      response: "It means product strategy.",
-      status: "answered",
-    });
-
-    const answerPath = `/api/browser/${session.token}/questions/${question.id}/answer`;
-    const first = (
-      await app.inject({
-        method: "POST",
-        url: answerPath,
-        payload: { answer: "A", callId: "answer-call" },
-      })
-    ).json();
-    const duplicate = (
-      await app.inject({
-        method: "POST",
-        url: answerPath,
-        payload: { answer: "B", callId: "answer-call" },
-      })
-    ).json();
-    expect(duplicate.duplicate).toBe(true);
-    expect(duplicate.revision).toBe(first.revision);
-  });
-
-  it("returns an explicit Gemini token error when the key is absent", async () => {
-    const previous = process.env.GEMINI_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-    const { app } = await harness();
-    const { session } = await createQuestion(app);
-    const response = await app.inject({
-      method: "POST",
-      url: `/api/browser/${session.token}/gemini-token`,
-    });
-    expect(response.statusCode).toBe(503);
-    expect(response.json().error).toContain("interviewer config gemini-key");
-    const daemon = (
-      await app.inject({ method: "GET", url: "/api/daemon" })
-    ).json();
-    expect(daemon).toMatchObject({ pid: process.pid, geminiKey: false });
-    if (previous) process.env.GEMINI_API_KEY = previous;
-  });
-
-  it("reads the Gemini key from the environment, else the stored key file", () => {
-    const dir = mkdtempSync(join(tmpdir(), "interviewer-key-"));
-    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-    const file = join(dir, "gemini-api-key");
-    expect(geminiApiKey(file, {})).toBeNull();
-    writeFileSync(file, "  stored-key\n");
-    expect(geminiApiKey(file, {})).toBe("stored-key");
-    expect(geminiApiKey(file, { GEMINI_API_KEY: "env-key" })).toBe("env-key");
-  });
 });
 
 describe("SQLite restart seam", () => {
-  it("restores sessions, questions and hidden voice continuity after restart", async () => {
+  it("restores sessions and questions after restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "interviewer-"));
     const path = join(dir, "state.sqlite");
     const first = await harness(path);
@@ -797,29 +665,16 @@ describe("SQLite restart seam", () => {
       url: `/api/browser/${session.token}/questions/${question.id}/answer`,
       payload: { answer: "Persistent" },
     });
-    await first.app.inject({
-      method: "POST",
-      url: `/api/browser/${session.token}/voice`,
-      payload: {
-        role: "user",
-        text: "Remember this",
-        resumptionHandle: "handle-1",
-      },
-    });
     await cleanups.pop()?.();
 
     const second = await harness(path);
     const state = (
       await second.app.inject({
         method: "GET",
-        url: `/api/sessions/${session.id}`,
+        url: `/api/browser/${session.token}/session`,
       })
     ).json();
     expect(state.questions[0].answer.text).toBe("Persistent");
-    expect(state.voice).toEqual({
-      transcript: [{ role: "user", text: "Remember this" }],
-      resumptionHandle: "handle-1",
-    });
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   });
 });
