@@ -75,6 +75,15 @@ export function keysFeature(ctx: FeatureContext): Feature {
         const name = String(input.name ?? "").trim();
         if (!name || name.length > 100)
           throw new Error("A key needs a name of up to 100 characters");
+        // Unique among live keys, so revoking by name is never ambiguous.
+        if (
+          first(
+            sql,
+            "SELECT id FROM agent_keys WHERE name=? AND revoked_at IS NULL",
+            name,
+          )
+        )
+          throw new Error(`A live key is already named "${name}"`);
         const key = newKey();
         const id = crypto.randomUUID();
         sql.all(
@@ -100,21 +109,21 @@ export function keysFeature(ctx: FeatureContext): Feature {
       app.delete("/keys/:key", (c) => {
         requireLogin(c);
         const wanted = c.req.param("key");
-        const row = first(
-          sql,
-          "SELECT * FROM agent_keys WHERE (id=? OR name=?) AND revoked_at IS NULL",
+        // By id, or every live key with that name.
+        const rows = sql.all(
+          "SELECT id FROM agent_keys WHERE (id=? OR name=?) AND revoked_at IS NULL",
           wanted,
           wanted,
         );
-        if (!row) throw new Error("Key not found");
-        sql.all(
-          "UPDATE agent_keys SET revoked_at=? WHERE id=?",
-          now(),
-          row.id!,
-        );
-        return c.json(
-          view(first(sql, "SELECT * FROM agent_keys WHERE id=?", row.id!)!),
-        );
+        if (!rows.length) throw new Error("Key not found");
+        const at = now();
+        for (const row of rows)
+          sql.all("UPDATE agent_keys SET revoked_at=? WHERE id=?", at, row.id!);
+        return c.json({
+          revoked: rows.map((row) =>
+            view(first(sql, "SELECT * FROM agent_keys WHERE id=?", row.id!)!),
+          ),
+        });
       });
     },
     internalRoutes: (app: Hono) => {

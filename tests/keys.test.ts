@@ -72,3 +72,78 @@ describe("agent keys", () => {
     }
   });
 });
+
+describe("what a key may do", () => {
+  it("lets a key report and work, but not delete, reconfigure or manage keys", async () => {
+    const { app } = harness();
+    const asKey = (
+      method: "GET" | "POST" | "DELETE",
+      url: string,
+      payload?: unknown,
+    ) =>
+      app.inject({
+        method,
+        url,
+        headers: { [VIA_KEY_HEADER]: "1" },
+        ...(payload === undefined ? {} : { payload }),
+      });
+    const session = (await asKey("POST", "/api/sessions", {})).json();
+    expect(session.id).toBeTruthy();
+    expect(
+      (
+        await asKey("POST", "/api/sessions/kim/report", {
+          id: "cloud-1",
+          status: "running",
+        })
+      ).statusCode,
+    ).toBe(200);
+    for (const [method, url, payload] of [
+      ["DELETE", `/api/sessions/${session.id}`],
+      ["DELETE", `/api/sessions/${session.id}/`],
+      ["POST", "/api/sessions/projects/update", { project: "x", name: "y" }],
+      ["DELETE", "/api/sessions/kim/automations/any"],
+      [
+        "POST",
+        "/api/sessions/kim/backlog/settings",
+        { project: "github.com/o/r", script: "x" },
+      ],
+    ] as const)
+      expect(
+        (await asKey(method, url, payload)).statusCode,
+        `${method} ${url}`,
+      ).toBe(403);
+    // A signed-in CLI (no key header) still can.
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/api/sessions/${session.id}`,
+        })
+      ).statusCode,
+    ).toBe(200);
+  });
+
+  it("keeps live key names unique and revokes every key by name", async () => {
+    const { app, sql, verify } = harness();
+    const create = (name: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/sessions/kim/keys",
+        payload: { name },
+      });
+    const first = (await create("cloud")).json();
+    expect((await create("cloud")).statusCode).toBe(400);
+    // An older duplicate, as a store from before the rule could hold.
+    sql.all(
+      "INSERT INTO agent_keys (id,name,hash,created_at) VALUES ('old','cloud','h','2026-01-01')",
+    );
+    const revoked = (
+      await app.inject({
+        method: "DELETE",
+        url: "/api/sessions/kim/keys/cloud",
+      })
+    ).json().revoked;
+    expect(revoked).toHaveLength(2);
+    expect((await verify(first.key)).ok).toBe(false);
+  });
+});

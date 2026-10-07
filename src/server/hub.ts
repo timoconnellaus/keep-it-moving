@@ -8,6 +8,7 @@ import type {
 } from "../shared/schema.js";
 import { ARTIFACT_VIEW_HEADERS } from "./artifactView.js";
 import { allFeatures, type Feature } from "./features/index.js";
+import { VIA_KEY_HEADER } from "./features/keys.js";
 import type { Sql } from "./sql.js";
 import type { InterviewStore } from "./store.js";
 
@@ -236,6 +237,17 @@ export function createHub(options: HubOptions) {
   app.use("/api/browser/*", async (c, next) => {
     if (c.req.method !== "GET" && !sameSite(c.req.raw))
       return c.json({ error: "Cross-site request refused" }, 403);
+    await next();
+  });
+
+  // An agent key lives in a cloud environment others may read, so it can
+  // report and work but not delete, reconfigure, or manage keys.
+  app.use("/api/sessions/*", async (c, next) => {
+    if (c.req.header(VIA_KEY_HEADER) && !keyMayCall(c.req.method, c.req.path))
+      return c.json(
+        { error: "Agent keys can't do this; use a signed-in CLI" },
+        403,
+      );
     await next();
   });
 
@@ -734,4 +746,23 @@ function batchSummary(session: SessionView, events: InterviewEvent[]) {
     stageVisible: session.stageVisible,
     status: session.status,
   };
+}
+
+/** Routes an agent key may not call: deleting, reconfiguring, keys. */
+const KEY_DENIED: Array<[method: string, path: RegExp]> = [
+  ["DELETE", /^\/api\/sessions\/[^/]+$/],
+  ["POST", /^\/api\/sessions\/projects\/update$/],
+  ["DELETE", /^\/api\/sessions\/kim\/automations\//],
+  ["POST", /^\/api\/sessions\/kim\/backlog\/settings$/],
+  ["*", /^\/api\/sessions\/kim\/keys(\/|$)/],
+];
+
+/** Whether a request authenticated by an agent key may go through. */
+export function keyMayCall(method: string, path: string): boolean {
+  const clean = path.replace(/\/+$/, "");
+  return !KEY_DENIED.some(
+    ([deniedMethod, pattern]) =>
+      (deniedMethod === "*" || deniedMethod === method.toUpperCase()) &&
+      pattern.test(clean),
+  );
 }

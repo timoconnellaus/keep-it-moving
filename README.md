@@ -213,7 +213,7 @@ interviewer key list                      # names, created, last used, revoked
 interviewer key revoke "frockbot cloud"
 ```
 
-Store the key as `INTERVIEWER_TOKEN` in the cloud environment's variables. The CLI sends it instead of an OAuth token; the Worker checks its SHA-256 against the Durable Object (only the hash is stored) and lets it act as you on the agent API. A key can't create, list or revoke keys, so a leaked one can always be cut off from a signed-in CLI.
+Store the key as `INTERVIEWER_TOKEN` in the cloud environment's variables. The CLI sends it instead of an OAuth token; the Worker checks its SHA-256 against the Durable Object (only the hash is stored) and lets it report and work on the agent API: sessions, requests, heartbeats, follow-ups, backlog sync and reads. Environment variables are readable by anyone using the environment, so a key can't delete interviews or automations, rename projects, change backlog settings or sync scripts, or create, list or revoke keys; a leaked one can always be cut off from a signed-in CLI. Live key names are unique, and revoking by name revokes every match.
 
 ## On your phone
 
