@@ -222,6 +222,17 @@ export class InterviewStore {
     return id;
   }
 
+  /**
+   * The project for a normalised remote key (github.com/o/r), created when
+   * new; a value without a slash is matched as an existing name first.
+   */
+  projectForKey(key: string): ProjectView {
+    const id = this.resolveProject(
+      key.includes("/") ? { projectKey: key } : { project: key },
+    );
+    return this.projectFor(id)!;
+  }
+
   listProjects(): ProjectView[] {
     return this.sql
       .all("SELECT * FROM projects ORDER BY lower(name)")

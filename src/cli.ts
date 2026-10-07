@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -32,6 +32,7 @@ async function main(args: string[]): Promise<void> {
   if (group === "artifact") return artifactCommand(action, rest);
   if (group === "stage") return stageCommand(action, rest);
   if (group === "project") return projectCommand(action, rest);
+  if (group === "backlog") return backlogCommand(action, rest);
   if (group === "plan")
     return planCommand(
       [action, ...rest].filter((value): value is string => Boolean(value)),
@@ -431,6 +432,158 @@ async function projectCommand(action: string | undefined, args: string[]) {
   throw new Error(`Unknown project action: ${action ?? ""}`);
 }
 
+// Backlog, milestones and follow-ups ---------------------------------------
+
+/** --project, else this repo's project key, normalised as detectOrigin does. */
+function backlogProject(args: string[]): string {
+  const named = flag(args, "--project");
+  if (named) return named;
+  const remote = git("remote", "get-url", "origin");
+  if (remote) return normalizeRemote(remote);
+  const common = git("rev-parse", "--path-format=absolute", "--git-common-dir");
+  if (common) return `local/${basename(dirname(common)).toLowerCase()}`;
+  throw new Error("Not in a git repository; pass --project <key>");
+}
+
+/** A sync script gets this long to print the backlog. */
+const SYNC_SCRIPT_TIMEOUT_MS = 60_000;
+
+async function backlogCommand(action: string | undefined, args: string[]) {
+  const project = backlogProject(args);
+  const settings = (patch: Record<string, unknown>) =>
+    api("/api/sessions/kim/backlog/settings", {
+      method: "POST",
+      body: JSON.stringify({ project, ...patch }),
+    });
+  if (action === "show")
+    return output(
+      await api(
+        `/api/sessions/kim/backlog?project=${encodeURIComponent(project)}`,
+      ),
+    );
+  if (action === "sync") return output(await backlogSync(project));
+  if (action === "next") return output(await backlogNext(project, args));
+  if (action === "source") {
+    const source = positional(args, 0);
+    if (!["github", "script", "none"].includes(source))
+      throw new Error("backlog source takes github, script or none");
+    return output(await settings({ source }));
+  }
+  if (action === "script" && positional(args, 0) === "set") {
+    const script = await artifactContent(args);
+    if (!script) throw new Error("--file <path|-> is required");
+    return output(await settings({ script, source: "script" }));
+  }
+  if (action === "milestone" && positional(args, 0) === "set") {
+    const milestone = positional(args, 1);
+    return output(
+      await settings({ milestone: milestone === "auto" ? null : milestone }),
+    );
+  }
+  if (action === "milestone" && positional(args, 0) === "add")
+    return output(
+      await api("/api/sessions/kim/backlog/milestones", {
+        method: "POST",
+        body: JSON.stringify({
+          project,
+          name: positional(args, 1),
+          due: flag(args, "--due"),
+        }),
+      }),
+    );
+  if (action === "auto-write") {
+    const value = positional(args, 0);
+    if (value !== "on" && value !== "off")
+      throw new Error("backlog auto-write takes on or off");
+    return output(await settings({ autoWrite: value === "on" }));
+  }
+  throw new Error(`Unknown backlog action: ${action ?? ""}`);
+}
+
+/**
+ * Syncs the project's backlog. GitHub syncs on the server; a script source
+ * comes back as the script, which runs here (with this machine's
+ * environment and credentials) and its JSON goes up to the server.
+ */
+async function backlogSync(project: string): Promise<unknown> {
+  const result = (await api("/api/sessions/kim/backlog/sync", {
+    method: "POST",
+    body: JSON.stringify({ project }),
+  })) as { script?: string };
+  if (typeof result.script !== "string") return result;
+  const fail = async (message: string) => {
+    await api("/api/sessions/kim/backlog/error", {
+      method: "POST",
+      body: JSON.stringify({ project, error: message }),
+    }).catch(() => undefined);
+    throw new Error(message);
+  };
+  const dir = mkdtempSync(join(tmpdir(), "interviewer-sync-"));
+  const file = join(dir, "sync.mjs");
+  writeFileSync(file, result.script);
+  let run;
+  try {
+    run = spawnSync(process.execPath, [file], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: SYNC_SCRIPT_TIMEOUT_MS,
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const stderr = run.stderr?.trim().slice(-4000) ?? "";
+  if (run.error || run.status !== 0) {
+    const why =
+      run.signal === "SIGTERM"
+        ? `timed out after ${SYNC_SCRIPT_TIMEOUT_MS / 1000}s`
+        : run.error
+          ? `failed to run: ${run.error.message}`
+          : `exited with ${run.status}`;
+    return fail(`The sync script ${why}${stderr ? `:\n${stderr}` : ""}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(run.stdout);
+  } catch {
+    return fail(
+      `The sync script's output isn't JSON: ${run.stdout.trim().slice(0, 200)}${stderr ? `\n${stderr}` : ""}`,
+    );
+  }
+  return api("/api/sessions/kim/backlog/items", {
+    method: "POST",
+    body: JSON.stringify({ project, output: parsed }),
+  });
+}
+
+/** Before an agent picks up work: sync, then the top open items in order. */
+async function backlogNext(project: string, args: string[]) {
+  let syncError: string | undefined;
+  try {
+    await backlogSync(project);
+  } catch (error) {
+    // The last good sync is still worth showing.
+    syncError = error instanceof Error ? error.message : String(error);
+  }
+  const backlog = (await api(
+    `/api/sessions/kim/backlog?project=${encodeURIComponent(project)}`,
+  )) as {
+    milestone: unknown;
+    settings: { syncedAt: string | null };
+    items: { status: string }[];
+  };
+  return {
+    project,
+    milestone: backlog.milestone,
+    syncedAt: backlog.settings.syncedAt,
+    ...(syncError ? { syncError } : {}),
+    items: backlog.items
+      .filter((item) => item.status === "in_progress" || item.status === "todo")
+      .slice(0, Number(flag(args, "--limit") ?? 5)),
+  };
+}
+
 /** Opens or closes the workspace column beside the questions. */
 async function stageCommand(action: string | undefined, args: string[]) {
   if (action !== "open" && action !== "close")
@@ -820,6 +973,13 @@ Commands:
   artifact show <session> <artifact|none>   choose what the workspace shows
   artifact delete <session> <artifact>
   stage open|close <session>   show or hide the workspace column
+
+Backlog (the project defaults to this repo's; --project <key> picks another):
+  backlog show | sync | next [--limit 5]   next syncs first, then prints the top open items
+  backlog source github|script|none
+  backlog script set --file <path|->   save the project's sync script; it runs here on sync
+  backlog milestone set <name|sourceId|auto> | milestone add <name> [--due YYYY-MM-DD]
+  backlog auto-write on|off   accept follow-ups into the source as they arrive
 
 INTERVIEWER_URL points at another deployment, such as wrangler dev.
 `,

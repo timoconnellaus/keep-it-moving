@@ -90,3 +90,7 @@ interviewer session stop <session-id>
 ```
 
 A stopped interview is review-only. Use `interviewer session resume <session-id>` before adding questions or collecting more answers. Cancelling `attach` only releases the watcher; it does not stop the interview.
+
+## Backlog
+
+Before you pick up work in a project, run `interviewer backlog next` inside the repo. It syncs the backlog, then prints the current milestone and the top open items as JSON, in progress first; take the first one that fits your task. A `syncError` in the output means the list may be stale. A github.com project syncs its GitHub Issues on the server with nothing to set up. For any other backlog (Linear, Slack, a file), an agent writes the project's sync script once at setup: a Node `.mjs` script that reads the tool's API with credentials from the environment and prints `{"items": [{"sourceId", "title", "status": "todo|in_progress|done|cancelled", "url"?, "milestone"?, "priority"?, "order"?, "assignee"?, "labels"?, "body"?}], "milestones"?: [{"sourceId", "name", "due"?, "url"?}]}` on stdout (the README has an example). Test it with `node sync.mjs`, save it with `interviewer backlog script set --file sync.mjs` (which also switches the project to the script source), then check it end to end with `interviewer backlog sync`. The script runs on the machine that syncs, from the current directory, with a 60-second limit.

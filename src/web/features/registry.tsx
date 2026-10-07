@@ -1,5 +1,8 @@
 import type { ComponentType } from "react";
 import type { InboxItem, InboxKind } from "../../shared/inbox.js";
+import { FollowUpsDetail, FollowUpsSection } from "./backlog/FollowUps.js";
+import { MilestoneSection } from "./backlog/Milestone.js";
+import { UpNextSection } from "./backlog/UpNext.js";
 
 /** A section of the project page, in order. Each feature adds its own. */
 export interface ProjectSection {
@@ -17,9 +20,25 @@ export type InboxDetail = ComponentType<{
   done: () => void;
 }>;
 
-export const projectSections: ProjectSection[] = [];
+export const projectSections: ProjectSection[] = [
+  {
+    id: "milestone",
+    title: "Milestone",
+    column: "main",
+    Component: MilestoneSection,
+  },
+  { id: "up-next", title: "Up next", column: "side", Component: UpNextSection },
+  {
+    id: "follow-ups",
+    title: "Follow-ups",
+    column: "side",
+    Component: FollowUpsSection,
+  },
+];
 
-export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {};
+export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {
+  follow_ups: FollowUpsDetail,
+};
 
 /** Extra full pages under /p/<projectId>/…, matched in order. */
 export interface ProjectRoute {

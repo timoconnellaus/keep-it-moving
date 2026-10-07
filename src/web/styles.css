@@ -1268,3 +1268,182 @@ h1 {
     justify-content: center;
   }
 }
+
+/* Keep it moving: backlog, milestone and follow-ups */
+.kim-backlog-muted {
+  color: var(--muted);
+}
+.kim-backlog-small {
+  font-size: 12px;
+}
+.kim-backlog-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--accent);
+}
+.kim-backlog-milestone-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.kim-backlog-milestone-name {
+  color: inherit;
+  font-size: 16px;
+  font-weight: 600;
+}
+a.kim-backlog-milestone-name {
+  text-decoration: none;
+}
+a.kim-backlog-milestone-name:hover {
+  text-decoration: underline;
+}
+.kim-backlog-progress {
+  height: 6px;
+  margin: 10px 0 12px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--line);
+}
+.kim-backlog-progress > div {
+  height: 100%;
+  background: var(--accent);
+}
+.kim-backlog-upto {
+  padding: 10px 12px;
+  border: 1px solid #dce8e5;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  line-height: 1.5;
+}
+.kim-backlog-upto .kim-backlog-small {
+  margin-top: 6px;
+}
+.kim-backlog-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.kim-backlog-sync {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+.kim-backlog-sync:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.kim-backlog-sync:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.kim-backlog-note {
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.kim-backlog-error {
+  border-color: #f0c4c0;
+  background: #fdf3f2;
+  color: #8f1d14;
+}
+.kim-backlog-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.kim-backlog-command code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: 12px var(--mono);
+}
+.kim-backlog-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kim-backlog-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.kim-backlog-id {
+  flex: none;
+  min-width: 28px;
+  color: var(--muted);
+  font: 12px var(--mono);
+}
+.kim-backlog-title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kim-backlog-title a {
+  color: inherit;
+  text-decoration: none;
+}
+.kim-backlog-title a:hover {
+  text-decoration: underline;
+}
+.kim-backlog-active {
+  color: #1d4ed8;
+}
+.kim-backlog-done {
+  color: #17803d;
+}
+.kim-backlog-followup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.kim-backlog-followup-text {
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+.kim-backlog-actions {
+  display: flex;
+  gap: 6px;
+}
+.kim-backlog-actions button,
+.kim-backlog-command button {
+  min-height: 36px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.kim-backlog-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.kim-backlog-followup-note {
+  flex-basis: 100%;
+  color: var(--muted);
+  font: 12px var(--mono);
+  overflow-wrap: anywhere;
+}

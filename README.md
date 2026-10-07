@@ -88,6 +88,65 @@ The first interview from a remote creates its project, named from the repo and g
 
 In the browser, the interview title is a switcher (click it, or press ⌘K): every interview, grouped by project, with its branch, agent session, progress and whether it waits on you. A dot on the title counts the other interviews waiting on you, and updates live. The site root lists every interview the same way.
 
+## Backlog, milestones and follow-ups
+
+Each project shows one current milestone with its progress, an "Up next" list (the backlog in milestone order) and the follow-ups finished sessions left undone. The workbench only reads the backlog; it writes back to the source when you accept a follow-up, or on every follow-up once `backlog auto-write on` is set.
+
+- **GitHub Issues** sync on the server with the Worker's `GITHUB_TOKEN`, and are the default for any `github.com` project: open issues plus those closed in the last 14 days, and open milestones. An assignee or an "in progress" label means in progress; labels like `P1` or `priority: high` set the priority. They sync on demand (**Sync now**, `backlog sync`, `backlog next`) and every 15 minutes in the background.
+- **Any other source** uses a per-project **sync script**. The Worker stores it, `interviewer backlog sync` runs it locally with the current `node` (from the current directory, with your environment, for up to 60 seconds) and uploads what it prints on stdout. A failure is recorded on the project and its stderr shown.
+- The **current milestone** is the one you set (`backlog milestone set <name>`), else the open one due soonest that still has open items, else the one with the most open items. A source without milestones can use one defined here: `backlog milestone add <name> --due 2026-11-30`.
+
+A sync script prints this shape. Statuses are `todo`, `in_progress`, `done` and `cancelled`; a lower `priority` or `order` comes first, and an item's `milestone` names a milestone's `sourceId` or `name`. For example, the current Linear cycle's issues:
+
+```js
+// sync.mjs: LINEAR_API_KEY comes from the environment of whoever runs the sync.
+const query = `{ viewer { teams(first: 1) { nodes { activeCycle {
+  id name endsAt
+  issues { nodes { identifier title url priority sortOrder
+    state { type } assignee { name } labels { nodes { name } } } } } } } } }`;
+const response = await fetch("https://api.linear.app/graphql", {
+  method: "POST",
+  headers: {
+    authorization: process.env.LINEAR_API_KEY,
+    "content-type": "application/json",
+  },
+  body: JSON.stringify({ query }),
+});
+if (!response.ok) throw new Error(`Linear ${response.status}`);
+const cycle = (await response.json()).data.viewer.teams.nodes[0].activeCycle;
+const status = {
+  started: "in_progress",
+  completed: "done",
+  canceled: "cancelled",
+};
+console.log(
+  JSON.stringify({
+    milestones: [{ sourceId: cycle.id, name: cycle.name, due: cycle.endsAt }],
+    items: cycle.issues.nodes.map((issue) => ({
+      sourceId: issue.identifier,
+      title: issue.title,
+      status: status[issue.state.type] ?? "todo",
+      url: issue.url,
+      milestone: cycle.id,
+      priority: issue.priority || undefined,
+      order: issue.sortOrder,
+      assignee: issue.assignee?.name,
+      labels: issue.labels.nodes.map((label) => label.name),
+    })),
+  }),
+);
+```
+
+```sh
+interviewer backlog script set --file sync.mjs   # saves it and switches the project to it
+interviewer backlog sync                          # runs it and uploads the result
+interviewer backlog next --limit 5                # sync, then the top open items as JSON
+interviewer backlog source github|script|none
+interviewer backlog show
+```
+
+Each command uses the current repo's project; `--project <key>` picks another. Agents report follow-ups with `interviewer report --follow-up "…"`; they reach the inbox as one item per project, where **To backlog** adds them to the source (a GitHub issue, or a local item for other sources), **Start** copies a `claude "…"` command, and ✕ dismisses them.
+
 ## On your phone
 
 The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's Access sign-in. It opens on the list of interviews.
