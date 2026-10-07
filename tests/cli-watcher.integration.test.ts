@@ -185,26 +185,61 @@ if (command === "validate") {
 });
 
 describe("watcher lease seam", () => {
-  it("rejects a second watcher and releases the lease on disconnect", async () => {
+  it("lets a newer watcher take over and ends the old one", async () => {
     const { address } = await listeningHarness();
     const created = (await fetch(`${address}/api/sessions`, {
       method: "POST",
     }).then((response) => response.json())) as { id: string };
-    const controller = new AbortController();
-    const first = await fetch(`${address}/api/sessions/${created.id}/attach`, {
-      signal: controller.signal,
-    });
+    const first = await fetch(`${address}/api/sessions/${created.id}/attach`);
     expect(first.status).toBe(200);
-    const reader = first.body!.getReader();
-    await reader.read();
+    const firstText = first.text();
     const second = await fetch(`${address}/api/sessions/${created.id}/attach`);
-    expect(second.status).toBe(409);
-    controller.abort();
-    await reader.cancel().catch(() => undefined);
+    expect(second.status).toBe(200);
+    // The old stream says why it ended, then closes.
+    expect(await firstText).toContain('"type":"replaced"');
+    await second.body!.cancel();
     await new Promise((resolve) => setTimeout(resolve, 30));
     const next = await fetch(
       `${address}/api/sessions/${created.id}/events/next?timeout=1`,
     );
     expect(next.status).toBe(200);
+  });
+
+  it("hands queued answers to the wait that took over", async () => {
+    const { address } = await listeningHarness();
+    const session = (await fetch(`${address}/api/sessions`, {
+      method: "POST",
+    }).then((response) => response.json())) as { id: string };
+    const base = `${address}/api/sessions/${session.id}`;
+    const { questions } = (await fetch(`${base}/questions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "text", prompt: "Name?" }),
+    }).then((response) => response.json())) as {
+      questions: Array<{ id: string }>;
+    };
+    // A stale wait, as left behind by a killed CLI.
+    const stale = fetch(`${base}/wait?idle=0&timeout=60000`);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const fresh = fetch(`${base}/wait?idle=0&timeout=60000`);
+    const replaced = await stale;
+    expect(replaced.status).toBe(409);
+    expect(((await replaced.json()) as { error: string }).error).toMatch(
+      /replaced by a newer watcher/i,
+    );
+    await fetch(`${base}/questions/${questions[0]!.id}/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answer: "Keep it moving" }),
+    });
+    const batch = (await (await fresh).json()) as {
+      answers: Array<{ answer: string }>;
+      events: Array<{ type: string }>;
+    };
+    expect(batch.answers.map((answer) => answer.answer)).toEqual([
+      "Keep it moving",
+    ]);
+    // Events queued before the takeover reach the new watcher too.
+    expect(batch.events.map((event) => event.type)).toContain("question.added");
   });
 });

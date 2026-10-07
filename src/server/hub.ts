@@ -29,20 +29,32 @@ export interface HubOptions {
 
 interface Watcher {
   write: (event: InterviewEvent) => boolean;
-  close: () => void;
+  /** A newer watcher took over: end without marking anything delivered. */
+  replace: () => void;
 }
+
+/**
+ * The newest watcher wins. A client that died without the server noticing
+ * (a killed CLI whose disconnect never reached the Durable Object) would
+ * otherwise hold the lease until its request timed out.
+ */
+const REPLACED = "Replaced by a newer watcher on this interview";
 
 /** The interview API: agent routes under /api/sessions, browser routes under /api/browser/:token. */
 export function createHub(options: HubOptions) {
   const { store, baseUrl, sockets } = options;
   const watchers = new Map<string, Watcher>();
+  const claim = (id: string, watcher: Watcher) => {
+    watchers.get(id)?.replace();
+    watchers.set(id, watcher);
+  };
   const app = new Hono();
 
   app.onError((error, c) => {
     const message = error instanceof Error ? error.message : String(error);
     const status = /not found/i.test(message)
       ? 404
-      : /stopped|already attached/i.test(message)
+      : /stopped|replaced by a newer watcher/i.test(message)
         ? 409
         : 400;
     return c.json({ error: message }, status);
@@ -233,7 +245,6 @@ export function createHub(options: HubOptions) {
   app.get("/api/sessions/:id/attach", (c) => {
     const id = c.req.param("id");
     store.getSession(id, baseUrl);
-    if (watchers.has(id)) throw new Error("A watcher is already attached");
     const encoder = new TextEncoder();
     let lease: Watcher | null = null;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -264,9 +275,18 @@ export function createHub(options: HubOptions) {
         if (pending.length) store.markDelivered(id, pending.at(-1)!.id);
         lease = {
           write: (event) => writeLine({ type: "event", event }),
-          close: () => controller.close(),
+          replace: () => {
+            writeLine({ type: "replaced", message: REPLACED });
+            open = false;
+            release();
+            try {
+              controller.close();
+            } catch {
+              /* already closed */
+            }
+          },
         };
-        watchers.set(id, lease);
+        claim(id, lease);
         // Proxies drop idle connections; a heartbeat line keeps this one open.
         heartbeat = setInterval(
           () => writeLine({ type: "heartbeat" }),
@@ -291,7 +311,6 @@ export function createHub(options: HubOptions) {
   app.get("/api/sessions/:id/events/next", async (c) => {
     const id = c.req.param("id");
     store.getSession(id, baseUrl);
-    if (watchers.has(id)) throw new Error("A watcher is already attached");
     const existing = store.undeliveredEvents(id);
     if (existing.length) {
       store.markDelivered(id, existing.at(-1)!.id);
@@ -302,8 +321,8 @@ export function createHub(options: HubOptions) {
       });
     }
     const timeout = bounded(c.req.query("timeout"), 25_000, 0, 30_000);
-    const events = await new Promise<InterviewEvent[]>((resolve) => {
-      const finish = (found: InterviewEvent[]) => {
+    const events = await new Promise<InterviewEvent[] | null>((resolve) => {
+      const finish = (found: InterviewEvent[] | null) => {
         clearTimeout(timer);
         if (watchers.get(id) === watcher) watchers.delete(id);
         resolve(found);
@@ -313,12 +332,13 @@ export function createHub(options: HubOptions) {
           finish([event]);
           return false;
         },
-        close: () => finish([]),
+        replace: () => finish(null),
       };
-      watchers.set(id, watcher);
+      claim(id, watcher);
       const timer = setTimeout(() => finish([]), timeout);
       c.req.raw.signal.addEventListener("abort", () => finish([]));
     });
+    if (!events) throw new Error(REPLACED);
     if (events.length) store.markDelivered(id, events.at(-1)!.id);
     later(() => broadcast(id));
     return c.json({ session: forAgent(store.getSession(id, baseUrl)), events });
@@ -327,18 +347,20 @@ export function createHub(options: HubOptions) {
   app.get("/api/sessions/:id/wait", async (c) => {
     const id = c.req.param("id");
     store.getSession(id, baseUrl);
-    if (watchers.has(id)) throw new Error("A watcher is already attached");
-    return c.json(
-      await waitForBatch(id, {
-        idle: bounded(c.req.query("idle"), 15_000, 0, 600_000),
-        timeout: bounded(c.req.query("timeout"), 600_000, 0, 3_600_000),
-        partial: c.req.query("partial") === "1",
-        signal: c.req.raw.signal,
-        store,
-        watchers,
-        broadcast,
-      }),
-    );
+    const batch = await waitForBatch(id, {
+      idle: bounded(c.req.query("idle"), 15_000, 0, 600_000),
+      timeout: bounded(c.req.query("timeout"), 600_000, 0, 3_600_000),
+      partial: c.req.query("partial") === "1",
+      signal: c.req.raw.signal,
+      store,
+      claim: (watcher) => claim(id, watcher),
+      release: (watcher) => {
+        if (watchers.get(id) === watcher) watchers.delete(id);
+      },
+      broadcast,
+    });
+    if (!batch) throw new Error(REPLACED);
+    return c.json(batch);
   });
 
   // Browser routes. Cloudflare Access already limits them to the owner, so
@@ -486,7 +508,8 @@ const SETTLE_MS = 750;
  * question, then returns them as one batch.
  * A `partial` request that times out first returns `{ partial: true }` and
  * leaves the events queued, so a client can chain short requests into one
- * long wait.
+ * long wait. A wait a newer watcher took over resolves to null and leaves
+ * the events queued for that watcher.
  */
 async function waitForBatch(
   id: string,
@@ -496,21 +519,23 @@ async function waitForBatch(
     partial: boolean;
     signal: AbortSignal;
     store: InterviewStore;
-    watchers: Map<string, Watcher>;
+    claim: (watcher: Watcher) => void;
+    release: (watcher: Watcher) => void;
     broadcast: (id: string) => void;
   },
 ): Promise<unknown> {
-  const { store, watchers, broadcast } = options;
+  const { store, broadcast } = options;
   const events = store.undeliveredEvents(id);
   return new Promise((resolve) => {
     let done = false;
     let quietTimer: ReturnType<typeof setTimeout> | null = null;
-    const finish = (complete: boolean) => {
+    const finish = (complete: boolean | "replaced") => {
       if (done) return;
       done = true;
       clearTimeout(overall);
       if (quietTimer) clearTimeout(quietTimer);
-      if (watchers.get(id) === watcher) watchers.delete(id);
+      options.release(watcher);
+      if (complete === "replaced") return resolve(null);
       if (!complete) return resolve({ partial: true });
       if (events.length) store.markDelivered(id, events.at(-1)!.id);
       setTimeout(() => broadcast(id), 0);
@@ -533,9 +558,9 @@ async function waitForBatch(
         evaluate();
         return false;
       },
-      close: () => finish(true),
+      replace: () => finish("replaced"),
     };
-    watchers.set(id, watcher);
+    options.claim(watcher);
     const overall = setTimeout(() => finish(!options.partial), options.timeout);
     options.signal.addEventListener("abort", () => finish(false));
     evaluate();

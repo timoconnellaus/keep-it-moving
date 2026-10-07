@@ -67,7 +67,7 @@ Run `interviewer wait <session-id>` as a background process. It exits with one J
 - `events`: everything queued, including your own edits.
 - `openQuestions`: how many questions remain open.
 
-Handle the batch: update the plan, adapt the questions, and add or revise visuals. Then run `wait` again. Only one watcher may attach at a time. If background processes are unavailable, loop on `interviewer wait` in the foreground. `interviewer attach` (NDJSON stream) and `interviewer events next` remain available.
+Handle the batch: update the plan, adapt the questions, and add or revise visuals. Then run `wait` again. One watcher holds a session at a time; a new one takes over and the old one exits with "Replaced by a newer watcher", so never run two. If background processes are unavailable, loop on `interviewer wait` in the foreground. `interviewer attach` (NDJSON stream) and `interviewer events next` remain available.
 
 Answers can arrive while detached and appear in the next batch. Treat `answer.revised` as a fresh decision point. Decide whether later questions should remain, change, or be deleted; there is no automatic dependency system.
 

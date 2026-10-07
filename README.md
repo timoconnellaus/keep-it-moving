@@ -47,7 +47,7 @@ interviewer wait <session-id>
 
 The batch holds every queued event, the latest answer to each question it touched (with `acceptedDefault`), the open-question count, and whether the workspace is open. The agent's own edits ride along but never end a wait early. `--timeout` (default 600000) bounds the whole wait; an empty batch means nothing happened. Run it as a background process, handle the batch, then run it again.
 
-Two lower-level watchers remain. `attach` emits a snapshot and queued events, then streams NDJSON until cancelled. `events next <session-id> --timeout 25000` long-polls for the next event. Cancelling a watcher never stops the interview, and only one watcher may attach at a time.
+Two lower-level watchers remain. `attach` emits a snapshot and queued events, then streams NDJSON until cancelled. `events next <session-id> --timeout 25000` long-polls for the next event. Cancelling a watcher never stops the interview. One watcher holds a session at a time, and the newest wins: a new `wait`, `attach` or `events next` takes over, the old one ends (`wait` and `events next` fail with "Replaced by a newer watcher", `attach` emits a `replaced` line and closes), and anything still queued goes to the new one. So a killed watcher never blocks the next.
 
 Rich questions and batches can be sent as JSON:
 
@@ -185,5 +185,5 @@ The suite runs the hub and store on in-memory `node:sqlite`, and the CLI against
 
 ## Current limitations
 
-- One user per deployment, and one watcher per session.
+- One user per deployment, and one watcher per session (the newest takes over).
 - Canvas, drawing, uploads, ranking, and rich HTML questions are future work.
