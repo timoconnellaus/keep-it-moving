@@ -23,6 +23,11 @@ export interface Feature {
   name: string;
   /** Agent (CLI) routes; paths are relative to /api/sessions/kim. */
   agentRoutes?: (app: Hono) => void;
+  /**
+   * Worker-only routes, under /internal: no public route forwards there, so
+   * only the Worker calling the Durable Object directly reaches them.
+   */
+  internalRoutes?: (app: Hono) => void;
   /** Browser routes; paths are relative to /api/browser/kim. */
   browserRoutes?: (app: Hono) => void;
   /** Everything this feature says needs Tim right now. */

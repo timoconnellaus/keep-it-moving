@@ -203,6 +203,18 @@ interviewer backlog show
 
 Each command uses the current repo's project; `--project <key>` picks another. Agents report follow-ups with `interviewer report --follow-up "…"`; they reach the inbox as one item per project, where **To backlog** adds them to the source (a GitHub issue, or a local item for other sources), **Start** copies a `claude "…"` command, and ✕ dismisses them.
 
+## Agent keys (cloud sessions)
+
+A cloud session can't run the browser sign-in, so it authenticates with an agent key instead: long-lived, revocable, one per project's cloud environment.
+
+```sh
+interviewer key create "frockbot cloud"   # prints the key once
+interviewer key list                      # names, created, last used, revoked
+interviewer key revoke "frockbot cloud"
+```
+
+Store the key as `INTERVIEWER_TOKEN` in the cloud environment's variables. The CLI sends it instead of an OAuth token; the Worker checks its SHA-256 against the Durable Object (only the hash is stored) and lets it act as you on the agent API. A key can't create, list or revoke keys, so a leaked one can always be cut off from a signed-in CLI.
+
 ## On your phone
 
 The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's Access sign-in. It opens on the inbox.

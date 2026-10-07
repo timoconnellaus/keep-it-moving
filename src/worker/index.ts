@@ -1,5 +1,6 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { accessEmail, isAllowed, isLoopback } from "./access.js";
+import { KEY_PREFIX, VIA_KEY_HEADER } from "../server/features/keys.js";
 import type { Env } from "./env.js";
 
 export { InterviewHub } from "./hub.js";
@@ -17,11 +18,16 @@ const page = (status: number, message: string) =>
 /** The agent API: OAuth access tokens issued to the CLI, for the allowed account only. */
 const agentApi: ExportedHandler<Env> = {
   fetch(request, env, ctx) {
-    const props = (ctx as ExecutionContext & { props?: { email?: string } })
-      .props;
+    const props = (
+      ctx as ExecutionContext & { props?: { email?: string; via?: string } }
+    ).props;
     if (!isAllowed(props?.email, env))
       return Response.json({ error: "Not allowed" }, { status: 403 });
-    return hub(env).fetch(request);
+    // Tell the hub which requests a key made; a client can't claim either way.
+    const forwarded = new Request(request);
+    forwarded.headers.delete(VIA_KEY_HEADER);
+    if (props?.via === "key") forwarded.headers.set(VIA_KEY_HEADER, "1");
+    return hub(env).fetch(forwarded);
   },
 };
 
@@ -86,6 +92,22 @@ export default {
       tokenEndpoint: "/token",
       clientRegistrationEndpoint: "/register",
       resourceMetadata: { resource: `${env.PUBLIC_URL}/api/sessions` },
+      // Agent keys (`interviewer key create`) for places that can't sign in
+      // through a browser, such as a cloud session's environment.
+      resolveExternalToken: async ({ token, env }) => {
+        if (!token.startsWith(KEY_PREFIX)) return null;
+        const verdict = (await hub(env)
+          .fetch("https://hub/internal/keys/verify", {
+            method: "POST",
+            body: JSON.stringify({ key: token }),
+          })
+          .then((response) => response.json())) as { ok?: boolean };
+        if (!verdict.ok) return null;
+        return {
+          props: { email: env.ALLOWED_EMAIL, via: "key" },
+          audience: `${env.PUBLIC_URL}/api/sessions`,
+        };
+      },
       scopesSupported: ["interviews"],
       accessTokenTTL: 60 * 60,
       // A login lasts while the CLI keeps using it.

@@ -61,9 +61,11 @@ export function createHub(options: HubOptions) {
     const message = error instanceof Error ? error.message : String(error);
     const status = /not found/i.test(message)
       ? 404
-      : /stopped|replaced by a newer watcher/i.test(message)
-        ? 409
-        : 400;
+      : /can't manage keys/i.test(message)
+        ? 403
+        : /stopped|replaced by a newer watcher/i.test(message)
+          ? 409
+          : 400;
     return c.json({ error: message }, status);
   });
 
@@ -240,6 +242,7 @@ export function createHub(options: HubOptions) {
   // Keep it moving: feature routes, mounted before the :id and :token routes.
   const kimAgent = new Hono();
   const kimBrowser = new Hono();
+  const internal = new Hono();
   kimAgent.get("/inbox", (c) => c.json({ items: inbox() }));
   kimBrowser.get("/inbox", (c) => c.json({ items: inbox() }));
   // Every project with the rail's numbers, merged from each feature.
@@ -265,9 +268,11 @@ export function createHub(options: HubOptions) {
   for (const feature of features) {
     feature.agentRoutes?.(kimAgent);
     feature.browserRoutes?.(kimBrowser);
+    feature.internalRoutes?.(internal);
   }
   app.route("/api/sessions/kim", kimAgent);
   app.route("/api/browser/kim", kimBrowser);
+  app.route("/internal", internal);
 
   // Agent routes. Fixed paths go before /api/sessions/:id.
   app.get("/api/sessions/projects", (c) => c.json(store.listProjects()));

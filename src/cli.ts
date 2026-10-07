@@ -42,6 +42,7 @@ async function main(args: string[]): Promise<void> {
     return automationsCommand(group, action, rest);
   if (group === "pr") return prCommand(action, rest);
   if (group === "backlog") return backlogCommand(action, rest);
+  if (group === "key") return keyCommand(action, rest);
   if (["hook", "hooks", "report", "ask"].includes(group!))
     return agentSessionCommand(group!, action, rest);
   if (group === "plan")
@@ -1193,6 +1194,35 @@ function writeCredentials(credentials: Credentials | null): void {
   chmodSync(file, 0o600);
 }
 
+/**
+ * Agent keys, for a cloud environment or anywhere the browser sign-in can't
+ * run: create one per project's cloud environment and store it there as
+ * INTERVIEWER_TOKEN. Managing keys needs a signed-in CLI, not a key.
+ */
+async function keyCommand(action: string | undefined, args: string[]) {
+  if (action === "create") {
+    const name = positional(args, 0);
+    const created = (await api("/api/sessions/kim/keys", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    })) as { key: string };
+    output(created);
+    process.stderr.write(
+      `\nShown once. Store it as INTERVIEWER_TOKEN in the cloud environment, then revoke it with \`interviewer key revoke ${name}\`.\n`,
+    );
+    return;
+  }
+  if (action === "list") return output(await api("/api/sessions/kim/keys"));
+  if (action === "revoke")
+    return output(
+      await api(
+        `/api/sessions/kim/keys/${encodeURIComponent(positional(args, 0))}`,
+        { method: "DELETE" },
+      ),
+    );
+  throw new Error(`Unknown key action: ${action ?? ""}`);
+}
+
 async function accessToken(forceRefresh: boolean): Promise<string | null> {
   if (process.env.INTERVIEWER_TOKEN) return process.env.INTERVIEWER_TOKEN;
   const stored = readCredentials()[defaultBase];
@@ -1463,6 +1493,7 @@ Keep it moving:
   automation list [--project <key>] [--all]   this repo's automations by default
   automation remove <id>
 Backlog (the project defaults to this repo's; --project <key> picks another):
+  key create <name> | list | revoke <id|name>   agent keys for cloud environments (INTERVIEWER_TOKEN)
   backlog show | sync | next [--limit 5]   next syncs first, then prints the top open items
   backlog source github|script|none
   backlog script set --file <path|->   save the project's sync script; it runs here on sync

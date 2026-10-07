@@ -2,6 +2,7 @@ import { sessionsFeature } from "./sessions.js";
 import { backlogFeature } from "./backlog.js";
 import { githubFeature } from "./github/index.js";
 import { automations } from "./automations.js";
+import { keysFeature } from "./keys.js";
 import type { Feature, FeatureContext } from "./types.js";
 
 export type { Feature, FeatureContext } from "./types.js";
@@ -13,5 +14,6 @@ export function allFeatures(ctx: FeatureContext): Feature[] {
     backlogFeature(ctx),
     githubFeature(ctx),
     automations(ctx),
+    keysFeature(ctx),
   ];
 }
