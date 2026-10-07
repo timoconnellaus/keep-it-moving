@@ -380,7 +380,7 @@ export function backlogFeature(
   };
 
   const syncCommand = (project: ProjectRow) =>
-    `interviewer backlog sync --project ${project.key}`;
+    `kim backlog sync --project ${project.key}`;
 
   const projectView = (project: ProjectRow): ProjectBacklogView => {
     const settings = settingsFor(project);
@@ -575,13 +575,13 @@ export function backlogFeature(
       if (settings.source === "script") {
         if (!settings.script)
           throw new Error(
-            "No sync script saved; save one with `interviewer backlog script set --file <path>`",
+            "No sync script saved; save one with `kim backlog script set --file <path>`",
           );
         return c.json({ project, script: settings.script });
       }
       if (settings.source === "none")
         throw new Error(
-          "This project has no backlog source; set one with `interviewer backlog source github|script`",
+          "This project has no backlog source; set one with `kim backlog source github|script`",
         );
       const synced = await syncGithub(project);
       return c.json({ ...projectView(project), synced });
@@ -634,7 +634,7 @@ export function backlogFeature(
         ),
       });
     });
-    // The contract `interviewer report --follow-up` posts to.
+    // The contract `kim report --follow-up` posts to.
     app.post("/followups", async (c) =>
       c.json(await addFollowUps(await body(c))),
     );
@@ -657,7 +657,7 @@ export function backlogFeature(
             command:
               settings.source === "script"
                 ? syncCommand(project)
-                : `interviewer backlog source github --project ${project.key}`,
+                : `kim backlog source github --project ${project.key}`,
           },
           409,
         );

@@ -68,7 +68,7 @@ const env = (address: string, extra: Record<string, string> = {}) => {
   };
 };
 
-/** Runs `interviewer hook <event>` with JSON on stdin, as Claude Code does. */
+/** Runs `kim hook <event>` with JSON on stdin, as Claude Code does. */
 function runHook(
   address: string,
   event: string,
@@ -138,9 +138,9 @@ describe("hooks install", () => {
         (group: { hooks: Array<{ command: string }> }) =>
           group.hooks[0]!.command,
       ),
-    ).toEqual(["afplay /System/done.aiff", "interviewer hook Stop"]);
+    ).toEqual(["afplay /System/done.aiff", "kim hook Stop"]);
     expect(installed.hooks.Notification[0].hooks[0].command).toBe(
-      "interviewer hook Notification",
+      "kim hook Notification",
     );
 
     expect((await run("install")).changed).toEqual([]);
@@ -430,7 +430,7 @@ describe("hooks install --project", () => {
     };
     const read = () => JSON.parse(readFileSync(settings, "utf8"));
     const guarded = (event: string) =>
-      `[ -n "$INTERVIEWER_TOKEN" ] && interviewer hook ${event} || true`;
+      `[ -n "$INTERVIEWER_TOKEN" ] && kim hook ${event} || true`;
 
     const first = await run("install");
     expect(first.result.changed).toHaveLength(5);
@@ -503,9 +503,9 @@ describe("cloud setup", () => {
     expect(stdout).toContain(`Allowed domains: ${host}`);
     expect(stdout).toContain(`INTERVIEWER_URL=${address}`);
     expect(stdout).toContain(`npm install -g ${address}/cli.tgz || true`);
-    expect(stdout).toContain("interviewer hooks install || true");
-    expect(stdout).toContain("interviewer hooks install --project");
-    expect(stdout).toContain("interviewer key revoke 'Frockbot cloud'");
+    expect(stdout).toContain("kim hooks install || true");
+    expect(stdout).toContain("kim hooks install --project");
+    expect(stdout).toContain("kim key revoke 'Frockbot cloud'");
     if (process.env.SHOW_CLOUD_SETUP) process.stderr.write(stdout);
 
     const keys = (

@@ -52,7 +52,7 @@ export function AutomationsSection({ projectId }: { projectId: string }) {
     return (
       <p className="kim-automations-empty">
         No automations yet. A loop registers itself with{" "}
-        <code>interviewer heartbeat &lt;name&gt; --every 5m</code>.
+        <code>kim heartbeat &lt;name&gt; --every 5m</code>.
       </p>
     );
   return (

@@ -63,7 +63,7 @@ const view: ProjectBacklogView = {
     },
   ],
   counts: { todo: 5, inProgress: 3, done: 5, total: 13 },
-  syncCommand: "interviewer backlog sync --project github.com/tim/interviewer",
+  syncCommand: "kim backlog sync --project github.com/tim/interviewer",
 };
 
 describe("backlog sections", () => {

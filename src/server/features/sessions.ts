@@ -63,7 +63,7 @@ const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
 /**
  * Agent sessions: what each Claude Code session is doing, reported by its
- * hooks and `interviewer report`, plus the requests (interviews) they raise.
+ * hooks and `kim report`, plus the requests (interviews) they raise.
  */
 export function sessionsFeature(ctx: FeatureContext): Feature {
   const { sql } = ctx;

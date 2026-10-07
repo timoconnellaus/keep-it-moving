@@ -61,7 +61,7 @@ export function keysFeature(ctx: FeatureContext): Feature {
   /** Keys can't mint or revoke keys: a leaked one stays revocable. */
   const requireLogin = (c: Context) => {
     if (c.req.header(VIA_KEY_HEADER))
-      throw new Error("Agent keys can't manage keys; use `interviewer login`");
+      throw new Error("Agent keys can't manage keys; use `kim login`");
   };
 
   return {

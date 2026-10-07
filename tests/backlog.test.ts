@@ -375,9 +375,7 @@ describe("script sync", () => {
       url: browser(`/projects/${project.id}/backlog/sync`),
     });
     expect(response.statusCode).toBe(409);
-    expect(response.json().command).toBe(
-      `interviewer backlog sync --project ${KEY}`,
-    );
+    expect(response.json().command).toBe(`kim backlog sync --project ${KEY}`);
   });
 });
 

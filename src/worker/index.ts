@@ -94,7 +94,7 @@ export default {
       tokenEndpoint: "/token",
       clientRegistrationEndpoint: "/register",
       resourceMetadata: { resource: `${env.PUBLIC_URL}/api/sessions` },
-      // Agent keys (`interviewer key create`) for places that can't sign in
+      // Agent keys (`kim key create`) for places that can't sign in
       // through a browser, such as a cloud session's environment.
       resolveExternalToken: async ({ token, env }) => {
         if (!token.startsWith(KEY_PREFIX)) return null;

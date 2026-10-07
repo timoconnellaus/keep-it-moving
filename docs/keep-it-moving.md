@@ -40,7 +40,7 @@ All screens share one shell: a dark top bar ("Keep it moving", counts, ⌘K swit
 
 The binary stays `interviewer`, with a `kim` alias. The domain stays.
 
-- `interviewer hook <event>` reads the Claude Code hook JSON from stdin and reports it:
+- `kim hook <event>` reads the Claude Code hook JSON from stdin and reports it:
   - `SessionStart` → running
   - `UserPromptSubmit` → running
   - `Notification` → needs_you, with the message
@@ -49,11 +49,11 @@ The binary stays `interviewer`, with a `kim` alias. The domain stays.
 
   It never blocks and never fails the hook: it exits 0 quickly and swallows errors.
 
-- `interviewer hooks install` adds those hooks to `~/.claude/settings.json` next to the hooks already there. It merges and never replaces, and it's idempotent.
-- `interviewer report --status … --brief … --pr <url> --follow-up "…"` (repeatable) lets an agent report explicitly. It finds the session from `CLAUDE_CODE_SESSION_ID`.
-- `interviewer ask` is `session create` plus `question add` plus `wait`, already linked to the calling agent session: one command to raise a request and park.
-- `interviewer heartbeat <automation> --project <key> --every 5m` registers an automation and beats.
-- `interviewer backlog sync <project>`, `interviewer backlog script set <project> --file sync.mjs`, `interviewer backlog next <project>`.
+- `kim hooks install` adds those hooks to `~/.claude/settings.json` next to the hooks already there. It merges and never replaces, and it's idempotent.
+- `kim report --status … --brief … --pr <url> --follow-up "…"` (repeatable) lets an agent report explicitly. It finds the session from `CLAUDE_CODE_SESSION_ID`.
+- `kim ask` is `session create` plus `question add` plus `wait`, already linked to the calling agent session: one command to raise a request and park.
+- `kim heartbeat <automation> --project <key> --every 5m` registers an automation and beats.
+- `kim backlog sync <project>`, `kim backlog script set <project> --file sync.mjs`, `kim backlog next <project>`.
 
 ## Build waves
 

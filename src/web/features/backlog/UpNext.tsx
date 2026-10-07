@@ -110,7 +110,7 @@ export function UpNextSection({ projectId }: { projectId: string }) {
       ) : (
         <p className="kim-backlog-muted">
           {view.settings.source === "none"
-            ? "No backlog source yet. Set one with `interviewer backlog source github|script`."
+            ? "No backlog source yet. Set one with `kim backlog source github|script`."
             : "Nothing open in the backlog."}
         </p>
       )}

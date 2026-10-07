@@ -15,7 +15,7 @@ import type { Feature, FeatureContext } from "./types.js";
 
 /**
  * Automations and machines: long-running loops (a project's babysitter,
- * crons) check in with `interviewer heartbeat`, and one that misses
+ * crons) check in with `kim heartbeat`, and one that misses
  * MISSED_BEATS check-ins in a row is down and shows in the inbox.
  */
 export function automations(ctx: FeatureContext): Feature {

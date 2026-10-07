@@ -567,7 +567,7 @@ async function backlogSync(project: string, trust = false): Promise<unknown> {
     if (!trust)
       throw new Error(
         `This machine hasn't approved ${project}'s sync script (sha256 ${scriptHash(result.script).slice(0, 12)}). ` +
-          `Read it with \`interviewer backlog show --project ${project}\`, then run \`interviewer backlog sync --project ${project} --trust\`.`,
+          `Read it with \`kim backlog show --project ${project}\`, then run \`kim backlog sync --project ${project} --trust\`.`,
       );
     trustScript(result.script);
   }
@@ -998,7 +998,7 @@ interface HookInput {
 }
 
 /**
- * `interviewer hook <event>`: reports a Claude Code hook. It must never
+ * `kim hook <event>`: reports a Claude Code hook. It must never
  * block or fail the hook, so it prints nothing, swallows every error, exits
  * 0, and gives up after a few seconds.
  */
@@ -1152,8 +1152,7 @@ interface HookGroup {
 function editHooks(
   file: string,
   action: "install" | "uninstall",
-  commandFor: (event: string) => string = (event) =>
-    `interviewer hook ${event}`,
+  commandFor: (event: string) => string = (event) => `kim hook ${event}`,
 ): { settings: string; changed: string[] } {
   const settings = existsSync(file)
     ? (JSON.parse(readFileSync(file, "utf8") || "{}") as Record<
@@ -1212,7 +1211,7 @@ function editHooks(
  * it always exits 0.
  */
 const projectHookCommand = (event: string) =>
-  `[ -n "$INTERVIEWER_TOKEN" ] && interviewer hook ${event} || true`;
+  `[ -n "$INTERVIEWER_TOKEN" ] && kim hook ${event} || true`;
 
 /**
  * `hooks install|uninstall --project`: the hooks in this repo's committed
@@ -1249,7 +1248,7 @@ async function api(path: string, init?: RequestInit): Promise<unknown> {
 }
 async function errorMessage(response: Response): Promise<string> {
   if (response.status === 401)
-    return "Not signed in. Run `interviewer login` in a terminal.";
+    return "Not signed in. Run `kim login` in a terminal.";
   const value = (await response
     .json()
     .catch(() => ({ error: response.statusText }))) as { error?: string };
@@ -1322,7 +1321,7 @@ async function keyCommand(action: string | undefined, args: string[]) {
     })) as { key: string };
     output(created);
     process.stderr.write(
-      `\nShown once. Store it as INTERVIEWER_TOKEN in the cloud environment, then revoke it with \`interviewer key revoke ${name}\`.\n`,
+      `\nShown once. Store it as INTERVIEWER_TOKEN in the cloud environment, then revoke it with \`kim key revoke ${name}\`.\n`,
     );
     return;
   }
@@ -1371,7 +1370,7 @@ async function cloudCommand(action: string | undefined, args: string[]) {
   if (keys.some((key) => key.name === keyName && !key.revokedAt))
     throw new Error(
       `A live key is already named "${keyName}", and keys can't be shown again. ` +
-        `Revoke it first (\`interviewer key revoke ${shellQuote(keyName)}\`) or pass --key-name <another name>.`,
+        `Revoke it first (\`kim key revoke ${shellQuote(keyName)}\`) or pass --key-name <another name>.`,
     );
   const { key } = (await api("/api/sessions/kim/keys", {
     method: "POST",
@@ -1391,7 +1390,7 @@ async function cloudCommand(action: string | undefined, args: string[]) {
     `npm install -g ${cliPackageUrl()} || true`,
     "# Experimental: user-level hooks in the VM (/root/.claude/settings.json).",
     "# Cloud sessions may not read them; see the per-repo fallback.",
-    "interviewer hooks install || true",
+    "kim hooks install || true",
     "exit 0",
   ].join("\n");
   if (args.includes("--json"))
@@ -1401,7 +1400,7 @@ async function cloudCommand(action: string | undefined, args: string[]) {
       network: { level: "Custom", allow: [host], keepDefaultPackages: true },
       environment,
       setupScript,
-      fallback: "interviewer hooks install --project",
+      fallback: "kim hooks install --project",
     });
   process.stdout.write(
     `Cloud environment for ${project.name} (${project.key})
@@ -1424,13 +1423,13 @@ The setup script's hooks are experimental: the docs don't say whether cloud
 sessions read /root/.claude/settings.json. If a cloud session doesn't show up
 in Keep it moving, commit the hooks to the repo instead. From a checkout:
 
-  interviewer hooks install --project
+  kim hooks install --project
 
 Those hooks do nothing unless INTERVIEWER_TOKEN is set, so teammates and local
 sessions are unaffected. Hooks run only in single-repo cloud sessions.
 
 The key "${keyName}" is shown only here. Revoke it with:
-  interviewer key revoke ${shellQuote(keyName)}
+  kim key revoke ${shellQuote(keyName)}
 `,
   );
 }
@@ -1674,7 +1673,8 @@ function output(value: unknown): void {
 }
 function printHelp(): void {
   process.stdout.write(
-    `interviewer — agent-driven interviews (${defaultBase})
+    `kim — Keep it moving: agent sessions, requests and interviews (${defaultBase})
+(\`interviewer\` is the same command.)
 
 Commands:
   login | logout | whoami   sign in through the browser (Cloudflare Access, then OAuth)

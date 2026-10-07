@@ -46,8 +46,8 @@ export function SessionsSection({ projectId }: { projectId: string }) {
       </p>
       {!sessions.length && (
         <p className="kim-sessions-quiet">
-          No sessions yet. Run <code>interviewer hooks install</code> so Claude
-          Code sessions report here.
+          No sessions yet. Run <code>kim hooks install</code> so Claude Code
+          sessions report here.
         </p>
       )}
       {sessions.map((session) => (

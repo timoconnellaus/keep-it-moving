@@ -123,7 +123,7 @@ export function MilestoneSection({
             <span className="kim-backlog-muted">
               {view.counts?.total
                 ? "Nothing in the backlog has a milestone yet"
-                : "Set one with `interviewer backlog milestone add <name>`"}
+                : "Set one with `kim backlog milestone add <name>`"}
             </span>
           </>
         )}

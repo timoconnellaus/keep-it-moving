@@ -79,7 +79,7 @@ export function Home() {
           <h2>No interviews yet</h2>
           <p>
             Interviews appear here when an agent runs{" "}
-            <code>interviewer session create</code>.
+            <code>kim session create</code>.
           </p>
         </div>
       )}
