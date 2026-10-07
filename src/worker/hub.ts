@@ -14,8 +14,11 @@ export class InterviewHub extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    const sql = durableObjectSql(ctx.storage);
     this.hub = createHub({
-      store: new InterviewStore(durableObjectSql(ctx.storage)),
+      store: new InterviewStore(sql),
+      sql,
+      env: { githubToken: env.GITHUB_TOKEN },
       baseUrl: env.PUBLIC_URL,
       push: webPush(env),
       sockets: {
@@ -40,6 +43,7 @@ export class InterviewHub extends DurableObject<Env> {
   }
 
   override async fetch(request: Request): Promise<Response> {
+    await this.scheduleTick();
     const socket = new URL(request.url).pathname.match(/^\/ws\/([^/]+)$/);
     if (!socket) return this.hub.app.fetch(request);
     // WebSockets skip CORS, so check the page opening one is our own.
@@ -64,6 +68,17 @@ export class InterviewHub extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /** Feature timer work (missed heartbeats, CI polling) runs once a minute. */
+  override async alarm(): Promise<void> {
+    await this.hub.tick();
+    await this.ctx.storage.setAlarm(Date.now() + TICK_MS);
+  }
+
+  private async scheduleTick(): Promise<void> {
+    if ((await this.ctx.storage.getAlarm()) === null)
+      await this.ctx.storage.setAlarm(Date.now() + TICK_MS);
+  }
+
   override webSocketMessage(): void {
     // The page only listens; it writes through the HTTP API.
   }
@@ -72,3 +87,5 @@ export class InterviewHub extends DurableObject<Env> {
     socket.close(code === 1005 ? 1000 : code);
   }
 }
+
+const TICK_MS = 60_000;

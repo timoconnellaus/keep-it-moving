@@ -1,11 +1,14 @@
 import { Hono, type Context } from "hono";
 import { defaultAnswerText } from "../shared/answers.js";
+import type { ProjectStats } from "../shared/inbox.js";
 import type {
   ArtifactView,
   InterviewEvent,
   SessionView,
 } from "../shared/schema.js";
 import { ARTIFACT_VIEW_HEADERS } from "./artifactView.js";
+import { allFeatures, type Feature } from "./features/index.js";
+import type { Sql } from "./sql.js";
 import type { InterviewStore } from "./store.js";
 
 /** Where browser state updates go: hibernating WebSockets in production. */
@@ -20,6 +23,10 @@ export type PushSender = (endpoint: string) => Promise<number>;
 
 export interface HubOptions {
   store: InterviewStore;
+  /** The store's database, for Keep it moving features' own tables. */
+  sql: Sql;
+  /** Worker secrets the features use. */
+  env?: { githubToken?: string | undefined };
   /** The public origin, used in session URLs. */
   baseUrl: string;
   sockets: BrowserSockets;
@@ -104,6 +111,27 @@ export function createHub(options: HubOptions) {
     const open = store.openQuestions(sessionId);
     if (open > 0 && open - count <= 0) void notify();
   };
+  const features: Feature[] = allFeatures({
+    sql: options.sql,
+    store,
+    env: options.env ?? {},
+    notify: () => void notify(),
+    changed: pingOverview,
+  });
+  const inbox = () =>
+    features
+      .flatMap((feature) => feature.inbox?.() ?? [])
+      .sort((a, b) => a.since.localeCompare(b.since));
+  /** Runs each feature's timer work; the Durable Object alarm calls it. */
+  const tick = async (now = Date.now()) => {
+    for (const feature of features)
+      try {
+        await feature.tick?.(now);
+      } catch (error) {
+        console.error(`tick ${feature.name}`, error);
+      }
+  };
+
   store.subscribe((event) => {
     if (event.type === "question.added") {
       if (!added.has(event.sessionId))
@@ -135,6 +163,38 @@ export function createHub(options: HubOptions) {
       return c.json({ error: "Cross-site request refused" }, 403);
     await next();
   });
+
+  // Keep it moving: feature routes, mounted before the :id and :token routes.
+  const kimAgent = new Hono();
+  const kimBrowser = new Hono();
+  kimAgent.get("/inbox", (c) => c.json({ items: inbox() }));
+  kimBrowser.get("/inbox", (c) => c.json({ items: inbox() }));
+  // Every project with the rail's numbers, merged from each feature.
+  kimBrowser.get("/projects", (c) => {
+    const stats = new Map<string, ProjectStats>();
+    for (const feature of features)
+      for (const [id, part] of Object.entries(feature.projectStats?.() ?? {}))
+        stats.set(id, { ...stats.get(id), ...part });
+    const needs = new Map<string, number>();
+    for (const item of inbox())
+      if (item.projectId)
+        needs.set(item.projectId, (needs.get(item.projectId) ?? 0) + 1);
+    return c.json({
+      projects: store.listProjects().map((project) => ({
+        ...project,
+        stats: {
+          ...stats.get(project.id),
+          needsYou: needs.get(project.id) ?? 0,
+        },
+      })),
+    });
+  });
+  for (const feature of features) {
+    feature.agentRoutes?.(kimAgent);
+    feature.browserRoutes?.(kimBrowser);
+  }
+  app.route("/api/sessions/kim", kimAgent);
+  app.route("/api/browser/kim", kimBrowser);
 
   // Agent routes. Fixed paths go before /api/sessions/:id.
   app.get("/api/sessions/projects", (c) => c.json(store.listProjects()));
@@ -423,7 +483,7 @@ export function createHub(options: HubOptions) {
     );
     return c.json({ ok: true });
   });
-  return { app, broadcast, stateMessage, tokenSession };
+  return { app, broadcast, stateMessage, tokenSession, tick, inbox };
 }
 
 const HEARTBEAT_MS = 25_000;

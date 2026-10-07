@@ -19,12 +19,15 @@ export function hubHarness(
     path?: string;
     sockets?: BrowserSockets;
     push?: { publicKey: string; send: PushSender };
+    env?: { githubToken?: string };
   } = {},
 ) {
   const sql = nodeSql(options.path);
   const store = new InterviewStore(sql);
   const hub = createHub({
     store,
+    sql,
+    env: options.env ?? {},
     baseUrl: "https://interviewer.test",
     push: options.push,
     sockets: options.sockets ?? {

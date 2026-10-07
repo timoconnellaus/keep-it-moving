@@ -17,6 +17,8 @@ export interface Env {
   /** Web Push (VAPID): the public key as base64url, the private key a JWK secret. */
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_JWK?: string;
+  /** GitHub API token (secret) for PRs, checks, diffs and issues. */
+  GITHUB_TOKEN?: string;
   /** Local development only: skips Access and signs in as this address on localhost. */
   DEV_EMAIL?: string;
 }
