@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workbench inbox</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F4}
+a{color:#0F6B62}a:hover{color:#0A4F48}
+.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.row:hover{background:#F0F3F2}
+</style>
+</helmet>
+<div style="font-family: 'IBM Plex Sans', system-ui, sans-serif; color: #15181A; font-size: 14px; line-height: 1.4; min-height: 900px; display: flex; flex-direction: column">
+
+<header style="display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: #15181A; color: #FFFFFF">
+<svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>
+<b style="font-weight: 600">Workbench</b>
+<span style="color: #B9C0C4; font-size: 13px">6 projects · 9 sessions · 2 machines</span>
+<span style="margin-left: auto; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #B9C0C4; border: 1px solid #3A4146; border-radius: 6px; padding: 2px 8px">⌘K</span>
+</header>
+
+<div style="display: flex; flex-wrap: wrap; flex: 1; align-items: stretch">
+
+<nav aria-label="Projects" style="flex: 1 1 260px; max-width: 300px; min-width: 240px; background: #FFFFFF; border-right: 1px solid #E1E4E3; padding: 8px 0">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 8px; padding: 9px 14px; margin: 0 8px 8px; border-radius: 8px; background: #E6F0EE; color: #0A4F48; text-decoration: none; font-weight: 600">
+<svg class="ic" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg>
+Inbox<span style="margin-left: auto; background: #0F6B62; color: #FFFFFF; border-radius: 10px; padding: 0 8px; font-size: 12px">7</span></a>
+<div style="padding: 6px 22px 4px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #5F676D">Projects</div>
+<sc-for list="{{projects}}" as="p" hint-placeholder-count="6">
+<a href="Project.dc.html" class="row" style="display: block; padding: 8px 22px; text-decoration: none; color: #15181A; border-top: 1px solid #F0F2F1">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="width: 8px; height: 8px; border-radius: 2px; background: {{p.color}}"></span>
+<span style="font-weight: 500">{{p.name}}</span>
+<sc-if value="{{p.needs}}" hint-placeholder-val="{{ true }}"><span style="margin-left: auto; color: #B42318; display: flex; align-items: center; gap: 2px; font-size: 12px; font-weight: 600"><svg class="ic" viewBox="0 0 24 24" style="width: 13px; height: 13px"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5"></path><path d="M12 16h.01"></path></svg>{{p.needs}}</span></sc-if>
+</div>
+<div style="display: flex; align-items: center; gap: 4px; font-size: 12px; color: #5F676D; margin: 3px 0 5px 16px">
+<svg class="ic" viewBox="0 0 24 24" style="width: 12px; height: 12px"><path d="M5 21V4"></path><path d="M5 4h11l-2 4 2 4H5"></path></svg>{{p.ms}}</div>
+<div style="display: flex; align-items: center; gap: 12px; font-size: 12px; color: #5F676D; margin-left: 16px; font-family: 'IBM Plex Mono', monospace">
+<span title="Sessions running" style="display: flex; align-items: center; gap: 3px"><svg class="ic" viewBox="0 0 24 24" style="width: 13px; height: 13px"><circle cx="12" cy="12" r="9"></circle><path d="M10 8l6 4-6 4z"></path></svg>{{p.run}}</span>
+<span title="Open PRs" style="display: flex; align-items: center; gap: 3px"><svg class="ic" viewBox="0 0 24 24" style="width: 13px; height: 13px"><circle cx="6" cy="6" r="2"></circle><circle cx="6" cy="18" r="2"></circle><circle cx="18" cy="18" r="2"></circle><path d="M6 8v8"></path><path d="M18 16V9a3 3 0 0 0-3-3h-4"></path></svg>{{p.prs}}</span>
+<span title="CI" style="display: flex; align-items: center; color: {{p.ciColor}}"><svg class="ic" viewBox="0 0 24 24" style="width: 13px; height: 13px"><rect x="4" y="4" width="16" height="16" rx="3"></rect><path d="{{p.ciPath}}"></path></svg></span>
+<span title="Babysitter heartbeat" style="display: flex; align-items: center; color: {{p.hbColor}}"><svg class="ic" viewBox="0 0 24 24" style="width: 13px; height: 13px"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg></span>
+<span title="Milestone progress" style="margin-left: auto; width: 44px; height: 4px; border-radius: 2px; background: #E1E4E3; overflow: hidden"><span style="display: block; height: 4px; width: {{p.pct}}; background: {{p.color}}"></span></span>
+</div>
+</a>
+</sc-for>
+</nav>
+
+<section aria-label="Inbox" style="flex: 1 1 340px; max-width: 400px; min-width: 300px; border-right: 1px solid #E1E4E3; background: #FAFBFA">
+<div style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid #E1E4E3">
+<b style="font-weight: 600">Needs you</b><span style="color: #5F676D; font-size: 13px">{{remaining}} left</span>
+<span style="margin-left: auto; font-size: 12px; color: #5F676D">Oldest first</span>
+</div>
+<sc-for list="{{items}}" as="it" hint-placeholder-count="7">
+<button type="button" onClick="{{it.pick}}" style="display: flex; gap: 10px; width: 100%; text-align: left; padding: 11px 16px; border: 0; border-bottom: 1px solid #E9ECEB; background: {{it.bg}}; font: inherit; color: {{it.fg}}; cursor: pointer; box-shadow: {{it.ring}}">
+<span style="color: {{it.kc}}; padding-top: 2px"><svg class="ic" viewBox="0 0 24 24"><path d="{{it.icon}}"></path></svg></span>
+<span style="flex: 1; min-width: 0">
+<span style="display: flex; gap: 6px; align-items: center; font-size: 12px; color: #5F676D"><span style="width: 7px; height: 7px; border-radius: 2px; background: {{it.pc}}"></span>{{it.project}} · {{it.kind}}<span style="margin-left: auto; font-family: 'IBM Plex Mono', monospace">{{it.age}}</span></span>
+<span style="display: block; font-weight: 500; margin-top: 2px">{{it.title}}</span>
+</span>
+</button>
+</sc-for>
+<sc-if value="{{allDone}}" hint-placeholder-val="{{ false }}"><div style="padding: 40px 16px; text-align: center; color: #5F676D">Inbox zero. Everything is moving.</div></sc-if>
+</section>
+
+<main style="flex: 999 1 520px; min-width: 0; background: #FFFFFF; padding: 20px 28px 32px">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #5F676D">
+<span style="width: 8px; height: 8px; border-radius: 2px; background: {{cur.pc}}"></span>{{cur.project}}<span>·</span><span style="color: {{cur.kc}}; font-weight: 600">{{cur.kind}}</span><span>·</span>{{cur.source}}
+<span style="margin-left: auto; display: flex; gap: 6px">
+<button type="button" onClick="{{snooze}}" style="font: inherit; font-size: 13px; padding: 6px 12px; min-height: 36px; border: 1px solid #D5DAD8; border-radius: 8px; background: #FFFFFF; color: #15181A">Snooze</button>
+<button type="button" onClick="{{done}}" style="font: inherit; font-size: 13px; padding: 6px 12px; min-height: 36px; border: 1px solid #15181A; border-radius: 8px; background: #15181A; color: #FFFFFF">{{cur.doneLabel}} → next</button>
+</span>
+</div>
+<h1 style="font-size: 22px; font-weight: 600; margin: 10px 0 14px">{{cur.title}}</h1>
+
+<div style="background: #F3F7F6; border: 1px solid #DCE8E5; border-radius: 10px; padding: 12px 14px; max-width: 760px">
+<div style="font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #0A4F48; font-weight: 600; margin-bottom: 4px">Brief</div>
+<div style="white-space: pre-line">{{cur.brief}}</div>
+</div>
+
+<sc-if value="{{cur.isRequest}}" hint-placeholder-val="{{ true }}">
+<div style="max-width: 760px; margin-top: 18px">
+<div style="font-weight: 600; margin-bottom: 8px">Run the migration against prod D1 now?</div>
+<label style="display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 2px solid #0F6B62; border-radius: 8px; margin-bottom: 6px; background: #F3F7F6"><input type="radio" name="q1" checked="checked"> Back up first, then run <span style="margin-left: auto; font-size: 11px; color: #0A4F48; font-weight: 600">RECOMMENDED</span></label>
+<label style="display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid #D5DAD8; border-radius: 8px; margin-bottom: 6px"><input type="radio" name="q1"> Run without a backup</label>
+<label style="display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid #D5DAD8; border-radius: 8px"><input type="radio" name="q1"> Stop, I'll look at it myself</label>
+<div style="font-weight: 600; margin: 16px 0 8px">You need to do this in a terminal first</div>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; background: #15181A; color: #E8ECEA; border-radius: 8px; padding: 10px 12px">wrangler login</div>
+<label style="display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 13px"><input type="checkbox"> Done</label>
+<div style="display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap">
+<button type="button" onClick="{{done}}" style="font: inherit; padding: 8px 16px; min-height: 44px; border: 0; border-radius: 8px; background: #0F6B62; color: #FFFFFF; font-weight: 600">Send to session</button>
+<a href="#" style="display: inline-flex; align-items: center; padding: 8px 14px; min-height: 44px; box-sizing: border-box; border: 1px solid #D5DAD8; border-radius: 8px; text-decoration: none; color: #15181A">Open session</a>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{cur.isCI}}" hint-placeholder-val="{{ false }}">
+<div style="max-width: 760px; margin-top: 18px">
+<div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px"><span style="font-size: 12px; padding: 3px 8px; border-radius: 6px; background: #E7F4EC; color: #17803D">✓ lint</span><span style="font-size: 12px; padding: 3px 8px; border-radius: 6px; background: #FBEAE8; color: #B42318">✕ typecheck</span><span style="font-size: 12px; padding: 3px 8px; border-radius: 6px; background: #E7F4EC; color: #17803D">✓ test</span></div>
+<div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; background: #15181A; color: #E8ECEA; border-radius: 8px; padding: 12px; white-space: pre-line">src/server/hub.ts(236,9): error TS2339:
+Property 'lease' does not exist on type 'Watcher'.</div>
+<div style="display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap">
+<button type="button" onClick="{{done}}" style="font: inherit; padding: 8px 16px; min-height: 44px; border: 0; border-radius: 8px; background: #0F6B62; color: #FFFFFF; font-weight: 600">Send failure to its session</button>
+<a href="#" style="display: inline-flex; align-items: center; padding: 8px 14px; min-height: 44px; box-sizing: border-box; border: 1px solid #D5DAD8; border-radius: 8px; text-decoration: none; color: #15181A">Open PR 14</a>
+</div></div>
+</sc-if>
+
+<sc-if value="{{cur.isFollow}}" hint-placeholder-val="{{ false }}">
+<div style="max-width: 760px; margin-top: 18px">
+<sc-for list="{{follows}}" as="f" hint-placeholder-count="3">
+<div style="display: flex; gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid #E9ECEB; flex-wrap: wrap">
+<span style="flex: 1 1 240px">{{f}}</span>
+<button type="button" style="font: inherit; font-size: 13px; padding: 4px 10px; min-height: 36px; border: 1px solid #D5DAD8; border-radius: 8px; background: #FFFFFF">To backlog</button>
+<button type="button" style="font: inherit; font-size: 13px; padding: 4px 10px; min-height: 36px; border: 1px solid #D5DAD8; border-radius: 8px; background: #FFFFFF">Start session</button>
+<button type="button" aria-label="Dismiss" style="font: inherit; font-size: 13px; padding: 4px 10px; min-height: 36px; border: 1px solid #D5DAD8; border-radius: 8px; background: #FFFFFF">✕</button>
+</div>
+</sc-for></div>
+</sc-if>
+
+<sc-if value="{{cur.isAuto}}" hint-placeholder-val="{{ false }}">
+<div style="max-width: 760px; margin-top: 18px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+<div style="border: 1px solid #E1E4E3; border-radius: 8px; padding: 10px"><div style="font-size: 12px; color: #5F676D">Expected</div><div style="font-weight: 600">every 5 min</div></div>
+<div style="border: 1px solid #E1E4E3; border-radius: 8px; padding: 10px"><div style="font-size: 12px; color: #5F676D">Last heartbeat</div><div style="font-weight: 600; color: #B42318">22 min ago</div></div>
+<div style="border: 1px solid #E1E4E3; border-radius: 8px; padding: 10px"><div style="font-size: 12px; color: #5F676D">Machine</div><div style="font-weight: 600">tim-mbp · alive</div></div>
+</div>
+</sc-if>
+
+<sc-if value="{{cur.isReady}}" hint-placeholder-val="{{ false }}">
+<div style="max-width: 760px; margin-top: 18px">
+<div style="display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid #E9ECEB"><span style="color: #17803D">✓</span><span style="flex: 1"><b style="font-weight: 500">#16 Push notifications for requests</b><br><span style="font-size: 12px; color: #5F676D">+412 −38 · babysitter: queued</span></span><a href="#">Diff</a></div>
+<div style="display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid #E9ECEB"><span style="color: #17803D">✓</span><span style="flex: 1"><b style="font-weight: 500">#15 Origin checks on browser writes</b><br><span style="font-size: 12px; color: #5F676D">+95 −7 · babysitter: merging…</span></span><a href="#">Diff</a></div>
+</div>
+</sc-if>
+
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { sel: 0, cleared: [] }; }
+  renderVals() {
+    const ICON = {
+      req: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8v5M12 16h.01',
+      ci: 'M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM9 9l6 6M15 9l-6 6',
+      fu: 'M5 5v7a3 3 0 0 0 3 3h11M15 11l4 4-4 4',
+      hb: 'M3 12h4l3-7 4 14 3-7h4',
+      pr: 'M6 4a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM6 8v8M6 16a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 16a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 16V9a3 3 0 0 0-3-3h-4'
+    };
+    const all = [
+      { project: 'FrockBot', pc: '#6D28D9', kind: 'Needs input', k: 'req', kc: '#B42318', age: '4m', source: 'session "D1 migration" · desktop · tim-mbp', title: 'Migration needs a decision before it touches prod', brief: 'Adding the bookings.status column. The migration is written and tested locally.\nBlocked: it has to run against prod D1, and there is no backup from today.\nIt needs one choice from you, plus a wrangler login it can’t do itself.', doneLabel: 'Send' },
+      { project: 'Interviewer', pc: '#0F6B62', kind: 'CI failed', k: 'ci', kc: '#B42318', age: '11m', source: 'PR 14 · from session "Fix watcher lease"', title: 'typecheck failing on Watcher lease takeover', brief: 'One check failed after the last push. The session that opened the PR is idle, so sending the failure back will wake it.', doneLabel: 'Send' },
+      { project: 'Ghetto Movement', pc: '#C2410C', kind: 'Automation down', k: 'hb', kc: '#A15C07', age: '22m', source: 'automation "babysitter" · /loop /babysitter', title: 'Babysitter missed 4 check-ins', brief: 'The machine is still sending heartbeats, so the loop itself has stopped. 5 PRs are waiting on it.', doneLabel: 'Acknowledge' },
+      { project: 'FrockBot', pc: '#6D28D9', kind: '3 follow-ups', k: 'fu', kc: '#1D4ED8', age: '1h', source: 'session "Booking flow refactor" · done', title: 'Follow-ups from the booking flow refactor', brief: 'The session finished and merged PR 41. It left three things it didn’t do.', doneLabel: 'Done' },
+      { project: 'Interviewer', pc: '#0F6B62', kind: '2 PRs ready', k: 'pr', kc: '#17803D', age: '1h', source: 'GitHub: mergeable, green, reviews met', title: 'Two PRs ready to merge', brief: 'Both are green and approved. The babysitter has one queued and is merging the other.', doneLabel: 'Seen' },
+      { project: 'PocketDoc', pc: '#1D4ED8', kind: 'Needs input', k: 'req', kc: '#B42318', age: '2h', source: 'session "Intake form" · cloud', title: 'Which fields are required on intake?', brief: 'Building the intake form. The spec doesn’t say which fields are mandatory.', doneLabel: 'Send' },
+      { project: 'What’s On', pc: '#047857', kind: 'CI failed', k: 'ci', kc: '#B42318', age: '3h', source: 'main · nightly scrape', title: 'Nightly scrape job failing', brief: 'The scraper for one venue started returning 403s at 02:10.', doneLabel: 'Send' }
+    ];
+    const left = all.map((x, i) => ({ ...x, i })).filter((x) => !this.state.cleared.includes(x.i));
+    const selIdx = left.findIndex((x) => x.i === this.state.sel);
+    const cur0 = selIdx >= 0 ? left[selIdx] : left[0];
+    const next = () => {
+      if (!cur0) return;
+      const cleared = [...this.state.cleared, cur0.i];
+      const rest = left.filter((x) => x.i !== cur0.i);
+      this.setState({ cleared, sel: rest.length ? rest[0].i : -1 });
+    };
+    const snooze = () => {
+      if (!cur0 || left.length < 2) return;
+      const pos = left.findIndex((x) => x.i === cur0.i);
+      this.setState({ sel: left[(pos + 1) % left.length].i });
+    };
+    const blank = { project: '', pc: '#E1E4E3', kind: '', kc: '#5F676D', source: '', title: 'Nothing needs you', brief: 'Every project is moving.', doneLabel: 'Done' };
+    const c = cur0 || blank;
+    const cur = { ...c, isRequest: c.k === 'req', isCI: c.k === 'ci', isFollow: c.k === 'fu', isAuto: c.k === 'hb', isReady: c.k === 'pr' };
+    const items = left.map((x) => {
+      const on = cur0 && x.i === cur0.i;
+      return { ...x, icon: ICON[x.k], bg: on ? '#FFFFFF' : 'transparent', fg: '#15181A', ring: on ? 'inset 3px 0 0 #0F6B62' : 'none', pick: () => this.setState({ sel: x.i }) };
+    });
+    const projects = [
+      { name: 'Interviewer', color: '#0F6B62', ms: 'M2 · Hosted workbench', needs: 1, run: 3, prs: 4, ciColor: '#B42318', ciPath: 'M9 9l6 6M15 9l-6 6', hbColor: '#17803D', pct: '45%' },
+      { name: 'FrockBot', color: '#6D28D9', ms: 'Cycle 12 · Booking v2', needs: 2, run: 4, prs: 2, ciColor: '#17803D', ciPath: 'M8 12l3 3 5-6', hbColor: '#17803D', pct: '70%' },
+      { name: 'Ghetto Movement', color: '#C2410C', ms: 'Exercise library launch', needs: 1, run: 1, prs: 5, ciColor: '#17803D', ciPath: 'M8 12l3 3 5-6', hbColor: '#B42318', pct: '20%' },
+      { name: 'PocketDoc', color: '#1D4ED8', ms: 'Intake MVP', needs: 1, run: 1, prs: 1, ciColor: '#17803D', ciPath: 'M8 12l3 3 5-6', hbColor: '#9AA2A6', pct: '35%' },
+      { name: 'What’s On', color: '#047857', ms: 'No milestone', needs: 1, run: 0, prs: 0, ciColor: '#B42318', ciPath: 'M9 9l6 6M15 9l-6 6', hbColor: '#9AA2A6', pct: '0%' },
+      { name: 'Jev', color: '#9F1239', ms: 'System One alpha', needs: 0, run: 0, prs: 1, ciColor: '#17803D', ciPath: 'M8 12l3 3 5-6', hbColor: '#9AA2A6', pct: '60%' }
+    ];
+    return {
+      projects, items, cur, remaining: left.length, allDone: left.length === 0,
+      follows: ['Add rate limiting to POST /bookings', 'Rename bookings.state to bookings.status everywhere', 'Document the new booking states in CONTEXT.md'],
+      done: next, snooze
+    };
+  }
+}
+</script>
+</body>
+</html>

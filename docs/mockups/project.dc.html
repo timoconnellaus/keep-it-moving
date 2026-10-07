@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Project: Interviewer</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F4}
+a{color:#0F6B62}a:hover{color:#0A4F48}
+.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+</style>
+</helmet>
+<div style="font-family: 'IBM Plex Sans', system-ui, sans-serif; color: #15181A; font-size: 14px; line-height: 1.4; min-height: 1000px; display: flex; flex-direction: column">
+
+<header style="display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: #15181A; color: #FFFFFF">
+<svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>
+<b style="font-weight: 600">Workbench</b>
+<span style="color: #B9C0C4; font-size: 13px">6 projects · 9 sessions · 2 machines</span>
+<span style="margin-left: auto; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #B9C0C4; border: 1px solid #3A4146; border-radius: 6px; padding: 2px 8px">⌘K</span>
+</header>
+
+<div style="display: flex; flex-wrap: wrap; flex: 1; align-items: stretch">
+
+<nav aria-label="Projects" style="flex: 1 1 260px; max-width: 300px; min-width: 240px; background: #FFFFFF; border-right: 1px solid #E1E4E3; padding: 8px 0">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 8px; padding: 9px 14px; margin: 0 8px 8px; border-radius: 8px; color: #15181A; text-decoration: none; font-weight: 500">
+<svg class="ic" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg>
+Inbox<span style="margin-left: auto; background: #0F6B62; color: #FFFFFF; border-radius: 10px; padding: 0 8px; font-size: 12px">7</span></a>
+<div style="padding: 6px 22px 4px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #5F676D">Projects</div>
+<sc-for list="{{projects}}" as="p" hint-placeholder-count="6">
+<a href="Project.dc.html" style="display: block; padding: 8px 22px; text-decoration: none; color: #15181A; border-top: 1px solid #F0F2F1; background: {{p.bg}}; box-shadow: {{p.ring}}">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="width: 8px; height: 8px; border-radius: 2px; background: {{p.color}}"></span>
+<span style="font-weight: 500">{{p.name}}</span>
+<sc-if value="{{p.needs}}" hint-placeholder-val="{{ true }}"><span style="margin-left: auto; color: #B42318; font-size: 12px; font-weight: 600">● {{p.needs}}</span></sc-if>
+</div>
+<div style="font-size: 12px; color: #5F676D; margin: 3px 0 0 16px">{{p.ms}}</div>
+</a>
+</sc-for>
+</nav>
+
+<main style="flex: 999 1 640px; min-width: 0; padding: 18px 24px 32px">
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<span style="width: 12px; height: 12px; border-radius: 3px; background: #0F6B62"></span>
+<h1 style="font-size: 22px; font-weight: 600; margin: 0">Interviewer</h1>
+<span style="font-size: 12px; color: #5F676D; border: 1px solid #D5DAD8; border-radius: 6px; padding: 2px 8px">tim/interviewer</span>
+<span style="font-size: 12px; color: #5F676D; border: 1px solid #D5DAD8; border-radius: 6px; padding: 2px 8px">Backlog: GitHub Issues · synced 3m ago</span>
+<a href="#" style="margin-left: auto; font-size: 13px">Project settings</a>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 16px">
+
+<section style="background: #FFFFFF; border: 1px solid #E1E4E3; border-radius: 10px; padding: 14px 16px; grid-column: 1 / -1">
+<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+<svg class="ic" viewBox="0 0 24 24" style="color: #0F6B62"><path d="M5 21V4"></path><path d="M5 4h11l-2 4 2 4H5"></path></svg>
+<b style="font-size: 16px; font-weight: 600">M2 · Hosted workbench</b>
+<span style="font-size: 13px; color: #5F676D">GitHub milestone · due 24 Oct · 5 of 11 done · 3 in progress</span>
+</div>
+<div style="height: 6px; background: #E1E4E3; border-radius: 3px; overflow: hidden; margin: 10px 0 12px"><div style="height: 6px; width: 45%; background: #0F6B62"></div></div>
+<div style="background: #F3F7F6; border: 1px solid #DCE8E5; border-radius: 8px; padding: 10px 12px">
+<b style="font-weight: 600">Where it's up to.</b> Sessions report in and requests reach the inbox. Push for requests is ready to merge (PR 16). Backlog sync hasn't started. PR 14's watcher-lease fix is failing typecheck, and that is what makes <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">wait</span> unreliable.
+<div style="font-size: 12px; color: #5F676D; margin-top: 6px">Written by the Worker from 3 sessions, 4 PRs and 11 backlog items · 6 min ago</div>
+</div>
+</section>
+
+<section style="background: #FFFFFF; border: 1px solid #E1E4E3; border-radius: 10px; padding: 14px 16px">
+<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px"><b style="font-weight: 600">Sessions</b><span style="font-size: 12px; color: #5F676D">3 active · 5 done today</span></div>
+<sc-for list="{{sessions}}" as="s" hint-placeholder-count="4">
+<div style="display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid #EEF0EF">
+<span style="color: {{s.c}}; padding-top: 2px"><svg class="ic" viewBox="0 0 24 24"><path d="{{s.icon}}"></path></svg></span>
+<span style="flex: 1; min-width: 0"><span style="font-weight: 500">{{s.title}}</span><br><span style="font-size: 12px; color: #5F676D">{{s.meta}}</span></span>
+<span style="font-size: 12px; color: #5F676D; font-family: 'IBM Plex Mono', monospace">{{s.age}}</span>
+</div>
+</sc-for>
+</section>
+
+<section style="background: #FFFFFF; border: 1px solid #E1E4E3; border-radius: 10px; padding: 14px 16px">
+<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px"><b style="font-weight: 600">Pull requests</b><span style="font-size: 12px; color: #5F676D">2 ready to merge</span></div>
+<sc-for list="{{prs}}" as="r" hint-placeholder-count="4">
+<div style="display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid #EEF0EF">
+<span style="color: {{r.c}}; padding-top: 2px"><svg class="ic" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"></circle><circle cx="6" cy="18" r="2"></circle><circle cx="18" cy="18" r="2"></circle><path d="M6 8v8"></path><path d="M18 16V9a3 3 0 0 0-3-3h-4"></path></svg></span>
+<span style="flex: 1; min-width: 0"><span style="font-weight: 500">{{r.title}}</span><br><span style="font-size: 12px; color: #5F676D">{{r.meta}}</span></span>
+<span style="font-size: 12px; color: {{r.c}}; font-weight: 600; white-space: nowrap">{{r.state}}</span>
+</div>
+</sc-for>
+</section>
+
+<section style="background: #FFFFFF; border: 1px solid #E1E4E3; border-radius: 10px; padding: 14px 16px">
+<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px"><b style="font-weight: 600">Up next</b><span style="font-size: 12px; color: #5F676D">backlog, in milestone order</span><a href="#" style="margin-left: auto; font-size: 12px">Sync now</a></div>
+<sc-for list="{{backlog}}" as="b" hint-placeholder-count="5">
+<div style="display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid #EEF0EF; align-items: center">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #5F676D; width: 28px">{{b.n}}</span>
+<span style="flex: 1">{{b.t}}</span>
+<span style="font-size: 12px; color: {{b.c}}">{{b.s}}</span>
+</div>
+</sc-for>
+</section>
+
+<section style="background: #FFFFFF; border: 1px solid #E1E4E3; border-radius: 10px; padding: 14px 16px">
+<b style="font-weight: 600">Automations &amp; machines</b>
+<div style="display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid #EEF0EF; margin-top: 6px; align-items: center"><span style="color: #17803D"><svg class="ic" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg></span><span style="flex: 1">Babysitter <span style="font-size: 12px; color: #5F676D">· /loop /babysitter · every 5m</span></span><span style="font-size: 12px; color: #17803D">2m ago</span></div>
+<div style="display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid #EEF0EF; align-items: center"><span style="color: #17803D"><svg class="ic" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg></span><span style="flex: 1">Nightly deps check <span style="font-size: 12px; color: #5F676D">· daily 03:00</span></span><span style="font-size: 12px; color: #17803D">ran 03:00</span></div>
+<div style="display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid #EEF0EF; align-items: center"><span style="color: #17803D"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8"></path></svg></span><span style="flex: 1">tim-mbp</span><span style="font-size: 12px; color: #17803D">30s ago</span></div>
+</section>
+
+</div>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const RUN = 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM10 8l6 4-6 4z';
+    const NEED = 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8v5M12 16h.01';
+    const DONE = 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM8 12l3 3 5-6';
+    const names = [['Interviewer', '#0F6B62', 'M2 · Hosted workbench', 1], ['FrockBot', '#6D28D9', 'Cycle 12 · Booking v2', 2], ['Ghetto Movement', '#C2410C', 'Exercise library launch', 1], ['PocketDoc', '#1D4ED8', 'Intake MVP', 1], ['What’s On', '#047857', 'No milestone', 1], ['Jev', '#9F1239', 'System One alpha', 0]];
+    return {
+      projects: names.map(([name, color, ms, needs], i) => ({ name, color, ms, needs, bg: i === 0 ? '#F3F7F6' : 'transparent', ring: i === 0 ? 'inset 3px 0 0 #0F6B62' : 'none' })),
+      sessions: [
+        { icon: NEED, c: '#B42318', title: 'Fix watcher lease', meta: 'Needs input · CLI · tim-mbp · PR 14', age: '4m' },
+        { icon: RUN, c: '#1D4ED8', title: 'Project model + backlog sync', meta: 'Desktop · tim-mbp · backlog #7', age: '22m' },
+        { icon: RUN, c: '#1D4ED8', title: 'PR diff view', meta: 'Cloud · backlog #10', age: '9m' },
+        { icon: DONE, c: '#17803D', title: 'Push notifications for requests', meta: 'Done · opened PR 16 · 2 follow-ups', age: '1h' }
+      ],
+      prs: [
+        { c: '#17803D', title: '#16 Push notifications for requests', meta: '+412 −38 · session "Push notifications" · #5', state: 'Ready · queued' },
+        { c: '#17803D', title: '#15 Origin checks on browser writes', meta: '+95 −7 · #9', state: 'Merging…' },
+        { c: '#B42318', title: '#14 Watcher lease takeover', meta: 'typecheck failing · session "Fix watcher lease"', state: 'CI failed' },
+        { c: '#5F676D', title: '#17 Project model', meta: '+880 −120 · draft', state: 'Draft' }
+      ],
+      backlog: [
+        { n: '#7', t: 'Project model + sync scripts', s: 'In progress', c: '#1D4ED8' },
+        { n: '#10', t: 'PR diff view', s: 'In progress', c: '#1D4ED8' },
+        { n: '#8', t: 'Automations + heartbeat', s: 'Todo', c: '#5F676D' },
+        { n: '#12', t: 'Follow-up triage', s: 'Todo', c: '#5F676D' },
+        { n: '#11', t: 'Rename to Workbench', s: 'Todo', c: '#5F676D' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
