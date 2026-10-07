@@ -748,21 +748,52 @@ function batchSummary(session: SessionView, events: InterviewEvent[]) {
   };
 }
 
-/** Routes an agent key may not call: deleting, reconfiguring, keys. */
-const KEY_DENIED: Array<[method: string, path: RegExp]> = [
-  ["DELETE", /^\/api\/sessions\/[^/]+$/],
-  ["POST", /^\/api\/sessions\/projects\/update$/],
-  ["DELETE", /^\/api\/sessions\/kim\/automations\//],
-  ["POST", /^\/api\/sessions\/kim\/backlog\/settings$/],
-  ["*", /^\/api\/sessions\/kim\/keys(\/|$)/],
+/** One path segment: an interview, question or artifact id. */
+const ID = "[^/]+";
+
+/**
+ * The routes an agent key may call; anything else, including routes added
+ * later, is refused. A key reports, raises and edits requests, waits on
+ * them, beats, and syncs and reads the backlog. Answering, deleting
+ * interviews, reconfiguring projects and backlogs, and keys stay with a
+ * signed-in CLI.
+ */
+const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
+  ["GET", /^\/api\/sessions(\/projects)?$/],
+  ["GET", new RegExp(`^/api/sessions/${ID}(/(attach|wait|events/next))?$`)],
+  ["POST", /^\/api\/sessions$/],
+  [
+    "POST",
+    new RegExp(
+      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility)$`,
+    ),
+  ],
+  ["PATCH", new RegExp(`^/api/sessions/${ID}/(questions|artifacts)/${ID}$`)],
+  ["DELETE", new RegExp(`^/api/sessions/${ID}/(questions|artifacts)/${ID}$`)],
+  [
+    "GET",
+    new RegExp(
+      `^/api/sessions/kim/(inbox|automations|machines|prs|backlog|sessions/${ID})$`,
+    ),
+  ],
+  [
+    "POST",
+    /^\/api\/sessions\/kim\/(report|machines\/beat|heartbeat|followups|backlog\/(sync|items|error))$/,
+  ],
 ];
 
 /** Whether a request authenticated by an agent key may go through. */
 export function keyMayCall(method: string, path: string): boolean {
-  const clean = path.replace(/\/+$/, "");
-  return !KEY_DENIED.some(
-    ([deniedMethod, pattern]) =>
-      (deniedMethod === "*" || deniedMethod === method.toUpperCase()) &&
-      pattern.test(clean),
+  const upper = method.toUpperCase();
+  // The kim routes are fixed paths: never let them fall through to /:id.
+  if (/^\/api\/sessions\/kim(\/|$)/.test(path))
+    return KEY_ALLOWED.some(
+      ([allowed, pattern]) =>
+        allowed === upper &&
+        pattern.source.includes("kim") &&
+        pattern.test(path),
+    );
+  return KEY_ALLOWED.some(
+    ([allowed, pattern]) => allowed === upper && pattern.test(path),
   );
 }

@@ -107,6 +107,19 @@ describe("what a key may do", () => {
         "/api/sessions/kim/backlog/settings",
         { project: "github.com/o/r", script: "x" },
       ],
+      // Answers are Tim's; milestones are configuration; new routes are out
+      // until they're allowed.
+      [
+        "POST",
+        `/api/sessions/${session.id}/questions/q1/answer`,
+        { answer: "x" },
+      ],
+      [
+        "POST",
+        "/api/sessions/kim/backlog/milestones",
+        { project: "p", name: "m" },
+      ],
+      ["POST", "/api/sessions/kim/something-new", {}],
     ] as const)
       expect(
         (await asKey(method, url, payload)).statusCode,
@@ -145,5 +158,38 @@ describe("what a key may do", () => {
     ).json().revoked;
     expect(revoked).toHaveLength(2);
     expect((await verify(first.key)).ok).toBe(false);
+  });
+
+  it("lets a key do what a cloud session needs", async () => {
+    const { app } = harness();
+    const asKey = (method: "GET" | "POST", url: string, payload?: unknown) =>
+      app.inject({
+        method,
+        url,
+        headers: { [VIA_KEY_HEADER]: "1" },
+        ...(payload === undefined ? {} : { payload }),
+      });
+    const session = (await asKey("POST", "/api/sessions", {})).json();
+    for (const [method, url, payload] of [
+      ["POST", `/api/sessions/${session.id}/questions`, { prompt: "Which?" }],
+      ["POST", `/api/sessions/${session.id}/stop`, {}],
+      ["GET", `/api/sessions/${session.id}`],
+      ["GET", "/api/sessions/kim/inbox"],
+      ["GET", "/api/sessions/kim/backlog?project=github.com/o/r"],
+      [
+        "POST",
+        "/api/sessions/kim/heartbeat",
+        { project: "github.com/o/r", name: "loop", every: 300 },
+      ],
+      [
+        "POST",
+        "/api/sessions/kim/followups",
+        { projectKey: "github.com/o/r", items: ["Later"] },
+      ],
+    ] as const)
+      expect(
+        (await asKey(method, url, payload)).statusCode,
+        `${method} ${url}`,
+      ).toBe(200);
   });
 });
