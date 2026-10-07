@@ -1,5 +1,7 @@
 import type { ComponentType } from "react";
 import type { InboxItem, InboxKind } from "../../shared/inbox.js";
+import { AutomationDown } from "./automations/AutomationDown.js";
+import { AutomationsSection } from "./automations/AutomationsSection.js";
 
 /** A section of the project page, in order. Each feature adds its own. */
 export interface ProjectSection {
@@ -17,9 +19,18 @@ export type InboxDetail = ComponentType<{
   done: () => void;
 }>;
 
-export const projectSections: ProjectSection[] = [];
+export const projectSections: ProjectSection[] = [
+  {
+    id: "automations",
+    title: "Automations & machines",
+    column: "side",
+    Component: AutomationsSection,
+  },
+];
 
-export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {};
+export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {
+  automation_down: AutomationDown,
+};
 
 /** Extra full pages under /p/<projectId>/…, matched in order. */
 export interface ProjectRoute {

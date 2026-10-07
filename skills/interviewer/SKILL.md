@@ -81,6 +81,10 @@ interviewer question focus <session-id> <question-id>
 interviewer question delete <session-id> <question-id>
 ```
 
+## Running a loop
+
+If you are running a recurring loop for a project (a `/loop`, such as `/loop /babysitter`), call `interviewer heartbeat <name> --every <interval> --quiet` once per iteration, with the loop's interval (for example `interviewer heartbeat babysitter --every 5m --command "/loop /babysitter" --status "merged #15; 2 queued" --quiet`). It registers the loop under the current repo's project and tells Tim's inbox it is still alive; if two check-ins are missed, he's told it stopped. `--status` is a one-line summary of what the iteration did. With `--quiet` it never fails or prints, so it can't break the loop.
+
 ## Finish
 
 Stop the interview when its decision frontier is empty:

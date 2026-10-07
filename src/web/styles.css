@@ -1268,3 +1268,138 @@ h1 {
     justify-content: center;
   }
 }
+
+/* Keep it moving: automations & machines */
+.kim-automations-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kim-automations-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+.kim-automations-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.kim-automations-alive {
+  color: #17803d;
+}
+.kim-automations-down,
+.kim-automations-down-text {
+  color: #b42318;
+}
+.kim-automations-unknown {
+  color: #8a948f;
+}
+.kim-automations-main {
+  flex: 1;
+  min-width: 0;
+}
+.kim-automations-name {
+  font-weight: 500;
+}
+.kim-automations-meta,
+.kim-automations-status,
+.kim-automations-age {
+  font-size: 12px;
+  color: var(--muted);
+}
+.kim-automations-status {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.kim-automations-age.kim-automations-alive {
+  color: #17803d;
+}
+.kim-automations-age.kim-automations-down {
+  color: #b42318;
+}
+.kim-automations-age {
+  white-space: nowrap;
+}
+.kim-automations-remove {
+  min-width: 32px;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+}
+.kim-automations-empty,
+.kim-automations-error {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.kim-automations-error {
+  color: #b42318;
+}
+/* The inbox detail: three tiles, then what to do. */
+.kim-automations-detail {
+  max-width: 760px;
+  margin-top: 18px;
+}
+.kim-automations-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.kim-automations-tile {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  min-width: 0;
+}
+.kim-automations-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.kim-automations-value {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.kim-automations-said {
+  margin: 12px 0 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.kim-automations-said span,
+.kim-automations-said code {
+  color: #18201c;
+}
+.kim-automations-said code,
+.kim-automations-empty code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.kim-automations-hint {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.kim-automations-button {
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+@media (max-width: 560px) {
+  .kim-automations-tiles {
+    grid-template-columns: 1fr;
+  }
+}

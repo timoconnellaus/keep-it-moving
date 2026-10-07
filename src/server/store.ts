@@ -222,6 +222,11 @@ export class InterviewStore {
     return id;
   }
 
+  /** The project with this normalised remote key, created if it's new. */
+  projectForKey(key: string): ProjectView {
+    return this.projectFor(this.resolveProject({ projectKey: key }))!;
+  }
+
   listProjects(): ProjectView[] {
     return this.sql
       .all("SELECT * FROM projects ORDER BY lower(name)")
