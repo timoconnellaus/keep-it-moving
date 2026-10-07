@@ -15,6 +15,7 @@ import {
   type QuestionView,
   type SessionView,
 } from "../shared/schema.js";
+import { projectName } from "../shared/remote.js";
 import { artifactFormat } from "../shared/workspace.js";
 import { first, type Row, type Sql } from "./sql.js";
 
@@ -38,16 +39,6 @@ export const PROJECT_COLORS = [
   "#8a6200",
   "#6b4a3a",
 ];
-
-/** "frockbot" → "Frockbot"; the user can rename it later. */
-function projectName(key: string): string {
-  const last = key.split(/[/:]/).filter(Boolean).at(-1) ?? key;
-  const words = last
-    .replace(/\.git$/, "")
-    .split(/[-_\s]+/)
-    .filter(Boolean);
-  return words.map((word) => word[0]!.toUpperCase() + word.slice(1)).join(" ");
-}
 
 /** Push services browsers subscribe through: Chrome/Android, Firefox, Edge, Safari. */
 const PUSH_SERVICES = [

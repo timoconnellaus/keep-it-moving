@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { InboxItem, ProjectStats } from "../../shared/inbox.js";
 import {
   agentSessionStatuses,
+  cloudSessionUrl,
+  REMOTE_SESSION_ID,
   type AgentSessionStatus,
   type AgentSessionView,
   type LinkedRequest,
@@ -13,7 +15,12 @@ import type { Feature, FeatureContext } from "./types.js";
 const text = (max: number) => z.string().trim().min(1).max(max);
 
 const ReportSchema = z.object({
-  id: text(200),
+  id: text(200).optional(),
+  remoteId: z
+    .string()
+    .trim()
+    .regex(REMOTE_SESSION_ID, "a cse_… remote session id")
+    .optional(),
   projectKey: text(300).optional(),
   title: text(200).optional(),
   defaultTitle: text(200).optional(),
@@ -39,6 +46,7 @@ const FIELDS = {
   cwd: "cwd",
   prUrl: "pr_url",
   brief: "brief",
+  remoteId: "remote_id",
 } as const;
 
 const HOUR = 3_600_000;
@@ -69,15 +77,74 @@ export function sessionsFeature(ctx: FeatureContext): Feature {
     );
     CREATE INDEX IF NOT EXISTS agent_sessions_project ON agent_sessions(project_id, updated_at);
   `);
+  // Added after the first deploy; adding a column that exists throws.
+  try {
+    sql.exec("ALTER TABLE agent_sessions ADD COLUMN remote_id TEXT");
+  } catch {
+    /* already there */
+  }
+  sql.exec(
+    "CREATE INDEX IF NOT EXISTS agent_sessions_remote ON agent_sessions(remote_id)",
+  );
+
+  /**
+   * The session a report is about. A cloud session's `report` and `ask`
+   * know only its remote id (CLAUDE_CODE_REMOTE_SESSION_ID), while its
+   * hooks report Claude Code's session id with the remote id beside it: the
+   * remote id finds that session, or stands in as the id until the hooks
+   * report.
+   */
+  const resolveId = (parsed: z.infer<typeof ReportSchema>): string => {
+    if (parsed.id) {
+      if (parsed.remoteId && parsed.remoteId !== parsed.id)
+        adoptStandIn(parsed.remoteId, parsed.id);
+      return parsed.id;
+    }
+    const remoteId = parsed.remoteId!;
+    const linked = first(
+      sql,
+      "SELECT id FROM agent_sessions WHERE remote_id = ? ORDER BY updated_at DESC LIMIT 1",
+      remoteId,
+    );
+    return linked ? String(linked.id) : remoteId;
+  };
+
+  /**
+   * A session first known by its remote id takes the hooks' id when they
+   * report, with its requests and follow-ups, so it stays one session.
+   */
+  const adoptStandIn = (remoteId: string, id: string) => {
+    if (!first(sql, "SELECT id FROM agent_sessions WHERE id = ?", remoteId))
+      return;
+    if (first(sql, "SELECT id FROM agent_sessions WHERE id = ?", id)) return;
+    sql.all("UPDATE agent_sessions SET id = ? WHERE id = ?", id, remoteId);
+    sql.all(
+      "UPDATE sessions SET agent_session_id = ? WHERE agent_session_id = ?",
+      id,
+      remoteId,
+    );
+    try {
+      sql.all(
+        "UPDATE follow_ups SET agent_session_id = ? WHERE agent_session_id = ?",
+        id,
+        remoteId,
+      );
+    } catch {
+      /* no backlog feature */
+    }
+  };
 
   /** Upserts a report; a status change restarts status_since. */
   const report = (input: unknown): AgentSessionView => {
-    const parsed = ReportSchema.parse(input);
+    const parsed = ReportSchema.refine((value) => value.id || value.remoteId, {
+      message: "A report needs an id or a remoteId",
+    }).parse(input);
+    const id = resolveId(parsed);
     const time = new Date().toISOString();
     const existing = first(
       sql,
       "SELECT * FROM agent_sessions WHERE id = ?",
-      parsed.id,
+      id,
     );
     const projectId = parsed.projectKey
       ? ctx.store.projectForKey(parsed.projectKey).id
@@ -96,15 +163,16 @@ export function sessionsFeature(ctx: FeatureContext): Feature {
       parsed[field] ?? optional(existing?.[FIELDS[field]]);
     sql.all(
       `INSERT INTO agent_sessions (id, project_id, title, status, agent, location, machine, branch,
-        worktree, cwd, pr_url, brief, message, started_at, updated_at, status_since, waiting_since)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        worktree, cwd, pr_url, brief, remote_id, message, started_at, updated_at, status_since,
+        waiting_since)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, title = excluded.title,
         status = excluded.status, agent = excluded.agent, location = excluded.location,
         machine = excluded.machine, branch = excluded.branch, worktree = excluded.worktree,
         cwd = excluded.cwd, pr_url = excluded.pr_url, brief = excluded.brief,
-        message = excluded.message, updated_at = excluded.updated_at,
+        remote_id = excluded.remote_id, message = excluded.message, updated_at = excluded.updated_at,
         status_since = excluded.status_since, waiting_since = excluded.waiting_since`,
-      parsed.id,
+      id,
       projectId,
       parsed.title ?? optional(existing?.title) ?? parsed.defaultTitle ?? null,
       status,
@@ -116,6 +184,7 @@ export function sessionsFeature(ctx: FeatureContext): Feature {
       keep("cwd"),
       keep("prUrl"),
       keep("brief"),
+      keep("remoteId") ?? (REMOTE_SESSION_ID.test(id) ? id : null),
       // A notification is stale once the status moves on.
       parsed.message ?? (changed ? null : optional(existing?.message)),
       existing ? String(existing.started_at) : time,
@@ -124,7 +193,7 @@ export function sessionsFeature(ctx: FeatureContext): Feature {
       waitingSince,
     );
     ctx.changed();
-    return get(parsed.id);
+    return get(id);
   };
 
   const requestsFor = (agentSessionId: string): LinkedRequest[] =>
@@ -158,6 +227,8 @@ export function sessionsFeature(ctx: FeatureContext): Feature {
     prUrl: optional(row.pr_url),
     brief: optional(row.brief),
     message: optional(row.message),
+    remoteId: optional(row.remote_id),
+    url: cloudSessionUrl(optional(row.remote_id)),
     startedAt: String(row.started_at),
     updatedAt: String(row.updated_at),
     statusSince: String(row.status_since),
@@ -274,6 +345,7 @@ export function sessionsFeature(ctx: FeatureContext): Feature {
           worktree: optional(row.worktree),
           agent: optional(row.agent),
           prUrl: optional(row.pr_url),
+          url: cloudSessionUrl(optional(row.remote_id)),
         },
       });
     }

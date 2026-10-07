@@ -44,6 +44,8 @@ The brief says what you were doing, what's blocked and what you need, in two or 
 
 `interviewer report --status … --brief … --pr <url> --follow-up "…"` reports progress explicitly; the hooks from `interviewer hooks install` already report the routine changes.
 
+In a claude.ai cloud session, `report` and `ask` work the same: they find your session from `CLAUDE_CODE_REMOTE_SESSION_ID`, and authenticate with the environment's `INTERVIEWER_TOKEN`. If `interviewer` isn't installed or the host is unreachable there, the environment isn't set up: tell the user to run `interviewer cloud setup` from the repo on their own machine, rather than trying to install or sign in yourself. Never print or commit `INTERVIEWER_TOKEN`. `interviewer hooks install --project` writes guarded hooks into the repo's `.claude/settings.json`, but only run it, and commit that file, when the user asks.
+
 ## Workspace: plan, diagrams, mockups
 
 An interview exists to produce a plan, so build the plan alongside it where the user can see it:

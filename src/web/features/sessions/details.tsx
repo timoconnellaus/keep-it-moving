@@ -86,6 +86,16 @@ export function NeedsYouDetail({ item }: { item: InboxItem }) {
             </div>
           ))}
       </dl>
+      {safeHref(data.url) && (
+        <a
+          className="kim-sessions-open"
+          href={safeHref(data.url)}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open session →
+        </a>
+      )}
       {safeHref(data.prUrl) && (
         <a
           className="kim-sessions-open"
