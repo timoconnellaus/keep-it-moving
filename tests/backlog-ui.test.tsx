@@ -85,6 +85,65 @@ describe("backlog sections", () => {
     );
   });
 
+  it("shows where it's up to from the latest summary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("/summary")
+          ? json({
+              summary: {
+                text: "Lease fix is in review; summaries are next.",
+                writtenBy: "cc-1",
+                writtenByTitle: "Fix watcher lease",
+                createdAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+                stale: false,
+              },
+            })
+          : json(view),
+      ),
+    );
+    render(<MilestoneSection projectId="p1" />);
+    expect(
+      await screen.findByText("Lease fix is in review; summaries are next."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('by session "Fix watcher lease" · 3h ago'),
+    ).toBeInTheDocument();
+  });
+
+  it("falls back to the latest session brief, and says so", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("/summary")
+          ? json({ summary: null })
+          : url.endsWith("/sessions")
+            ? json({
+                sessions: [
+                  {
+                    id: "cc-1",
+                    title: "Fix watcher lease",
+                    brief: "Lease fixed; PR open.",
+                    updatedAt: new Date(
+                      Date.now() - 2 * 3_600_000,
+                    ).toISOString(),
+                  },
+                ],
+              })
+            : json(view),
+      ),
+    );
+    render(<MilestoneSection projectId="p1" />);
+    expect(
+      await screen.findByText("Lease fixed; PR open."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'latest session brief · session "Fix watcher lease" · 2h ago',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("lists up next and shows the CLI command when a script source syncs", async () => {
     const fetch = vi.fn(async (url: string) =>
       url.endsWith("/sync")

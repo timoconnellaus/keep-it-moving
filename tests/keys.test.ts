@@ -186,6 +186,12 @@ describe("what a key may do", () => {
         "/api/sessions/kim/followups",
         { projectKey: "github.com/o/r", items: ["Later"] },
       ],
+      ["GET", "/api/sessions/kim/projects/context?project=github.com/o/r"],
+      [
+        "POST",
+        "/api/sessions/kim/projects/summary",
+        { project: "github.com/o/r", text: "Where it's up to." },
+      ],
     ] as const)
       expect(
         (await asKey(method, url, payload)).statusCode,

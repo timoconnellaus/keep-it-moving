@@ -54,6 +54,8 @@ const HOUR = 3_600_000;
 const DONE_SHOWN_MS = 24 * HOUR;
 /** A session that stopped reporting without a SessionEnd drops off after this. */
 const STALE_MS = 7 * 24 * HOUR;
+/** A project's summary context covers sessions active this recently. */
+const CONTEXT_MS = 7 * 24 * HOUR;
 
 const waiting = (status: unknown) =>
   status === "needs_you" || status === "idle";
@@ -366,8 +368,36 @@ export function sessionsFeature(ctx: FeatureContext): Feature {
         ]),
     );
 
+  /** The project's sessions from the last week, for its summary. */
+  const projectContext = (project: { id: string }) => ({
+    sessions: sql
+      .all(
+        "SELECT * FROM agent_sessions WHERE project_id = ? AND updated_at > ? ORDER BY updated_at DESC",
+        project.id,
+        ago(CONTEXT_MS),
+      )
+      .map(view)
+      .map((session) => ({
+        id: session.id,
+        title: session.title,
+        status: session.status,
+        brief: session.brief,
+        message: session.message,
+        branch: session.branch,
+        prUrl: session.prUrl,
+        location: session.location,
+        machine: session.machine,
+        updatedAt: session.updatedAt,
+        statusSince: session.statusSince,
+        openRequests: session.requests
+          .filter((request) => request.open > 0)
+          .map(({ title, open }) => ({ title, openQuestions: open })),
+      })),
+  });
+
   return {
     name: "sessions",
+    projectContext,
     agentRoutes(app) {
       app.post("/report", async (c) =>
         c.json(report(await c.req.json().catch(() => ({})))),

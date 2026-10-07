@@ -317,6 +317,43 @@ describe("report and ask", () => {
   });
 });
 
+describe("project summaries", () => {
+  it("prints the project's context and saves a summary from text or a file", async () => {
+    const { address } = await listeningHarness();
+    const run = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await exec(process.execPath, [tsx, cli, ...args], {
+            env: env(address, { CLAUDE_CODE_SESSION_ID: "cc-sum" }),
+            cwd: repo,
+          })
+        ).stdout,
+      );
+    await run("report", "--title", "Summaries", "--brief", "Routes done");
+    const saved = await run(
+      "project",
+      "summary",
+      "--text",
+      "Routes are in; the page is next.",
+    );
+    expect(saved.summary).toMatchObject({
+      text: "Routes are in; the page is next.",
+      writtenBy: "cc-sum",
+      writtenByTitle: "Summaries",
+    });
+    const file = join(tempDir(), "summary.md");
+    writeFileSync(file, "The page shows it now.\n");
+    await run("project", "summary", "--file", file);
+    const context = await run("project", "context");
+    expect(context.project.key).toBe(saved.project.key);
+    expect(context.sessions[0]).toMatchObject({
+      id: "cc-sum",
+      brief: "Routes done",
+    });
+    expect(context.previousSummary.text).toBe("The page shows it now.");
+  });
+});
+
 const cloud = {
   CLAUDE_CODE_REMOTE: "true",
   CLAUDE_CODE_REMOTE_SESSION_ID: "cse_01Cloud",

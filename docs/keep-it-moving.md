@@ -62,4 +62,4 @@ The binary stays `interviewer`, with a `kim` alias. The domain stays.
    - **PRs and CI:** the GitHub client, the PR list and status, ready-to-merge, the diff view, and CI and ready-PR inbox items.
    - **Automations and machines:** heartbeats, missed check-in detection (Durable Object alarm), and inbox items for automations that are down.
    - **Backlog, milestones and follow-ups:** GitHub Issues sync, per-project sync scripts, milestones, the up-next list and follow-up triage.
-3. **Polish:** a Worker-side Claude summary fallback, Codex and Pi hooks, and anything Tim asks for once he's using it.
+3. **Polish:** agent-written project summaries (`kim project context` and `kim project summary`; the server calls no model), Codex and Pi hooks, and anything Tim asks for once he's using it.

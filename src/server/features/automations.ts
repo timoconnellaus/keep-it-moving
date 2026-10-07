@@ -139,6 +139,26 @@ export function automations(ctx: FeatureContext): Feature {
   return {
     name: "automations",
 
+    /** Each automation's health: alive or down, and its machine. */
+    projectContext(project) {
+      const now = Date.now();
+      return {
+        automations: forProject(project.id).map((one) => {
+          const full = withMachine(one, now);
+          return {
+            name: full.name,
+            every: formatInterval(full.every),
+            down: full.downSince !== null,
+            downSince: full.downSince,
+            lastBeat: full.lastBeat,
+            lastStatus: full.lastStatus,
+            machine: full.machine,
+            machineAlive: full.machineAlive,
+          };
+        }),
+      };
+    },
+
     agentRoutes(app: Hono) {
       app.post("/heartbeat", async (c) => c.json(heartbeat(await body(c))));
       app.post("/machines/beat", async (c) => {

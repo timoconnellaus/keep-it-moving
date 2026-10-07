@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import type { MilestoneView } from "../../../shared/backlog.js";
 import type { AgentSessionView } from "../../../shared/sessions.js";
+import type { ProjectSummaryView } from "../../../shared/summaries.js";
 import { safeHref } from "../../../shared/url.js";
+import { useJson, useLive } from "../shell/live.js";
 import { ago, shortDate, useProjectBacklog } from "./api.js";
 
 /** The newest agent-session brief for a project: "where it's up to". */
@@ -35,17 +37,55 @@ export async function loadLatestBrief(
     : null;
 }
 
-function useLatestBrief(projectId: string, given?: LatestBrief | null) {
+/** What "Where it's up to" shows: a summary, or a session brief instead. */
+export interface UpTo extends LatestBrief {
+  /** A session brief standing in until an agent writes a summary. */
+  fallback: boolean;
+  stale: boolean;
+}
+
+/**
+ * The newest summary an agent wrote for the project, or failing that the
+ * newest session brief. Both refetch on the overview ping.
+ */
+function useUpTo(projectId: string, given?: LatestBrief | null): UpTo | null {
+  const live = useLive();
+  const { data, error } = useJson<{ summary?: ProjectSummaryView | null }>(
+    `/api/browser/kim/projects/${encodeURIComponent(projectId)}/summary`,
+  );
+  const summary = data?.summary?.text ? data.summary : null;
+  // Wait for the summary before falling back, so the brief doesn't flash.
+  const settled = data !== null || error !== "";
   const [brief, setBrief] = useState<LatestBrief | null>(given ?? null);
   useEffect(() => {
     if (given !== undefined) return setBrief(given);
-    let live = true;
-    void loadLatestBrief(projectId).then((found) => live && setBrief(found));
+    if (summary || !settled) return;
+    let current = true;
+    void loadLatestBrief(projectId).then((found) => current && setBrief(found));
     return () => {
-      live = false;
+      current = false;
     };
-  }, [projectId, given]);
-  return brief;
+  }, [projectId, given, summary, settled, live]);
+  if (summary)
+    return {
+      text: summary.text,
+      basedOn: summary.writtenByTitle
+        ? `by session "${summary.writtenByTitle}"`
+        : summary.writtenBy
+          ? `by session ${summary.writtenBy.slice(0, 8)}`
+          : "by an agent",
+      at: summary.createdAt,
+      fallback: false,
+      stale: summary.stale,
+    };
+  return brief
+    ? {
+        ...brief,
+        basedOn: `latest session brief · ${brief.basedOn}`,
+        fallback: true,
+        stale: false,
+      }
+    : null;
 }
 
 export function FlagIcon() {
@@ -79,11 +119,11 @@ export function MilestoneSection({
   brief: givenBrief,
 }: {
   projectId: string;
-  /** The newest brief, when the page already has it; otherwise fetched. */
+  /** The fallback brief, when the page already has it; otherwise fetched. */
   brief?: LatestBrief | null;
 }) {
   const { view, error } = useProjectBacklog(projectId);
-  const brief = useLatestBrief(projectId, givenBrief);
+  const brief = useUpTo(projectId, givenBrief);
   if (!view)
     return (
       <div className="kim-backlog-milestone">
@@ -145,6 +185,7 @@ export function MilestoneSection({
           <b>Where it's up to.</b> {brief.text}
           <div className="kim-backlog-muted kim-backlog-small">
             {brief.basedOn} · {ago(brief.at)}
+            {brief.stale ? " · sessions and PRs have moved since" : null}
           </div>
         </div>
       ) : null}
