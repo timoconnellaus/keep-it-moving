@@ -1,5 +1,8 @@
 import type { ComponentType } from "react";
 import type { InboxItem, InboxKind } from "../../shared/inbox.js";
+import { CiFailedDetail, PrsReadyDetail } from "./github/InboxDetails.js";
+import { PrPage } from "./github/PrPage.js";
+import { PullRequests } from "./github/PullRequests.js";
 
 /** A section of the project page, in order. Each feature adds its own. */
 export interface ProjectSection {
@@ -17,9 +20,19 @@ export type InboxDetail = ComponentType<{
   done: () => void;
 }>;
 
-export const projectSections: ProjectSection[] = [];
+export const projectSections: ProjectSection[] = [
+  {
+    id: "prs",
+    title: "Pull requests",
+    column: "main",
+    Component: PullRequests,
+  },
+];
 
-export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {};
+export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {
+  ci_failed: CiFailedDetail,
+  prs_ready: PrsReadyDetail,
+};
 
 /** Extra full pages under /p/<projectId>/…, matched in order. */
 export interface ProjectRoute {
@@ -28,4 +41,6 @@ export interface ProjectRoute {
   Component: ComponentType<{ projectId: string; match: RegExpMatchArray }>;
 }
 
-export const projectRoutes: ProjectRoute[] = [];
+export const projectRoutes: ProjectRoute[] = [
+  { pattern: /^pr\/(\d+)$/, Component: PrPage },
+];

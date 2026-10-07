@@ -88,6 +88,27 @@ The first interview from a remote creates its project, named from the repo and g
 
 In the browser, the interview title is a switcher (click it, or press ⌘K): every interview, grouped by project, with its branch, agent session, progress and whether it waits on you. A dot on the title counts the other interviews waiting on you, and updates live. The site root lists every interview the same way.
 
+## Pull requests and CI
+
+For projects keyed by a `github.com/owner/repo` remote, the Worker reads open PRs from GitHub: checks, reviews, mergeability and diffs. It needs a token, set as a Worker secret:
+
+1. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) for the repos you want, with **read-only** access to Contents, Pull requests, Checks (where offered; otherwise Commit statuses), Actions, Issues and Metadata.
+2. Run `npx wrangler secret put GITHUB_TOKEN` and paste it. For `wrangler dev`, put `GITHUB_TOKEN=…` in `.dev.vars`.
+
+Without the token, the PR routes answer 503 `{"error":"GITHUB_TOKEN not set"}` and the page shows these steps.
+
+The Durable Object's once-a-minute alarm syncs each GitHub project at most every 2 minutes, within about 40 GitHub requests a tick. A PR whose head and update time haven't moved is only refetched every 15 minutes, unless its checks are running or failing; the timer backs off when the rate limit runs low. **Sync** on the project page syncs one project at once.
+
+- A PR's **CI** is red when any check failed (failure, timed out, cancelled, action required), pending while any runs, green when all passed, none without checks.
+- A PR is **ready** on GitHub's verdict: not a draft, no check failing or running, no reviewer's latest review requesting changes, and `mergeable_state` `clean` (or `has_hooks`). While GitHub is still computing it (`unknown`), green checks and a mergeable PR count as ready.
+- The inbox gets one **CI failed** item per red PR, dated from when it went red, and one **PRs ready** item per project, dated from its oldest ready PR.
+- The PR page (`/p/<project>/pr/<number>`) fetches live detail, cached for a minute: checks with log excerpts from failing Actions jobs, reviews, and the diff with a file tree.
+
+```sh
+interviewer pr list                       # this repo's open PRs (from the git remote)
+interviewer pr list --project github.com/owner/repo
+```
+
 ## On your phone
 
 The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's Access sign-in. It opens on the list of interviews.

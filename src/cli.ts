@@ -32,6 +32,7 @@ async function main(args: string[]): Promise<void> {
   if (group === "artifact") return artifactCommand(action, rest);
   if (group === "stage") return stageCommand(action, rest);
   if (group === "project") return projectCommand(action, rest);
+  if (group === "pr") return prCommand(action, rest);
   if (group === "plan")
     return planCommand(
       [action, ...rest].filter((value): value is string => Boolean(value)),
@@ -431,6 +432,20 @@ async function projectCommand(action: string | undefined, args: string[]) {
   throw new Error(`Unknown project action: ${action ?? ""}`);
 }
 
+/**
+ * Pull requests the server synced from GitHub. The project defaults to this
+ * repo's normalised remote, as `session create` detects it.
+ */
+async function prCommand(action: string | undefined, args: string[]) {
+  if (action !== "list") throw new Error(`Unknown pr action: ${action ?? ""}`);
+  const project = flag(args, "--project") ?? detectOrigin([]).projectKey;
+  if (!project)
+    throw new Error("No git remote here; pass --project <key or name>");
+  return output(
+    await api(`/api/sessions/kim/prs?project=${encodeURIComponent(project)}`),
+  );
+}
+
 /** Opens or closes the workspace column beside the questions. */
 async function stageCommand(action: string | undefined, args: string[]) {
   if (action !== "open" && action !== "close")
@@ -805,6 +820,7 @@ Commands:
   session create --title <text> [--open-stage] [--agent-session <your session title>] [--project <name>]
     the workspace column starts closed unless --open-stage; the project comes from the git remote
   project list | rename <project> --name <name> | color <project> --color <#hex>
+  pr list [--project <key>]   open PRs with CI and readiness; defaults to this repo's remote
   session list [--all]|show <id>|stop <id>|resume <id>|delete <id>
   question add <session> --prompt <text> [--type <type>] [--option <text>] [--default <text>] [--recommendation <text>] [--artifact <id>]
   types: text, single-choice, multiple-choice, yes-no, number; repeat --option/--default
