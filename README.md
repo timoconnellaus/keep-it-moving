@@ -17,7 +17,7 @@ npm run setup:agents    # links the skill and adds the /grill-me pointer
 kim login       # browser sign-in: Cloudflare Access, then OAuth back to the CLI
 ```
 
-`login` stores a refresh token in the user config directory (readable only by you), keyed by service URL. `kim whoami` checks it and `kim logout` forgets it. Set `INTERVIEWER_URL` to point the CLI at another deployment, such as `wrangler dev` on `http://localhost:8787`.
+`login` stores a refresh token in the user config directory (readable only by you), keyed by service URL. `kim whoami` checks it and `kim logout` forgets it. Set `KEEP_IT_MOVING_URL` to point the CLI at another deployment, such as `wrangler dev` on `http://localhost:8787`.
 
 Deploy with `npm run deploy`, which builds the web client and runs `wrangler deploy`.
 
@@ -225,7 +225,7 @@ kim key list                      # names, created, last used, revoked
 kim key revoke "frockbot cloud"
 ```
 
-Store the key as `INTERVIEWER_TOKEN` in the cloud environment's variables (`kim cloud setup`, below, does this for you). The CLI sends it instead of an OAuth token; the Worker checks its SHA-256 against the Durable Object (only the hash is stored) and lets it report and work on the agent API: sessions, requests, heartbeats, follow-ups, backlog sync and reads. Environment variables are readable by anyone using the environment, so a key can't delete interviews or automations, rename projects, change backlog settings or sync scripts, or create, list or revoke keys; a leaked one can always be cut off from a signed-in CLI. Live key names are unique, and revoking by name revokes every match.
+Store the key as `KEEP_IT_MOVING_TOKEN` in the cloud environment's variables (`kim cloud setup`, below, does this for you). The CLI sends it instead of an OAuth token; the Worker checks its SHA-256 against the Durable Object (only the hash is stored) and lets it report and work on the agent API: sessions, requests, heartbeats, follow-ups, backlog sync and reads. Environment variables are readable by anyone using the environment, so a key can't delete interviews or automations, rename projects, change backlog settings or sync scripts, or create, list or revoke keys; a leaked one can always be cut off from a signed-in CLI. Live key names are unique, and revoking by name revokes every match.
 
 ## Cloud sessions
 
@@ -240,12 +240,12 @@ kim cloud setup --json          # the same, as JSON
 It creates an agent key named "<project name> cloud" (`--key-name` picks another). Keys can't be read back, so if a live key already has that name it stops and says so: revoke the old one (`kim key revoke "Frockbot cloud"`) or pass `--key-name`. It needs a signed-in CLI, not a key.
 
 1. **Network access**: Custom, add `interviewer.zerobsai.com`, and keep the default package registries included. The default Trusted level allows GitHub and the registries but not this host.
-2. **Environment variables**: `INTERVIEWER_TOKEN=kim_…`. Anyone who uses the environment can read it.
+2. **Environment variables**: `KEEP_IT_MOVING_TOKEN=kim_…`. Anyone who uses the environment can read it.
 3. **Setup script**: it installs the CLI from the Worker, then installs the user-level hooks in the VM. Every line ends in `|| true`, so a failure never stops a session from starting:
 
    ```bash
    #!/bin/bash
-   curl -fsS -H "Authorization: Bearer $INTERVIEWER_TOKEN" -o /tmp/kim-cli.tgz https://interviewer.zerobsai.com/api/sessions/kim/cli.tgz && npm install -g /tmp/kim-cli.tgz || true
+   curl -fsS -H "Authorization: Bearer ${KEEP_IT_MOVING_TOKEN:-$INTERVIEWER_TOKEN}" -o /tmp/kim-cli.tgz https://interviewer.zerobsai.com/api/sessions/kim/cli.tgz && npm install -g /tmp/kim-cli.tgz || true
    kim hooks install || true
    exit 0
    ```
@@ -257,11 +257,11 @@ kim hooks install --project     # writes .claude/settings.json; commits nothing
 git add .claude/settings.json && git commit -m "Report cloud sessions to Keep it moving"
 ```
 
-It adds the same five hooks to the repo's `.claude/settings.json`, merged beside what's there and idempotent like the user-level install, each guarded so it runs only where `INTERVIEWER_TOKEN` is set: `[ -n "$INTERVIEWER_TOKEN" ] && kim hook Stop || true`. Teammates without a token are unaffected, and so is your Mac, which reports through its user-level hooks and normally has no `INTERVIEWER_TOKEN`. If both copies do fire (a token set locally, or a VM that reads both files), the hook reports once: the first copy to start writes a marker named after the hook's input, and the other sees it and stays quiet. `hooks uninstall --project` removes them. Cloud hooks run only in single-repo sessions.
+It adds the same five hooks to the repo's `.claude/settings.json`, merged beside what's there and idempotent like the user-level install, each guarded so it runs only where `KEEP_IT_MOVING_TOKEN` is set: `[ -n "$KEEP_IT_MOVING_TOKEN" ] && kim hook Stop || true`. Teammates without a token are unaffected, and so is your Mac, which reports through its user-level hooks and normally has no `KEEP_IT_MOVING_TOKEN`. If both copies do fire (a token set locally, or a VM that reads both files), the hook reports once: the first copy to start writes a marker named after the hook's input, and the other sees it and stays quiet. `hooks uninstall --project` removes them. Cloud hooks run only in single-repo sessions.
 
 In a cloud session, the CLI also sends `CLAUDE_CODE_REMOTE_SESSION_ID` (`cse_…`) with each hook's report. The session then links to its page on claude.ai (**Open session** on the inbox item and the project page), and `report` and `ask`, which don't get Claude Code's session id there, find the session by that remote id. Until a hook has reported, they file it under the remote id; the hooks' first report adopts it.
 
-The CLI package is served behind the agent API at `/api/sessions/kim/cli.tgz`, so the setup script fetches it with the environment's `INTERVIEWER_TOKEN` and nothing new sits outside Cloudflare Access. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. The docs don't say whether a setup script sees the environment's variables; if `kim` is missing in a cloud session, that's why, and the fallback is making `/cli.tgz` public through the Access bypass app.
+The CLI package is served behind the agent API at `/api/sessions/kim/cli.tgz`, so the setup script fetches it with the environment's `KEEP_IT_MOVING_TOKEN` and nothing new sits outside Cloudflare Access. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. The docs don't say whether a setup script sees the environment's variables; if `kim` is missing in a cloud session, that's why, and the fallback is making `/cli.tgz` public through the Access bypass app.
 
 ## On your phone
 
@@ -303,7 +303,7 @@ kim artifact delete <session-id> <artifact-id>
 
 Diagrams come from archify, a separate skill that turns a small typed JSON spec into an interactive HTML viewer. Pass the spec, any JSON file with a `diagram_type`, and the CLI does the rest:
 
-1. It finds the archify skill (`~/.agents`, `~/.claude` or `~/.codex` `skills/archify`, or `INTERVIEWER_ARCHIFY`).
+1. It finds the archify skill (`~/.agents`, `~/.claude` or `~/.codex` `skills/archify`, or `KEEP_IT_MOVING_ARCHIFY`).
 2. It runs `archify validate`. On failure it exits with archify's diagnostics and supported fixes.
 3. It renders the HTML and uploads it along with the spec.
 

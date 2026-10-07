@@ -1,5 +1,5 @@
 {
-  "name": "@tim/interviewer",
+  "name": "@tim/keep-it-moving",
   "version": "0.1.0",
   "description": "Agent-driven interviews on a Cloudflare Worker: a browser questionnaire beside a living plan, diagrams, and mockups.",
   "type": "module",
@@ -31,7 +31,7 @@
     "lint": "eslint src tests scripts vite.config.ts vitest.config.ts eslint.config.js",
     "format:check": "prettier --check .",
     "link:dev": "npm run build:cli && npm link",
-    "unlink:dev": "npm unlink -g @tim/interviewer || true",
+    "unlink:dev": "npm unlink -g @tim/keep-it-moving @tim/interviewer || true",
     "link:skill": "node scripts/link-skill.mjs",
     "unlink:skill": "node scripts/link-skill.mjs --unlink",
     "setup:agents": "npm run link:skill && node scripts/add-global-context.mjs"

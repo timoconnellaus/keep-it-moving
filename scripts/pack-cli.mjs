@@ -71,7 +71,7 @@ for (const name of [...imported].sort()) {
   dependencies[name] = version;
 }
 
-const stage = mkdtempSync(join(tmpdir(), "interviewer-pack-"));
+const stage = mkdtempSync(join(tmpdir(), "kim-pack-"));
 try {
   for (const file of files)
     cpSync(join(dist, file), join(stage, "dist", file), { recursive: true });
@@ -81,7 +81,7 @@ try {
   const manifest = {
     name: root.name,
     version: root.version,
-    description: "The interviewer and Keep it moving CLI.",
+    description: "kim, the Keep it moving CLI.",
     type: "module",
     license: root.license,
     engines: root.engines,

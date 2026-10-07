@@ -161,7 +161,7 @@ export function App() {
       {session.questions.length === 0 && (
         <div className="empty">
           <h2>No questions yet</h2>
-          <p>The interviewer will add the first question shortly.</p>
+          <p>The agent will add the first question shortly.</p>
         </div>
       )}
       {session.questions.map((question, index) => (

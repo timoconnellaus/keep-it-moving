@@ -24,10 +24,10 @@ async function waitingNotification() {
   }
   if (!sessions)
     return self.registration.showNotification("An interview needs you", {
-      body: "Open the interviewer to answer.",
+      body: "Open Keep it moving to answer.",
       icon: ICON,
       badge: BADGE,
-      tag: "interviewer",
+      tag: "keep-it-moving",
       data: { url: "/" },
     });
   const waiting = sessions
@@ -36,11 +36,11 @@ async function waitingNotification() {
   const latest = waiting[0];
   // Every push must show something; this one is a test or already answered.
   if (!latest && !(await newestInboxItem()))
-    return self.registration.showNotification("Interviewer", {
+    return self.registration.showNotification("Keep it moving", {
       body: "Nothing is waiting on you right now.",
       icon: ICON,
       badge: BADGE,
-      tag: "interviewer",
+      tag: "keep-it-moving",
       data: { url: "/" },
     });
   // Keep it moving pushes for other inbox items too (an agent waiting, a
@@ -52,7 +52,7 @@ async function waitingNotification() {
         item.brief.length > 180 ? `${item.brief.slice(0, 179)}…` : item.brief,
       icon: ICON,
       badge: BADGE,
-      tag: "interviewer",
+      tag: "keep-it-moving",
       renotify: true,
       data: { url: "/" },
     });
@@ -67,7 +67,7 @@ async function waitingNotification() {
           : ""),
       icon: ICON,
       badge: BADGE,
-      tag: "interviewer",
+      tag: "keep-it-moving",
       renotify: true,
       data: { url: `/s/${latest.token}` },
     },

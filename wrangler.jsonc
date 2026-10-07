@@ -6,7 +6,11 @@
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
-  "routes": [{ "pattern": "interviewer.zerobsai.com", "custom_domain": true }],
+  "routes": [
+    { "pattern": "keep-it-moving.zerobsai.com", "custom_domain": true },
+    // The old name, until everything has moved over.
+    { "pattern": "interviewer.zerobsai.com", "custom_domain": true },
+  ],
   "assets": {
     "directory": "./web-dist",
     "binding": "ASSETS",

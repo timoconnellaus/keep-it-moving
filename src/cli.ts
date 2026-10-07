@@ -3,6 +3,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   closeSync,
   existsSync,
   fstatSync,
@@ -25,8 +26,15 @@ import envPaths from "env-paths";
 import { parseDuration } from "./shared/automations.js";
 import { normalizeRemote, projectName } from "./shared/remote.js";
 
+/**
+ * KEEP_IT_MOVING_<name>, else the older INTERVIEWER_<name>, so environments
+ * set up before the rename keep working.
+ */
+const setting = (name: string): string | undefined =>
+  process.env[`KEEP_IT_MOVING_${name}`] || process.env[`INTERVIEWER_${name}`];
+
 const defaultBase = (
-  process.env.INTERVIEWER_URL ?? "https://interviewer.zerobsai.com"
+  setting("URL") ?? "https://interviewer.zerobsai.com"
 ).replace(/\/+$/, "");
 
 async function main(args: string[]): Promise<void> {
@@ -186,10 +194,10 @@ function archifySpec(
   }
 }
 
-/** The archify skill's CLI; INTERVIEWER_ARCHIFY overrides the usual install locations. */
+/** The archify skill's CLI; KEEP_IT_MOVING_ARCHIFY overrides the usual install locations. */
 function findArchify(): string {
   const candidates = [
-    process.env.INTERVIEWER_ARCHIFY,
+    setting("ARCHIFY"),
     ...[".agents", ".claude", ".codex"].map((dir) =>
       join(homedir(), dir, "skills", "archify", "bin", "archify.mjs"),
     ),
@@ -197,7 +205,7 @@ function findArchify(): string {
   const found = candidates.find((path) => existsSync(path));
   if (!found)
     throw new Error(
-      "Diagram specs are rendered with the archify skill, which wasn't found. Install it, or set INTERVIEWER_ARCHIFY to its bin/archify.mjs.",
+      "Diagram specs are rendered with the archify skill, which wasn't found. Install it, or set KEEP_IT_MOVING_ARCHIFY to its bin/archify.mjs.",
     );
   return found;
 }
@@ -229,7 +237,7 @@ function renderArchify(
 ): string {
   const spec = archifySpec(content)!;
   const archify = findArchify();
-  const dir = mkdtempSync(join(tmpdir(), "interviewer-archify-"));
+  const dir = mkdtempSync(join(tmpdir(), "kim-archify-"));
   try {
     // Validate the original file when there is one, so relative references resolve.
     const input =
@@ -610,7 +618,7 @@ async function backlogSync(project: string, trust = false): Promise<unknown> {
     }).catch(() => undefined);
     throw new Error(message);
   };
-  const dir = mkdtempSync(join(tmpdir(), "interviewer-sync-"));
+  const dir = mkdtempSync(join(tmpdir(), "kim-sync-"));
   const file = join(dir, "sync.mjs");
   writeFileSync(file, result.script);
   let run;
@@ -651,8 +659,7 @@ async function backlogSync(project: string, trust = false): Promise<unknown> {
 
 /** Before an agent picks up work: sync, then the top open items in order. */
 /** Sync scripts this machine approved, by SHA-256 of their text. */
-const trustedScriptsFile = () =>
-  join(envPaths("interviewer").config, "trusted-sync-scripts.json");
+const trustedScriptsFile = () => configFile("trusted-sync-scripts.json");
 
 const scriptHash = (script: string) =>
   createHash("sha256").update(script).digest("hex");
@@ -1081,7 +1088,7 @@ const HOOK_DEDUPE_MS = 10_000;
  */
 function firstToHandle(event: string, input: string): boolean {
   try {
-    const dir = join(tmpdir(), "interviewer-hooks");
+    const dir = join(tmpdir(), "kim-hooks");
     mkdirSync(dir, { recursive: true });
     const marker = join(
       dir,
@@ -1237,13 +1244,13 @@ function editHooks(
 }
 
 /**
- * A repo's hook command: it runs only where INTERVIEWER_TOKEN is set (a
+ * A repo's hook command: it runs only where KEEP_IT_MOVING_TOKEN is set (a
  * cloud environment), so teammates without a token, and Tim's machine,
  * which reports through its user-level hooks, are unaffected. POSIX sh, and
  * it always exits 0.
  */
 const projectHookCommand = (event: string) =>
-  `[ -n "$INTERVIEWER_TOKEN" ] && kim hook ${event} || true`;
+  `[ -n "$KEEP_IT_MOVING_TOKEN$INTERVIEWER_TOKEN" ] && kim hook ${event} || true`;
 
 /**
  * `hooks install|uninstall --project`: the hooks in this repo's committed
@@ -1314,8 +1321,25 @@ interface Credentials {
   expiresAt: number;
 }
 
-const credentialsFile = () =>
-  join(envPaths("interviewer").config, "credentials.json");
+const credentialsFile = () => configFile("credentials.json");
+
+/**
+ * A file in the CLI's config folder. The folder was "interviewer" before the
+ * rename; a file still only there is copied across on first use.
+ */
+function configFile(name: string): string {
+  const file = join(envPaths("keep-it-moving").config, name);
+  const old = join(envPaths("interviewer").config, name);
+  if (!existsSync(file) && existsSync(old))
+    try {
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+      copyFileSync(old, file);
+      chmodSync(file, 0o600);
+    } catch {
+      return old;
+    }
+  return file;
+}
 
 /** Sign-ins by service URL, so a local Worker and the deployed one can coexist. */
 function readCredentials(): Record<string, Credentials> {
@@ -1342,7 +1366,7 @@ function writeCredentials(credentials: Credentials | null): void {
 /**
  * Agent keys, for a cloud environment or anywhere the browser sign-in can't
  * run: create one per project's cloud environment and store it there as
- * INTERVIEWER_TOKEN. Managing keys needs a signed-in CLI, not a key.
+ * KEEP_IT_MOVING_TOKEN. Managing keys needs a signed-in CLI, not a key.
  */
 async function keyCommand(action: string | undefined, args: string[]) {
   if (action === "create") {
@@ -1353,7 +1377,7 @@ async function keyCommand(action: string | undefined, args: string[]) {
     })) as { key: string };
     output(created);
     process.stderr.write(
-      `\nShown once. Store it as INTERVIEWER_TOKEN in the cloud environment, then revoke it with \`kim key revoke ${name}\`.\n`,
+      `\nShown once. Store it as KEEP_IT_MOVING_TOKEN in the cloud environment, then revoke it with \`kim key revoke ${name}\`.\n`,
     );
     return;
   }
@@ -1413,17 +1437,17 @@ async function cloudCommand(action: string | undefined, args: string[]) {
   })) as { key: string };
   const host = new URL(defaultBase).host;
   const environment = [
-    `INTERVIEWER_TOKEN=${key}`,
+    `KEEP_IT_MOVING_TOKEN=${key}`,
     // Another deployment (such as wrangler dev) has to be named too.
     ...(defaultBase === "https://interviewer.zerobsai.com"
       ? []
-      : [`INTERVIEWER_URL=${defaultBase}`]),
+      : [`KEEP_IT_MOVING_URL=${defaultBase}`]),
   ].join("\n");
   const setupScript = [
     "#!/bin/bash",
     "# Keep it moving. Nothing here can stop the session from starting.",
-    "# The key is the environment's INTERVIEWER_TOKEN variable.",
-    `curl -fsS -H "Authorization: Bearer $INTERVIEWER_TOKEN" -o /tmp/kim-cli.tgz ${cliPackageUrl()} && npm install -g /tmp/kim-cli.tgz || true`,
+    "# The key is the environment's KEEP_IT_MOVING_TOKEN variable.",
+    `curl -fsS -H "Authorization: Bearer \${KEEP_IT_MOVING_TOKEN:-$INTERVIEWER_TOKEN}" -o /tmp/kim-cli.tgz ${cliPackageUrl()} && npm install -g /tmp/kim-cli.tgz || true`,
     "# Experimental: user-level hooks in the VM (/root/.claude/settings.json).",
     "# Cloud sessions may not read them; see the per-repo fallback.",
     "kim hooks install || true",
@@ -1461,7 +1485,7 @@ in Keep it moving, commit the hooks to the repo instead. From a checkout:
 
   kim hooks install --project
 
-Those hooks do nothing unless INTERVIEWER_TOKEN is set, so teammates and local
+Those hooks do nothing unless KEEP_IT_MOVING_TOKEN is set, so teammates and local
 sessions are unaffected. Hooks run only in single-repo cloud sessions.
 
 The key "${keyName}" is shown only here. Revoke it with:
@@ -1471,7 +1495,8 @@ The key "${keyName}" is shown only here. Revoke it with:
 }
 
 async function accessToken(forceRefresh: boolean): Promise<string | null> {
-  if (process.env.INTERVIEWER_TOKEN) return process.env.INTERVIEWER_TOKEN;
+  const token = setting("TOKEN");
+  if (token) return token;
   const stored = readCredentials()[defaultBase];
   if (!stored) return null;
   if (!forceRefresh && stored.expiresAt - Date.now() > 60_000)
@@ -1557,7 +1582,7 @@ async function login() {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        client_name: "interviewer CLI",
+        client_name: "Keep it moving CLI",
         redirect_uris: [redirectUri],
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
@@ -1743,7 +1768,7 @@ Keep it moving:
   automation list [--project <key>] [--all]   this repo's automations by default
   automation remove <id>
 Backlog (the project defaults to this repo's; --project <key> picks another):
-  key create <name> | list | revoke <id|name>   agent keys for cloud environments (INTERVIEWER_TOKEN)
+  key create <name> | list | revoke <id|name>   agent keys for cloud environments (KEEP_IT_MOVING_TOKEN)
   backlog show | sync | next [--limit 5]   next syncs first, then prints the top open items
   backlog source github|script|none
   backlog script set --file <path|->   save the project's sync script; it runs here on sync
@@ -1759,13 +1784,13 @@ Keep it moving (agent sessions; \`kim\` is the same binary):
     reads Claude Code hook JSON on stdin and reports it; never fails, prints nothing
   hooks install|uninstall [--settings <path>]   add or remove those hooks (default ~/.claude/settings.json)
   hooks install|uninstall --project   the same in this repo's .claude/settings.json, for cloud
-    sessions; each runs only when INTERVIEWER_TOKEN is set. Commits nothing
+    sessions; each runs only when KEEP_IT_MOVING_TOKEN is set. Commits nothing
 Cloud sessions (claude.ai/code):
   cloud setup [--project <key>] [--key-name <name>] [--json]
     creates the project's agent key and prints its cloud environment's network
     access, environment variables and setup script, ready to paste
 
-INTERVIEWER_URL points at another deployment, such as wrangler dev.
+KEEP_IT_MOVING_URL points at another deployment, such as wrangler dev.
 `,
   );
 }

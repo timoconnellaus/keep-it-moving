@@ -15,7 +15,7 @@ const hub = (env: Env) => env.HUB.get(env.HUB.idFromName("interviews"));
 
 const page = (status: number, message: string) =>
   new Response(
-    `<!doctype html><meta charset="utf-8"><title>Interviewer</title><p style="font:16px system-ui;margin:3rem">${message}</p>`,
+    `<!doctype html><meta charset="utf-8"><title>Keep it moving</title><p style="font:16px system-ui;margin:3rem">${message}</p>`,
     { status, headers: { "content-type": "text/html; charset=utf-8" } },
   );
 
@@ -50,7 +50,7 @@ const site: ExportedHandler<Env> = {
     if (PUBLIC_FILES.test(url.pathname)) return env.ASSETS.fetch(request);
     const email = await accessEmail(request, env);
     if (!isAllowed(email, env))
-      return page(403, "This interviewer belongs to someone else.");
+      return page(403, "This Keep it moving belongs to someone else.");
     if (url.pathname === "/authorize") return authorize(request, env, email!);
     if (
       url.pathname.startsWith("/api/browser/") ||
@@ -77,11 +77,11 @@ async function authorize(request: Request, env: Env, email: string) {
   const oauth = await env.OAUTH_PROVIDER.parseAuthRequest(request);
   const redirect = new URL(oauth.redirectUri);
   if (redirect.protocol !== "http:" || !isLoopback(redirect.hostname))
-    return page(400, "Only the interviewer CLI can sign in here.");
+    return page(400, "Only the kim CLI can sign in here.");
   const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
     request: oauth,
     userId: email,
-    metadata: { label: "interviewer CLI" },
+    metadata: { label: "kim CLI" },
     scope: oauth.scope,
     props: { email },
   });

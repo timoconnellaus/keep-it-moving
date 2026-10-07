@@ -44,7 +44,7 @@ The brief says what you were doing, what's blocked and what you need, in two or 
 
 `kim report --status … --brief … --pr <url> --follow-up "…"` reports progress explicitly; the hooks from `kim hooks install` already report the routine changes.
 
-In a claude.ai cloud session, `report` and `ask` work the same: they find your session from `CLAUDE_CODE_REMOTE_SESSION_ID`, and authenticate with the environment's `INTERVIEWER_TOKEN`. If `interviewer` isn't installed or the host is unreachable there, the environment isn't set up: tell the user to run `kim cloud setup` from the repo on their own machine, rather than trying to install or sign in yourself. Never print or commit `INTERVIEWER_TOKEN`. `kim hooks install --project` writes guarded hooks into the repo's `.claude/settings.json`, but only run it, and commit that file, when the user asks.
+In a claude.ai cloud session, `report` and `ask` work the same: they find your session from `CLAUDE_CODE_REMOTE_SESSION_ID`, and authenticate with the environment's `KEEP_IT_MOVING_TOKEN`. If `interviewer` isn't installed or the host is unreachable there, the environment isn't set up: tell the user to run `kim cloud setup` from the repo on their own machine, rather than trying to install or sign in yourself. Never print or commit `KEEP_IT_MOVING_TOKEN`. `kim hooks install --project` writes guarded hooks into the repo's `.claude/settings.json`, but only run it, and commit that file, when the user asks.
 
 ## Workspace: plan, diagrams, mockups
 

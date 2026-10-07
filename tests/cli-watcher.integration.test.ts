@@ -44,8 +44,7 @@ describe("spawned CLI seam", () => {
       {
         env: {
           ...process.env,
-          INTERVIEWER_URL: address,
-          INTERVIEWER_COMPANION: "off",
+          KEEP_IT_MOVING_URL: address,
         },
       },
     );
@@ -56,8 +55,7 @@ describe("spawned CLI seam", () => {
     const listed = await exec(process.execPath, [tsx, cli, "session", "list"], {
       env: {
         ...process.env,
-        INTERVIEWER_URL: address,
-        INTERVIEWER_COMPANION: "off",
+        KEEP_IT_MOVING_URL: address,
       },
     });
     expect(
@@ -78,8 +76,7 @@ describe("workspace through the CLI", () => {
           await exec(process.execPath, [tsx, cli, ...args], {
             env: {
               ...process.env,
-              INTERVIEWER_URL: address,
-              INTERVIEWER_COMPANION: "off",
+              KEEP_IT_MOVING_URL: address,
             },
           })
         ).stdout,
@@ -121,9 +118,8 @@ if (command === "validate") {
       exec(process.execPath, [tsx, cli, ...args], {
         env: {
           ...process.env,
-          INTERVIEWER_URL: address,
-          INTERVIEWER_COMPANION: "off",
-          INTERVIEWER_ARCHIFY: archify,
+          KEEP_IT_MOVING_URL: address,
+          KEEP_IT_MOVING_ARCHIFY: archify,
         },
       });
     const session = JSON.parse((await run("session", "create")).stdout);
@@ -268,8 +264,7 @@ describe("sync script trust", () => {
           env: {
             ...process.env,
             HOME: home,
-            INTERVIEWER_URL: address,
-            INTERVIEWER_COMPANION: "off",
+            KEEP_IT_MOVING_URL: address,
           },
         },
       );

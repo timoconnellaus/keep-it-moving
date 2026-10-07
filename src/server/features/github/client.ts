@@ -90,7 +90,7 @@ export class GitHubClient {
       headers: {
         authorization: `Bearer ${this.token}`,
         accept: "application/vnd.github+json",
-        "user-agent": "keep-it-moving (interviewer)",
+        "user-agent": "keep-it-moving",
         "x-github-api-version": "2022-11-28",
       },
     });

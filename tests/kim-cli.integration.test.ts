@@ -62,8 +62,8 @@ const env = (address: string, extra: Record<string, string> = {}) => {
   delete base.CLAUDE_CODE_REMOTE_SESSION_ID;
   return {
     ...base,
-    INTERVIEWER_URL: address,
-    INTERVIEWER_TOKEN: "test",
+    KEEP_IT_MOVING_URL: address,
+    KEEP_IT_MOVING_TOKEN: "test",
     ...extra,
   };
 };
@@ -467,7 +467,7 @@ describe("hooks install --project", () => {
     };
     const read = () => JSON.parse(readFileSync(settings, "utf8"));
     const guarded = (event: string) =>
-      `[ -n "$INTERVIEWER_TOKEN" ] && kim hook ${event} || true`;
+      `[ -n "$KEEP_IT_MOVING_TOKEN$INTERVIEWER_TOKEN" ] && kim hook ${event} || true`;
 
     const first = await run("install");
     expect(first.result.changed).toHaveLength(5);
@@ -497,7 +497,7 @@ describe("hooks install --project", () => {
     const sh = (token?: string) =>
       new Promise<number | null>((resolve) => {
         const shellEnv: Record<string, string> = { PATH: dir };
-        if (token) shellEnv.INTERVIEWER_TOKEN = token;
+        if (token) shellEnv.KEEP_IT_MOVING_TOKEN = token;
         spawn("/bin/sh", ["-c", guarded("Stop")], { env: shellEnv }).on(
           "close",
           resolve,
@@ -531,18 +531,20 @@ describe("cloud setup", () => {
       );
     const { stdout } = await run();
     const host = new URL(address).host;
-    const key = stdout.match(/^INTERVIEWER_TOKEN=(kim_\S+)$/m)?.[1];
+    const key = stdout.match(/^KEEP_IT_MOVING_TOKEN=(kim_\S+)$/m)?.[1];
     expect(key).toBeTruthy();
     expect(stdout).toContain(
       "Cloud environment for Frockbot (github.com/o/frockbot)",
     );
     expect(stdout).toContain("Level: Custom");
     expect(stdout).toContain(`Allowed domains: ${host}`);
-    expect(stdout).toContain(`INTERVIEWER_URL=${address}`);
+    expect(stdout).toContain(`KEEP_IT_MOVING_URL=${address}`);
     expect(stdout).toContain(
       `-o /tmp/kim-cli.tgz ${address}/api/sessions/kim/cli.tgz && npm install -g /tmp/kim-cli.tgz || true`,
     );
-    expect(stdout).toContain('"Authorization: Bearer $INTERVIEWER_TOKEN"');
+    expect(stdout).toContain(
+      '"Authorization: Bearer ${KEEP_IT_MOVING_TOKEN:-$INTERVIEWER_TOKEN}"',
+    );
     expect(stdout).toContain("kim hooks install || true");
     expect(stdout).toContain("kim hooks install --project");
     expect(stdout).toContain("kim key revoke 'Frockbot cloud'");
@@ -571,7 +573,7 @@ describe("cloud setup", () => {
       keyName: "Frockbot cloud 2",
       network: { level: "Custom", allow: [host], keepDefaultPackages: true },
     });
-    expect(json.environment).toMatch(/^INTERVIEWER_TOKEN=kim_/);
+    expect(json.environment).toMatch(/^KEEP_IT_MOVING_TOKEN=kim_/);
     expect(json.setupScript).toContain("|| true");
   });
 });
@@ -609,4 +611,20 @@ describe("the CLI package", () => {
     expect(manifest.type).toBe("module");
     expect(Object.keys(manifest.dependencies)).toEqual(["env-paths"]);
   }, 60_000);
+});
+
+describe("settings from before the rename", () => {
+  it("still reads INTERVIEWER_URL and INTERVIEWER_TOKEN", async () => {
+    const { address, requests } = await listeningHarness();
+    const base = env(address);
+    delete (base as Record<string, unknown>).KEEP_IT_MOVING_URL;
+    delete (base as Record<string, unknown>).KEEP_IT_MOVING_TOKEN;
+    const { stdout } = await exec(
+      process.execPath,
+      [tsx, cli, "automation", "list", "--all"],
+      { env: { ...base, INTERVIEWER_URL: address, INTERVIEWER_TOKEN: "test" } },
+    );
+    expect(JSON.parse(stdout)).toEqual({ automations: [] });
+    expect(requests).toContain("GET /api/sessions/kim/automations");
+  });
 });
