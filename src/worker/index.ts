@@ -42,8 +42,12 @@ const site: ExportedHandler<Env> = {
       url.pathname.startsWith("/ws/")
     )
       return hub(env).fetch(request);
-    // The home page (every interview) and each interview are the same app.
-    if (url.pathname === "/" || url.pathname.startsWith("/s/"))
+    // The inbox, each project page and each interview are the same app.
+    if (
+      url.pathname === "/" ||
+      url.pathname.startsWith("/s/") ||
+      url.pathname.startsWith("/p/")
+    )
       return env.ASSETS.fetch(new Request(new URL("/index.html", url)));
     return env.ASSETS.fetch(request);
   },

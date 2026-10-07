@@ -23,6 +23,11 @@ export interface InboxItem {
   source: string;
   /** When it started needing Tim (ISO); the inbox sorts on it. */
   since: string;
+  /**
+   * Waiting on Tim but not blocked, such as an agent that finished its turn:
+   * it sorts after everything else.
+   */
+  later?: boolean;
   /** Kind-specific detail for the item's renderer. */
   data?: Record<string, unknown>;
 }

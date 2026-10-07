@@ -199,6 +199,11 @@ export class InterviewStore {
     );
   }
 
+  /** The project for a normalised git remote, created on first sight. */
+  projectIdForKey(projectKey: string): string {
+    return this.resolveProject({ projectKey })!;
+  }
+
   /** A new project takes the first colour no project has yet. */
   private createProject(key: string, name: string): string {
     const used = new Set(

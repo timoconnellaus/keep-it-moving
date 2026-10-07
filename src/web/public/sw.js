@@ -35,12 +35,25 @@ async function waitingNotification() {
     .sort((a, b) => Date.parse(b.lastActivity) - Date.parse(a.lastActivity));
   const latest = waiting[0];
   // Every push must show something; this one is a test or already answered.
-  if (!latest)
+  if (!latest && !(await newestInboxItem()))
     return self.registration.showNotification("Interviewer", {
       body: "Nothing is waiting on you right now.",
       icon: ICON,
       badge: BADGE,
       tag: "interviewer",
+      data: { url: "/" },
+    });
+  // Keep it moving pushes for other inbox items too (an agent waiting, a
+  // failed check); show whichever is newer, that or the interview.
+  const item = await newestInboxItem();
+  if (item && (!latest || item.since > latest.lastActivity))
+    return self.registration.showNotification(item.title, {
+      body:
+        item.brief.length > 180 ? `${item.brief.slice(0, 179)}…` : item.brief,
+      icon: ICON,
+      badge: BADGE,
+      tag: "interviewer",
+      renotify: true,
       data: { url: "/" },
     });
   const others = waiting.length - 1;
@@ -59,6 +72,25 @@ async function waitingNotification() {
       data: { url: `/s/${latest.token}` },
     },
   );
+}
+
+/** The newest inbox item other than a request (those are interviews). */
+async function newestInboxItem() {
+  try {
+    const response = await fetch("/api/browser/kim/inbox", {
+      credentials: "same-origin",
+      redirect: "error",
+    });
+    if (!response.ok) return null;
+    const { items } = await response.json();
+    return (
+      items
+        .filter((item) => item.kind !== "request")
+        .sort((a, b) => b.since.localeCompare(a.since))[0] ?? null
+    );
+  } catch {
+    return null;
+  }
 }
 
 self.addEventListener("push", (event) =>

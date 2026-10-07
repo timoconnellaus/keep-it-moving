@@ -1,7 +1,7 @@
 {
-  "name": "Interviewer",
-  "short_name": "Interviewer",
-  "description": "Answer the questions your coding agents are asking.",
+  "name": "Keep it moving",
+  "short_name": "Keep moving",
+  "description": "Keep every project moving: what your agents are doing and what needs you.",
   "id": "/",
   "start_url": "/",
   "scope": "/",

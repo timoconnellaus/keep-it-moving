@@ -1,5 +1,7 @@
 import type { ComponentType } from "react";
 import type { InboxItem, InboxKind } from "../../shared/inbox.js";
+import { NeedsYouDetail, RequestDetail } from "./sessions/details.js";
+import { SessionsSection } from "./sessions/SessionsSection.js";
 
 /** A section of the project page, in order. Each feature adds its own. */
 export interface ProjectSection {
@@ -17,9 +19,19 @@ export type InboxDetail = ComponentType<{
   done: () => void;
 }>;
 
-export const projectSections: ProjectSection[] = [];
+export const projectSections: ProjectSection[] = [
+  {
+    id: "sessions",
+    title: "Sessions",
+    column: "main",
+    Component: SessionsSection,
+  },
+];
 
-export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {};
+export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {
+  request: RequestDetail,
+  needs_you: NeedsYouDetail,
+};
 
 /** Extra full pages under /p/<projectId>/…, matched in order. */
 export interface ProjectRoute {
