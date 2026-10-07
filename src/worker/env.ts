@@ -6,7 +6,7 @@ export interface Env {
   OAUTH_KV: KVNamespace;
   OAUTH_PROVIDER: OAuthHelpers;
   ASSETS: Fetcher;
-  /** The public origin, e.g. https://interviewer.zerobsai.com. */
+  /** The public origin, e.g. https://keep-it-moving.zerobsai.com. */
   PUBLIC_URL: string;
   /** The one account allowed in. */
   ALLOWED_EMAIL: string;

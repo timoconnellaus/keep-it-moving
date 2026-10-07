@@ -34,7 +34,7 @@ const setting = (name: string): string | undefined =>
   process.env[`KEEP_IT_MOVING_${name}`] || process.env[`INTERVIEWER_${name}`];
 
 const defaultBase = (
-  setting("URL") ?? "https://interviewer.zerobsai.com"
+  setting("URL") ?? "https://keep-it-moving.zerobsai.com"
 ).replace(/\/+$/, "");
 
 async function main(args: string[]): Promise<void> {
@@ -1439,7 +1439,7 @@ async function cloudCommand(action: string | undefined, args: string[]) {
   const environment = [
     `KEEP_IT_MOVING_TOKEN=${key}`,
     // Another deployment (such as wrangler dev) has to be named too.
-    ...(defaultBase === "https://interviewer.zerobsai.com"
+    ...(defaultBase === "https://keep-it-moving.zerobsai.com"
       ? []
       : [`KEEP_IT_MOVING_URL=${defaultBase}`]),
   ].join("\n");

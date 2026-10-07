@@ -8,7 +8,7 @@ This spec came out of the interview of 7 October 2026. The mockups are on the De
 
 - **A personal layer, not a system of record.** It works over any repo for one person, and nothing in a repo depends on it. Backlogs stay in their tools (GitHub, Linear, Slack); decisions stay in repo files.
 - **Two equal users.** Tim uses the browser and phone (PWA with push). Agents use the CLI. Every feature gets both a screen and a CLI verb.
-- **Hosted.** It runs as one Cloudflare Worker and one SQLite Durable Object (`InterviewHub`) at interviewer.zerobsai.com. The browser goes through Access; the CLI goes through OAuth (`/api/sessions/*`). All state lives in the Durable Object, so local and cloud sessions reach the same thing. The server can't see Tim's machines, so they push to it.
+- **Hosted.** It runs as one Cloudflare Worker and one SQLite Durable Object (`InterviewHub`) at keep-it-moving.zerobsai.com. The browser goes through Access; the CLI goes through OAuth (`/api/sessions/*`). All state lives in the Durable Object, so local and cloud sessions reach the same thing. The server can't see Tim's machines, so they push to it.
 - **Light actions only.** Answer a request, triage a follow-up, send something to a session. Nothing here starts, stops or merges anything.
 - **Ship fast, change as we go.** One user, so deploy each feature when it lands.
 

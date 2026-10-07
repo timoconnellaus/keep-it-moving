@@ -24,7 +24,7 @@
     { "binding": "OAUTH_KV", "id": "362d9bb9c4cb4509a8d8d3a540dad73c" },
   ],
   "vars": {
-    "PUBLIC_URL": "https://interviewer.zerobsai.com",
+    "PUBLIC_URL": "https://keep-it-moving.zerobsai.com",
     "ALLOWED_EMAIL": "tim.oconnell.australia@gmail.com",
     "ACCESS_TEAM_DOMAIN": "timoconnellaus.cloudflareaccess.com",
     "VAPID_PUBLIC_KEY": "BFBJwVqp8ONGf6it588x_gLRsw5dkqlyXVc9T3PlX0_QMrNLfc7aEqXPotuFR-g2CP_KGjxZTDyasvmg2eBNPjM",

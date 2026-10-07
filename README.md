@@ -1,6 +1,6 @@
 # Keep it moving
 
-Keep it moving (formerly Interviewer) is a CLI and browser app for keeping every running project moving: agent sessions report in, raise requests, and run interviews and live planning, with PRs, CI, automations and backlogs alongside. It's hosted on a Cloudflare Worker at https://interviewer.zerobsai.com. The CLI is `kim`; `interviewer` is the same command, kept so older hooks and scripts still work.
+Keep it moving (formerly Interviewer) is a CLI and browser app for keeping every running project moving: agent sessions report in, raise requests, and run interviews and live planning, with PRs, CI, automations and backlogs alongside. It's hosted on a Cloudflare Worker at https://keep-it-moving.zerobsai.com. The CLI is `kim`; `interviewer` is the same command, kept so older hooks and scripts still work.
 
 ## Requirements
 
@@ -239,13 +239,13 @@ kim cloud setup --json          # the same, as JSON
 
 It creates an agent key named "<project name> cloud" (`--key-name` picks another). Keys can't be read back, so if a live key already has that name it stops and says so: revoke the old one (`kim key revoke "Frockbot cloud"`) or pass `--key-name`. It needs a signed-in CLI, not a key.
 
-1. **Network access**: Custom, add `interviewer.zerobsai.com`, and keep the default package registries included. The default Trusted level allows GitHub and the registries but not this host.
+1. **Network access**: Custom, add `keep-it-moving.zerobsai.com`, and keep the default package registries included. The default Trusted level allows GitHub and the registries but not this host.
 2. **Environment variables**: `KEEP_IT_MOVING_TOKEN=kim_…`. Anyone who uses the environment can read it.
 3. **Setup script**: it installs the CLI from the Worker, then installs the user-level hooks in the VM. Every line ends in `|| true`, so a failure never stops a session from starting:
 
    ```bash
    #!/bin/bash
-   curl -fsS -H "Authorization: Bearer ${KEEP_IT_MOVING_TOKEN:-$INTERVIEWER_TOKEN}" -o /tmp/kim-cli.tgz https://interviewer.zerobsai.com/api/sessions/kim/cli.tgz && npm install -g /tmp/kim-cli.tgz || true
+   curl -fsS -H "Authorization: Bearer ${KEEP_IT_MOVING_TOKEN:-$INTERVIEWER_TOKEN}" -o /tmp/kim-cli.tgz https://keep-it-moving.zerobsai.com/api/sessions/kim/cli.tgz && npm install -g /tmp/kim-cli.tgz || true
    kim hooks install || true
    exit 0
    ```
@@ -345,7 +345,7 @@ browser ──HTTPS/WSS (Access)── Worker ── InterviewHub Durable Object
 - **Hub router and store** (`src/server`): the HTTP API (Hono) and the store, written against a small SQL interface so tests run them on `node:sqlite`.
 - **CLI** (`src/cli.ts`): a thin client. `wait` chains 60 s requests with `partial=1` to stay under Cloudflare's 100 s idle cutoff; `attach` filters out the heartbeat lines that keep its stream alive.
 
-Cloudflare Access has two apps: one for the whole host, allowing only the owner, and a bypass for `/api/sessions`, `/token`, `/register` and `/.well-known`, where OAuth applies instead. `ACCESS_AUD` in `wrangler.jsonc` must hold the first app's audience tag.
+Cloudflare Access has two apps: one for the whole host, allowing only the owner, and a bypass for `/api/sessions`, `/token`, `/register` and `/.well-known`, where OAuth applies instead. `ACCESS_AUD` in `wrangler.jsonc` must hold the first app's audience tag. Both apps cover keep-it-moving.zerobsai.com and the old interviewer.zerobsai.com, which the Worker still serves while everything moves over.
 
 ## Verification
 
