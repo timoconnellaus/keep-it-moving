@@ -3,10 +3,15 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
+  readSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -37,6 +42,8 @@ async function main(args: string[]): Promise<void> {
     return automationsCommand(group, action, rest);
   if (group === "pr") return prCommand(action, rest);
   if (group === "backlog") return backlogCommand(action, rest);
+  if (["hook", "hooks", "report", "ask"].includes(group!))
+    return agentSessionCommand(group!, action, rest);
   if (group === "plan")
     return planCommand(
       [action, ...rest].filter((value): value is string => Boolean(value)),
@@ -361,17 +368,42 @@ async function planCommand(args: string[]) {
   );
 }
 
-function git(...args: string[]): string | null {
+/** Runs git in a directory (default: this process's), or returns null. */
+function git(cwd: string | undefined, ...args: string[]): string | null {
   try {
     return (
       execFileSync("git", args, {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
+        ...(cwd ? { cwd } : {}),
       }).trim() || null
     );
   } catch {
     return null;
   }
+}
+
+/**
+ * The repo a directory belongs to: its project key (the normalised remote,
+ * or the main checkout's folder without one), branch and worktree.
+ */
+function repoOrigin(cwd?: string): Record<string, string> {
+  const origin: Record<string, string> = {};
+  const remote = git(cwd, "remote", "get-url", "origin");
+  const common = git(
+    cwd,
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  );
+  if (remote) origin.projectKey = normalizeRemote(remote);
+  else if (common)
+    origin.projectKey = `local/${basename(dirname(common)).toLowerCase()}`;
+  const branch = git(cwd, "rev-parse", "--abbrev-ref", "HEAD");
+  if (branch) origin.branch = branch;
+  const top = git(cwd, "rev-parse", "--show-toplevel");
+  if (top) origin.worktree = basename(top);
+  return origin;
 }
 
 /** "claude-code_2-1-286_agent" → "Claude Code", from the shared AI_AGENT convention. */
@@ -396,15 +428,11 @@ function detectOrigin(args: string[]): Record<string, string> {
   const set = (key: string, value: string | null | undefined) => {
     if (value) origin[key] = value;
   };
-  const remote = git("remote", "get-url", "origin");
-  const common = git("rev-parse", "--path-format=absolute", "--git-common-dir");
-  if (remote) set("projectKey", normalizeRemote(remote));
-  else if (common)
-    set("projectKey", `local/${basename(dirname(common)).toLowerCase()}`);
+  const repo = repoOrigin();
+  set("projectKey", repo.projectKey);
   set("project", flag(args, "--project"));
-  set("branch", git("rev-parse", "--abbrev-ref", "HEAD"));
-  const top = git("rev-parse", "--show-toplevel");
-  if (top) set("worktree", basename(top));
+  set("branch", repo.branch);
+  set("worktree", repo.worktree);
   set("agent", flag(args, "--agent") ?? agentName());
   set("agentSession", flag(args, "--agent-session"));
   set("agentSessionId", process.env.CLAUDE_CODE_SESSION_ID);
@@ -454,12 +482,8 @@ async function prCommand(action: string | undefined, args: string[]) {
 
 /** --project, else this repo's project key, normalised as detectOrigin does. */
 function backlogProject(args: string[]): string {
-  const named = flag(args, "--project");
-  if (named) return named;
-  const remote = git("remote", "get-url", "origin");
-  if (remote) return normalizeRemote(remote);
-  const common = git("rev-parse", "--path-format=absolute", "--git-common-dir");
-  if (common) return `local/${basename(dirname(common)).toLowerCase()}`;
+  const project = flag(args, "--project") ?? repoOrigin().projectKey;
+  if (project) return project;
   throw new Error("Not in a git repository; pass --project <key>");
 }
 
@@ -692,7 +716,11 @@ async function eventsNext(args: string[]) {
 const WAIT_REQUEST_MS = 60_000;
 
 async function waitForBatch(args: string[]) {
-  const id = positional(args, 0);
+  output(await nextBatch(positional(args, 0), args));
+}
+
+/** One batch of answers for an interview, chained over short requests. */
+async function nextBatch(id: string, args: string[]): Promise<unknown> {
   const idle = flag(args, "--idle") ?? "15000";
   const deadline = Date.now() + Number(flag(args, "--timeout") ?? 600_000);
   for (;;) {
@@ -701,19 +729,12 @@ async function waitForBatch(args: string[]) {
     const batch = (await api(
       `/api/sessions/${id}/wait?idle=${encodeURIComponent(idle)}&timeout=${Math.min(remaining, WAIT_REQUEST_MS)}${last ? "" : "&partial=1"}`,
     )) as { partial?: boolean };
-    if (!batch.partial) return output(batch);
+    if (!batch.partial) return batch;
   }
 }
 
 /** This repo's project key, normalised the same way as detectOrigin's. */
-function currentProjectKey(): string | undefined {
-  const remote = git("remote", "get-url", "origin");
-  if (remote) return normalizeRemote(remote);
-  const common = git("rev-parse", "--path-format=absolute", "--git-common-dir");
-  return common
-    ? `local/${basename(dirname(common)).toLowerCase()}`
-    : undefined;
-}
+const currentProjectKey = (): string | undefined => repoOrigin().projectKey;
 
 /** A heartbeat gives up rather than hold up the loop that sends it. */
 const HEARTBEAT_TIMEOUT_MS = 10_000;
@@ -775,6 +796,335 @@ async function automationsCommand(
       ),
     );
   throw new Error(`Unknown automation action: ${action ?? ""}`);
+}
+
+// Keep it moving: agent sessions report what they're doing, and raise requests.
+
+async function agentSessionCommand(
+  group: string,
+  action: string | undefined,
+  args: string[],
+): Promise<void> {
+  if (group === "hook") return hook(action);
+  if (group === "hooks") {
+    if (action !== "install" && action !== "uninstall")
+      throw new Error(`Unknown hooks action: ${action ?? ""}`);
+    const file =
+      flag(args, "--settings") ?? join(homedir(), ".claude", "settings.json");
+    return output(editHooks(file, action));
+  }
+  const all = [action, ...args].filter((value): value is string =>
+    Boolean(value),
+  );
+  if (group === "report") return reportCommand(all);
+  return ask(all);
+}
+
+/** The agent session this process belongs to: --session, or Claude Code's own. */
+function agentSessionId(args: string[]): string | undefined {
+  return flag(args, "--session") ?? process.env.CLAUDE_CODE_SESSION_ID;
+}
+
+/** Where an agent session runs, for its report. */
+function sessionContext(cwd?: string): Record<string, string> {
+  const repo = repoOrigin(cwd);
+  const context: Record<string, string> = {
+    ...repo,
+    machine: hostname(),
+    location: process.env.CLAUDE_CODE_REMOTE === "true" ? "cloud" : "local",
+    cwd: cwd ?? process.cwd(),
+  };
+  const agent = agentName();
+  if (agent) context.agent = agent;
+  return context;
+}
+
+async function report(
+  body: Record<string, unknown>,
+  init?: RequestInit,
+): Promise<unknown> {
+  return api("/api/sessions/kim/report", {
+    ...init,
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Tells the automations feature this machine is alive. Fire and forget: a
+ * deployment without the route, or a slow network, changes nothing.
+ */
+async function beat(signal: AbortSignal): Promise<void> {
+  await authorizedFetch("/api/sessions/kim/machines/beat", {
+    method: "POST",
+    body: JSON.stringify({ machine: hostname(), platform: process.platform }),
+    signal,
+  }).catch(() => undefined);
+}
+
+/** `report --status … --brief … --pr <url> --follow-up "…"` from an agent. */
+async function reportCommand(args: string[]) {
+  const id = agentSessionId(args);
+  if (!id)
+    throw new Error(
+      "No agent session: run inside Claude Code (CLAUDE_CODE_SESSION_ID) or pass --session <id>",
+    );
+  const body: Record<string, unknown> = { id, ...sessionContext() };
+  for (const [name, field] of [
+    ["--status", "status"],
+    ["--title", "title"],
+    ["--brief", "brief"],
+    ["--message", "message"],
+    ["--pr", "prUrl"],
+  ] as const) {
+    const value = flag(args, name);
+    if (value !== undefined) body[field] = value;
+  }
+  const [result] = await Promise.all([
+    report(body),
+    beat(AbortSignal.timeout(HOOK_TIMEOUT_MS)),
+  ]);
+  const items = flags(args, "--follow-up");
+  // The backlog feature owns follow-ups; a deployment without it says 404.
+  if (items.length) {
+    const response = await authorizedFetch("/api/sessions/kim/followups", {
+      method: "POST",
+      body: JSON.stringify({
+        projectKey: body.projectKey,
+        agentSessionId: id,
+        items,
+      }),
+    });
+    if (!response.ok && response.status !== 404)
+      throw new Error(await errorMessage(response));
+  }
+  output(result);
+}
+
+/**
+ * Raises a request: an interview linked to this agent session, its
+ * questions, and the session marked as needing Tim. Then waits for answers
+ * like `wait`, and prints the batch.
+ */
+async function ask(args: string[]) {
+  const id = agentSessionId(args);
+  const questions =
+    (await jsonInput(args)) ??
+    (flag(args, "--prompt") ? questionFromFlags(args) : null);
+  if (!questions)
+    throw new Error("--json <questions|-> or --prompt is required");
+  const origin = detectOrigin(args);
+  if (id) origin.agentSessionId = id;
+  const session = (await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: flag(args, "--title") ?? "Request", origin }),
+  })) as { id: string; url: string };
+  await api(`/api/sessions/${session.id}/questions`, {
+    method: "POST",
+    body: JSON.stringify(questions),
+  });
+  const brief = flag(args, "--brief");
+  if (id)
+    await report({
+      id,
+      ...sessionContext(),
+      status: "needs_you",
+      ...(brief ? { brief } : {}),
+    });
+  process.stderr.write(`${session.url}\n`);
+  const batch = (await nextBatch(session.id, args)) as {
+    answers?: unknown[];
+  };
+  if (id && batch.answers?.length)
+    await report({ id, status: "running" }).catch(() => undefined);
+  output({ interviewId: session.id, url: session.url, ...batch });
+}
+
+/** A hook gives up after this, so it never holds Claude Code up. */
+const HOOK_TIMEOUT_MS = 3_000;
+const BRIEF_MAX = 600;
+const TITLE_MAX = 80;
+
+/** The hook events `hooks install` adds, and the status each reports. */
+const HOOK_EVENTS = {
+  SessionStart: "running",
+  UserPromptSubmit: "running",
+  Notification: "needs_you",
+  Stop: "idle",
+  SessionEnd: "done",
+} as const;
+
+interface HookInput {
+  session_id?: string;
+  transcript_path?: string;
+  cwd?: string;
+  hook_event_name?: string;
+  message?: string;
+  prompt?: string;
+}
+
+/**
+ * `interviewer hook <event>`: reports a Claude Code hook. It must never
+ * block or fail the hook, so it prints nothing, swallows every error, exits
+ * 0, and gives up after a few seconds.
+ */
+async function hook(event: string | undefined): Promise<void> {
+  setTimeout(() => process.exit(0), HOOK_TIMEOUT_MS).unref();
+  try {
+    const name = event ?? "";
+    if (!(name in HOOK_EVENTS)) return;
+    const input = JSON.parse(
+      process.stdin.isTTY ? "{}" : await readStdin(),
+    ) as HookInput;
+    if (!input.session_id) return;
+    const body: Record<string, unknown> = {
+      id: input.session_id,
+      ...sessionContext(input.cwd),
+      agent: agentName() ?? "Claude Code",
+      status: HOOK_EVENTS[name as keyof typeof HOOK_EVENTS],
+    };
+    if (name === "UserPromptSubmit" && input.prompt?.trim())
+      body.defaultTitle = clip(input.prompt.replace(/\s+/g, " "), TITLE_MAX);
+    if (name === "Notification" && input.message?.trim())
+      body.message = clip(input.message, 2_000);
+    if (name === "Stop" && input.transcript_path) {
+      const brief = lastAssistantText(input.transcript_path);
+      if (brief) body.brief = clip(brief, BRIEF_MAX);
+    }
+    const signal = AbortSignal.timeout(HOOK_TIMEOUT_MS);
+    await Promise.allSettled([report(body, { signal }), beat(signal)]);
+  } catch {
+    /* a hook never fails */
+  } finally {
+    process.exitCode = 0;
+  }
+}
+
+async function readStdin(): Promise<string> {
+  let text = "";
+  for await (const chunk of process.stdin) text += chunk;
+  return text;
+}
+
+function clip(value: string, max: number): string {
+  const trimmed = value.trim();
+  return trimmed.length > max
+    ? `${trimmed.slice(0, max - 1).trimEnd()}…`
+    : trimmed;
+}
+
+/** Transcripts grow large; the last message is near the end. */
+const TRANSCRIPT_TAIL_BYTES = 2_000_000;
+
+/** The text of the last assistant message in a Claude Code transcript (JSONL). */
+function lastAssistantText(path: string): string | null {
+  const fd = openSync(path, "r");
+  let tail: string;
+  try {
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
+    const buffer = Buffer.alloc(size - start);
+    readSync(fd, buffer, 0, buffer.length, start);
+    tail = buffer.toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+  const lines = tail.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let entry: {
+      type?: string;
+      message?: { content?: string | Array<{ type?: string; text?: string }> };
+    };
+    try {
+      entry = JSON.parse(lines[i]!) as typeof entry;
+    } catch {
+      continue;
+    }
+    if (entry.type !== "assistant") continue;
+    const content = entry.message?.content;
+    const text =
+      typeof content === "string"
+        ? content
+        : (content ?? [])
+            .filter((part) => part.type === "text" && part.text)
+            .map((part) => part.text)
+            .join("\n");
+    if (text.trim()) return text.trim();
+  }
+  return null;
+}
+
+/** Recognises this CLI's own hook entries, whichever name ran it. */
+const OWN_HOOK = /\b(interviewer|kim) hook\b/;
+
+interface HookHandler {
+  type?: string;
+  command?: string;
+  [key: string]: unknown;
+}
+interface HookGroup {
+  matcher?: string;
+  hooks?: HookHandler[];
+  [key: string]: unknown;
+}
+
+/**
+ * Adds (or removes) this CLI's hook for each event in a Claude Code
+ * settings file, next to whatever hooks are there. Other entries are never
+ * removed or reordered, and running it twice changes nothing.
+ */
+function editHooks(
+  file: string,
+  action: "install" | "uninstall",
+): { settings: string; changed: string[] } {
+  const settings = existsSync(file)
+    ? (JSON.parse(readFileSync(file, "utf8") || "{}") as Record<
+        string,
+        unknown
+      >)
+    : {};
+  const hooks = (settings.hooks ?? {}) as Record<string, HookGroup[]>;
+  const changed: string[] = [];
+  for (const event of Object.keys(HOOK_EVENTS)) {
+    const command = `interviewer hook ${event}`;
+    const groups = hooks[event] ?? [];
+    const own = groups
+      .flatMap((group) => group.hooks ?? [])
+      .filter((handler) => OWN_HOOK.test(handler.command ?? ""));
+    if (action === "install") {
+      if (own.some((handler) => handler.command === command)) continue;
+      // An older spelling of ours is updated in place.
+      if (own[0]) own[0].command = command;
+      else
+        groups.push({
+          hooks: [{ type: "command", command, timeout: 10 }],
+        });
+      hooks[event] = groups;
+      changed.push(event);
+    } else {
+      if (!own.length) continue;
+      const kept = groups
+        .map((group) => ({
+          ...group,
+          hooks: (group.hooks ?? []).filter(
+            (handler) => !OWN_HOOK.test(handler.command ?? ""),
+          ),
+        }))
+        .filter((group) => group.hooks.length);
+      if (kept.length) hooks[event] = kept;
+      else delete hooks[event];
+      changed.push(event);
+    }
+  }
+  if (!changed.length) return { settings: file, changed };
+  if (Object.keys(hooks).length) settings.hooks = hooks;
+  else delete settings.hooks;
+  // Write a sibling file and rename it, so a crash never leaves half a file.
+  mkdirSync(dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`);
+  renameSync(temporary, file);
+  return { settings: file, changed };
 }
 
 async function api(path: string, init?: RequestInit): Promise<unknown> {
@@ -1118,6 +1468,14 @@ Backlog (the project defaults to this repo's; --project <key> picks another):
   backlog script set --file <path|->   save the project's sync script; it runs here on sync
   backlog milestone set <name|sourceId|auto> | milestone add <name> [--due YYYY-MM-DD]
   backlog auto-write on|off   accept follow-ups into the source as they arrive
+Keep it moving (agent sessions; \`kim\` is the same binary):
+  ask --title <text> --json <questions|-> [--brief <text>] [--idle MS] [--timeout MS]
+    raise a request linked to this agent session, then wait like \`wait\` and print the batch
+  report [--status running|needs_you|idle|done] [--title T] [--brief B] [--pr <url>] [--follow-up <text>]...
+    the session comes from CLAUDE_CODE_SESSION_ID, or --session <id>
+  hook <SessionStart|UserPromptSubmit|Notification|Stop|SessionEnd>
+    reads Claude Code hook JSON on stdin and reports it; never fails, prints nothing
+  hooks install|uninstall [--settings <path>]   add or remove those hooks (default ~/.claude/settings.json)
 
 INTERVIEWER_URL points at another deployment, such as wrangler dev.
 `,

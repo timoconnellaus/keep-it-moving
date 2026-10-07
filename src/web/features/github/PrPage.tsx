@@ -1,3 +1,4 @@
+import { safeHref } from "../../../shared/url.js";
 import type { PrDetailResponse } from "../../../shared/github.js";
 import { checkTone, useKim } from "./api.js";
 import { DiffViewer } from "./Diff.js";
@@ -61,7 +62,7 @@ export function PrPage({
             {pr.headRef} → {pr.baseRef}
           </span>{" "}
           · {pr.author} · <Stats add={pr.additions} del={pr.deletions} /> ·{" "}
-          <a href={pr.url} target="_blank" rel="noreferrer">
+          <a href={safeHref(pr.url)} target="_blank" rel="noreferrer">
             GitHub ↗
           </a>
         </div>
@@ -89,7 +90,11 @@ export function PrPage({
                   {check.conclusion ?? check.status.replace("_", " ")}
                 </span>
                 {check.url && (
-                  <a href={check.url} target="_blank" rel="noreferrer">
+                  <a
+                    href={safeHref(check.url)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Details
                   </a>
                 )}

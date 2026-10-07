@@ -28,6 +28,22 @@ Question types are `text`, `single-choice`, `multiple-choice`, `yes-no`, and `nu
 
 For genuine decisions, set `default` to the answer you recommend, and use `recommendation` (Markdown) for the short reasoning. The browser pre-selects the default and offers one-click and bulk acceptance, so a good default saves the user time. A default is exactly one option for `single-choice`, one or more options for `multiple-choice`, `"Yes"`/`"No"` for `yes-no`, a number for `number`, or suggested text for `text`. Omit both when asking for facts only the user knows. An answer equal to the default means the user accepted it.
 
+## A quick request instead
+
+When you're blocked on a decision or something only the user can do, and a full interview is more than you need, raise a request with one command. It creates an interview linked to your Claude Code session (so it shows in the user's Keep it moving inbox with your brief), marks your session as needing them, and waits for the answers:
+
+```sh
+interviewer ask --title "Run the migration against prod D1?" \
+  --brief "The migration is written and tested locally. Prod has no backup from today." \
+  --json - <<'JSON'
+{"questions":[{"type":"single-choice","prompt":"Run it now?","options":["Back up first, then run","Run without a backup","Stop, I'll look myself"],"default":"Back up first, then run"}]}
+JSON
+```
+
+The brief says what you were doing, what's blocked and what you need, in two or three sentences. The URL goes to stderr; stdout gets one batch like `wait`'s, plus `interviewId`. If it times out before the user answers, run `interviewer wait <interviewId>` (in the background if you can). Everything else in this skill (adding questions, the plan, `session stop`) works on the request too.
+
+`interviewer report --status … --brief … --pr <url> --follow-up "…"` reports progress explicitly; the hooks from `interviewer hooks install` already report the routine changes.
+
 ## Workspace: plan, diagrams, mockups
 
 An interview exists to produce a plan, so build the plan alongside it where the user can see it:

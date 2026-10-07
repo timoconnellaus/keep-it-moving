@@ -1,3 +1,4 @@
+import { isWebUrl } from "./url.js";
 import { z } from "zod";
 
 export const backlogStatuses = [
@@ -30,7 +31,9 @@ export const BacklogItemInputSchema = z.object({
   sourceId: z.coerce.string().trim().min(1).max(200),
   title: z.string().trim().min(1).max(500),
   status: z.enum(backlogStatuses),
-  url: optional(z.string().trim().url().max(2000)),
+  url: optional(
+    z.string().trim().url().max(2000).refine(isWebUrl, "http(s) URLs only"),
+  ),
   /** The milestone's sourceId or name. */
   milestone: optional(z.coerce.string().trim().min(1).max(200)),
   /** Lower comes first: 0 is the most urgent. */
@@ -46,7 +49,9 @@ export const BacklogMilestoneInputSchema = z.object({
   sourceId: z.coerce.string().trim().min(1).max(200),
   name: z.string().trim().min(1).max(200),
   due: optional(IsoDate),
-  url: optional(z.string().trim().url().max(2000)),
+  url: optional(
+    z.string().trim().url().max(2000).refine(isWebUrl, "http(s) URLs only"),
+  ),
 });
 
 /** What a project's sync script prints on stdout, and what GitHub sync produces. */

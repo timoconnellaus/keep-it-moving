@@ -24,12 +24,14 @@ const matches = (session: SessionSummary, query: string) =>
 /**
  * The interview title as a menu of every interview, grouped by project.
  * A dot on the button says another interview is waiting on the user.
+ * Without a current interview (the Keep it moving shell) the button reads
+ * "Interviews".
  */
 export function Switcher({
   session,
   sessions,
 }: {
-  session: SessionView;
+  session: SessionView | null;
   sessions: SessionSummary[] | null;
 }) {
   const [open, setOpen] = useState(false);
@@ -37,7 +39,7 @@ export function Switcher({
   const [highlight, setHighlight] = useState(0);
   const root = useRef<HTMLDivElement | null>(null);
   const waiting = (sessions ?? []).filter(
-    (item) => item.id !== session.id && item.open > 0,
+    (item) => item.id !== session?.id && item.open > 0,
   ).length;
 
   const groups = useMemo(
@@ -76,7 +78,7 @@ export function Switcher({
     if (!target) return;
     const url = `/s/${target.token}`;
     if (newTab) window.open(url, "_blank", "noopener");
-    else if (target.id !== session.id) window.location.assign(url);
+    else if (target.id !== session?.id) window.location.assign(url);
     setOpen(false);
   };
 
@@ -90,12 +92,12 @@ export function Switcher({
         onClick={() => setOpen((value) => !value)}
         title="Switch interview (⌘K)"
       >
-        <ProjectChip project={session.project} size={24} />
+        {session && <ProjectChip project={session.project} size={24} />}
         <span className="switcher-titles">
-          {session.project && (
+          {session?.project && (
             <span className="switcher-project">{session.project.name}</span>
           )}
-          <h1>{session.title}</h1>
+          {session ? <h1>{session.title}</h1> : <span>Interviews</span>}
         </span>
         <span className="switcher-caret" aria-hidden="true">
           ▾
@@ -169,7 +171,9 @@ export function Switcher({
                       key={item.id}
                       href={`/s/${item.token}`}
                       className={`switcher-row ${index === highlight ? "highlighted" : ""} ${item.status === "stopped" ? "finished" : ""}`}
-                      aria-current={item.id === session.id ? "page" : undefined}
+                      aria-current={
+                        item.id === session?.id ? "page" : undefined
+                      }
                       onMouseEnter={() => setHighlight(index)}
                       onClick={(event) => {
                         if (event.metaKey || event.ctrlKey) return;
@@ -180,7 +184,7 @@ export function Switcher({
                       <span className="switcher-row-main">
                         <span className="switcher-row-title">
                           {item.title}
-                          {item.id === session.id && (
+                          {item.id === session?.id && (
                             <span className="this-tab"> · this tab</span>
                           )}
                         </span>
@@ -201,7 +205,7 @@ export function Switcher({
             <span>↵ open</span>
             <span>⌘↵ new tab</span>
             <span className="spacer" />
-            <a href="/">All interviews →</a>
+            <a href="/">Inbox →</a>
           </div>
         </div>
       )}

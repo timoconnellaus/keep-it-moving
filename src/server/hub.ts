@@ -116,12 +116,77 @@ export function createHub(options: HubOptions) {
     store,
     env: options.env ?? {},
     notify: () => void notify(),
-    changed: pingOverview,
+    changed: () => {
+      pingOverview();
+      scheduleInboxCheck();
+    },
   });
+  /** Oldest first; items that can wait (an idle agent) after the rest. */
   const inbox = () =>
     features
-      .flatMap((feature) => feature.inbox?.() ?? [])
-      .sort((a, b) => a.since.localeCompare(b.since));
+      .flatMap((feature) => {
+        try {
+          return feature.inbox?.() ?? [];
+        } catch (error) {
+          console.error(`inbox ${feature.name}`, error);
+          return [];
+        }
+      })
+      .sort(
+        (a, b) =>
+          Number(Boolean(a.later)) - Number(Boolean(b.later)) ||
+          a.since.localeCompare(b.since),
+      );
+
+  // Any feature's new inbox item pushes to Tim's devices once. Requests are
+  // left out: checkWaiting above already pushes when questions arrive.
+  options.sql.exec(
+    "CREATE TABLE IF NOT EXISTS kim_inbox_seen (id TEXT PRIMARY KEY, seen_at TEXT NOT NULL)",
+  );
+  const checkInbox = () => {
+    const items = inbox();
+    const seen = new Set(
+      options.sql
+        .all("SELECT id FROM kim_inbox_seen")
+        .map((row) => String(row.id)),
+    );
+    // The first check ever only records what is already there.
+    const seeding = !seen.has(SEEDED);
+    const fresh = items.filter((item) => !seen.has(item.id));
+    const time = new Date().toISOString();
+    options.sql.transaction(() => {
+      for (const id of seeding ? [SEEDED] : [])
+        options.sql.all(
+          "INSERT INTO kim_inbox_seen (id, seen_at) VALUES (?, ?)",
+          id,
+          time,
+        );
+      for (const item of fresh)
+        options.sql.all(
+          "INSERT INTO kim_inbox_seen (id, seen_at) VALUES (?, ?)",
+          item.id,
+          time,
+        );
+      // Forget items that went away, so one that comes back pushes again.
+      const current = new Set([SEEDED, ...items.map((item) => item.id)]);
+      for (const id of seen)
+        if (!current.has(id))
+          options.sql.all("DELETE FROM kim_inbox_seen WHERE id = ?", id);
+    });
+    if (!seeding && fresh.some((item) => item.kind !== "request"))
+      void notify();
+  };
+  let inboxCheck: ReturnType<typeof setTimeout> | null = null;
+  const scheduleInboxCheck = () => {
+    inboxCheck ??= setTimeout(() => {
+      inboxCheck = null;
+      try {
+        checkInbox();
+      } catch (error) {
+        console.error("inbox check", error);
+      }
+    }, PUSH_SETTLE_MS);
+  };
   /** Runs each feature's timer work; the Durable Object alarm calls it. */
   const tick = async (now = Date.now()) => {
     for (const feature of features)
@@ -130,6 +195,11 @@ export function createHub(options: HubOptions) {
       } catch (error) {
         console.error(`tick ${feature.name}`, error);
       }
+    try {
+      checkInbox();
+    } catch (error) {
+      console.error("inbox check", error);
+    }
   };
 
   store.subscribe((event) => {
@@ -142,7 +212,10 @@ export function createHub(options: HubOptions) {
       const watcher = watchers.get(event.sessionId);
       if (watcher?.write(event)) store.markDelivered(event.sessionId, event.id);
       broadcast(event.sessionId);
-      if (OVERVIEW_EVENTS.test(event.type)) pingOverview();
+      if (OVERVIEW_EVENTS.test(event.type)) {
+        pingOverview();
+        scheduleInboxCheck();
+      }
     });
   });
 
@@ -490,6 +563,8 @@ const HEARTBEAT_MS = 25_000;
 const OVERVIEW_PING_MS = 300;
 /** Agents add a batch of questions in a burst; notify once it has landed. */
 const PUSH_SETTLE_MS = 1_500;
+/** Marks kim_inbox_seen as seeded; never an inbox item id. */
+const SEEDED = "*seeded*";
 /** Events that change an interview's place in the switcher. */
 const OVERVIEW_EVENTS = /^(session|question\.(added|deleted)|answer)\./;
 

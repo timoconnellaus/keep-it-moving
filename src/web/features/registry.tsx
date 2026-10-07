@@ -8,6 +8,8 @@ import { PullRequests } from "./github/PullRequests.js";
 import { FollowUpsDetail, FollowUpsSection } from "./backlog/FollowUps.js";
 import { MilestoneSection } from "./backlog/Milestone.js";
 import { UpNextSection } from "./backlog/UpNext.js";
+import { NeedsYouDetail, RequestDetail } from "./sessions/details.js";
+import { SessionsSection } from "./sessions/SessionsSection.js";
 
 /** A section of the project page, in order. Each feature adds its own. */
 export interface ProjectSection {
@@ -15,6 +17,8 @@ export interface ProjectSection {
   title: string;
   /** "main" sections stack in the wide column, "side" in the narrow one. */
   column: "main" | "side";
+  /** The section draws its own heading, so the page leaves its title out. */
+  ownHeader?: boolean;
   Component: ComponentType<{ projectId: string }>;
 }
 
@@ -30,19 +34,34 @@ export const projectSections: ProjectSection[] = [
     id: "milestone",
     title: "Milestone",
     column: "main",
+    ownHeader: true,
     Component: MilestoneSection,
+  },
+  {
+    id: "sessions",
+    title: "Sessions",
+    column: "main",
+    Component: SessionsSection,
   },
   {
     id: "prs",
     title: "Pull requests",
     column: "main",
+    ownHeader: true,
     Component: PullRequests,
   },
-  { id: "up-next", title: "Up next", column: "side", Component: UpNextSection },
+  {
+    id: "up-next",
+    title: "Up next",
+    column: "side",
+    ownHeader: true,
+    Component: UpNextSection,
+  },
   {
     id: "follow-ups",
     title: "Follow-ups",
     column: "side",
+    ownHeader: true,
     Component: FollowUpsSection,
   },
   {
@@ -54,6 +73,8 @@ export const projectSections: ProjectSection[] = [
 ];
 
 export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {
+  request: RequestDetail,
+  needs_you: NeedsYouDetail,
   automation_down: AutomationDown,
   ci_failed: CiFailedDetail,
   prs_ready: PrsReadyDetail,

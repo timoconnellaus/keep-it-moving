@@ -86,7 +86,30 @@ Interviews from every agent session (local or cloud, Claude Code or Codex) are g
 
 The first interview from a remote creates its project, named from the repo and given the next free colour, which then stays the same everywhere. `interviewer project list`, `project rename <project> --name <name>` and `project color <project> --color <#hex>` manage them.
 
-In the browser, the interview title is a switcher (click it, or press ⌘K): every interview, grouped by project, with its branch, agent session, progress and whether it waits on you. A dot on the title counts the other interviews waiting on you, and updates live. The site root lists every interview the same way.
+In the browser, the interview title is a switcher (click it, or press ⌘K): every interview, grouped by project, with its branch, agent session, progress and whether it waits on you. A dot on the title counts the other interviews waiting on you, and updates live. The site root is the Keep it moving inbox (below), whose ⌘K switcher lists every interview the same way.
+
+## Keep it moving
+
+The site is becoming **Keep it moving** ([the spec](docs/keep-it-moving.md)): one place that shows what every project's agent sessions are doing and what needs you. The binary has a `kim` alias.
+
+```sh
+interviewer hooks install    # once per machine: Claude Code sessions report in
+```
+
+`hooks install` adds a `SessionStart`, `UserPromptSubmit`, `Notification`, `Stop` and `SessionEnd` hook to `~/.claude/settings.json` (or `--settings <path>`), next to the hooks already there; it is idempotent, and `hooks uninstall` removes only its own. Each runs `interviewer hook <event>`, which reads the hook's JSON and reports the session: running, needs you (a notification, with its message), idle (its turn ended, with the last assistant message as the brief) or done. It works out the project, branch and worktree from the session's directory, prints nothing, and always exits 0 within about 3 seconds, so it never holds Claude Code up.
+
+Agents can also report explicitly, and raise a request and wait for the answer in one command:
+
+```sh
+interviewer report --status idle --brief "Opened PR 16; tests pass" --pr <url> --follow-up "Add rate limiting"
+interviewer ask --title "Run the migration?" --brief "It's ready; prod has no backup from today" --json - <<'JSON'
+{"questions":[{"type":"single-choice","prompt":"Run it now?","options":["Back up first","Run now","Stop"],"default":"Back up first"}]}
+JSON
+```
+
+Both find the session from `CLAUDE_CODE_SESSION_ID` (or `--session`). `ask` creates an interview linked to the session, marks the session as needing you, prints the URL to stderr, then waits like `wait` and prints the batch with its `interviewId`.
+
+In the browser, `/` is the inbox: requests with open questions and sessions waiting on you, oldest first. A request's questions are answered right there. **Done → next** and **Snooze** (an hour) hide an item in that browser. The rail on the left lists each project with what needs you and what's running; `/p/<project>` shows its sessions and their requests. Push notifications fire for each new inbox item.
 
 ## Automations and machines
 
@@ -182,7 +205,7 @@ Each command uses the current repo's project; `--project <key>` picks another. A
 
 ## On your phone
 
-The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's Access sign-in. It opens on the list of interviews.
+The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's Access sign-in. It opens on the inbox.
 
 **Notify me** on that page turns on push notifications for the device. When an interview with nothing open gains questions, the Worker pushes to every subscribed device, and the notification names the interview (for example "FrockBot · Checkout flow, 3 questions waiting") and opens it when tapped. **Send a test** checks the setup.
 

@@ -1,3 +1,4 @@
+import { safeHref } from "../../../shared/url.js";
 import { useState } from "react";
 import type {
   BacklogItemView,
@@ -91,7 +92,7 @@ export function UpNextSection({ projectId }: { projectId: string }) {
               <span className="kim-backlog-id">{itemId(item)}</span>
               <span className="kim-backlog-title">
                 {item.url ? (
-                  <a href={item.url} target="_blank" rel="noreferrer">
+                  <a href={safeHref(item.url)} target="_blank" rel="noreferrer">
                     {item.title}
                   </a>
                 ) : (

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type { MilestoneView } from "../../../shared/backlog.js";
+import type { AgentSessionView } from "../../../shared/sessions.js";
+import { safeHref } from "../../../shared/url.js";
 import { ago, shortDate, useProjectBacklog } from "./api.js";
 
 /** The newest agent-session brief for a project: "where it's up to". */
@@ -10,16 +12,27 @@ export interface LatestBrief {
   at: string;
 }
 
-/**
- * INTEGRATION: no route serves the newest agent-session brief yet. The
- * foundation's agent sessions own it; replace this with a fetch of that
- * route. Until then the milestone shows alone.
- */
+/** The newest brief any of the project's agent sessions reported. */
 export async function loadLatestBrief(
   projectId: string,
 ): Promise<LatestBrief | null> {
-  void projectId;
-  return null;
+  const response = await fetch(
+    `/api/browser/kim/projects/${encodeURIComponent(projectId)}/sessions`,
+  ).catch(() => null);
+  if (!response?.ok) return null;
+  const { sessions } = (await response.json()) as {
+    sessions?: AgentSessionView[];
+  };
+  const latest = (sessions ?? [])
+    .filter((session) => session.brief)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  return latest
+    ? {
+        text: latest.brief!,
+        basedOn: `session "${latest.title ?? "Untitled"}"`,
+        at: latest.updatedAt,
+      }
+    : null;
 }
 
 function useLatestBrief(projectId: string, given?: LatestBrief | null) {
@@ -91,7 +104,7 @@ export function MilestoneSection({
             {milestone.url ? (
               <a
                 className="kim-backlog-milestone-name"
-                href={milestone.url}
+                href={safeHref(milestone.url)}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -108,7 +121,7 @@ export function MilestoneSection({
           <>
             <b className="kim-backlog-milestone-name">No milestone</b>
             <span className="kim-backlog-muted">
-              {view.counts.total
+              {view.counts?.total
                 ? "Nothing in the backlog has a milestone yet"
                 : "Set one with `interviewer backlog milestone add <name>`"}
             </span>

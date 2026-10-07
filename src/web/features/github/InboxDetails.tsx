@@ -1,3 +1,4 @@
+import { safeHref } from "../../../shared/url.js";
 import type { PrDetailResponse } from "../../../shared/github.js";
 import type { InboxItem } from "../../../shared/inbox.js";
 import { checkTone, prHref, useKim } from "./api.js";
@@ -74,7 +75,7 @@ export function CiFailedDetail({
           Open PR {data.number}
         </Link>
         <a
-          href={data.url}
+          href={safeHref(data.url)}
           target="_blank"
           rel="noreferrer"
           className="kim-github-button"

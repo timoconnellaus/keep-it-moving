@@ -8,7 +8,8 @@
     "node": ">=22.13"
   },
   "bin": {
-    "interviewer": "dist/cli.js"
+    "interviewer": "dist/cli.js",
+    "kim": "dist/cli.js"
   },
   "files": [
     "dist",
