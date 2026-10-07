@@ -2,6 +2,9 @@ import type { ComponentType } from "react";
 import type { InboxItem, InboxKind } from "../../shared/inbox.js";
 import { AutomationDown } from "./automations/AutomationDown.js";
 import { AutomationsSection } from "./automations/AutomationsSection.js";
+import { CiFailedDetail, PrsReadyDetail } from "./github/InboxDetails.js";
+import { PrPage } from "./github/PrPage.js";
+import { PullRequests } from "./github/PullRequests.js";
 
 /** A section of the project page, in order. Each feature adds its own. */
 export interface ProjectSection {
@@ -26,10 +29,18 @@ export const projectSections: ProjectSection[] = [
     column: "side",
     Component: AutomationsSection,
   },
+  {
+    id: "prs",
+    title: "Pull requests",
+    column: "main",
+    Component: PullRequests,
+  },
 ];
 
 export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {
   automation_down: AutomationDown,
+  ci_failed: CiFailedDetail,
+  prs_ready: PrsReadyDetail,
 };
 
 /** Extra full pages under /p/<projectId>/…, matched in order. */
@@ -39,4 +50,6 @@ export interface ProjectRoute {
   Component: ComponentType<{ projectId: string; match: RegExpMatchArray }>;
 }
 
-export const projectRoutes: ProjectRoute[] = [];
+export const projectRoutes: ProjectRoute[] = [
+  { pattern: /^pr\/(\d+)$/, Component: PrPage },
+];

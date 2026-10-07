@@ -1403,3 +1403,406 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+/* Keep it moving: pull requests, CI and diffs (src/web/features/github). */
+.kim-github-section,
+.kim-github-page,
+.kim-github-inbox {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  color: #15181a;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.kim-github-section {
+  background: #ffffff;
+  border: 1px solid #e1e4e3;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.kim-github-section a,
+.kim-github-page a,
+.kim-github-inbox a {
+  color: #0f6b62;
+}
+.kim-github-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.kim-github-head b {
+  font-weight: 600;
+}
+.kim-github-muted {
+  font-size: 12px;
+  color: #5f676d;
+}
+.kim-github-error {
+  font-size: 13px;
+  color: #b42318;
+}
+.kim-github-mono {
+  font-family: "IBM Plex Mono", var(--mono);
+  font-size: 12px;
+}
+.kim-github-sync {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 4px 10px;
+  min-height: 32px;
+  border: 1px solid #d5dad8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #15181a;
+  cursor: pointer;
+}
+.kim-github-sync:disabled {
+  color: #5f676d;
+  cursor: default;
+}
+.kim-github-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kim-github-section a.kim-github-row {
+  display: flex;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid #eef0ef;
+  color: inherit;
+  text-decoration: none;
+}
+.kim-github-row:hover .kim-github-title {
+  color: #0f6b62;
+}
+.kim-github-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 2px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.kim-github-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.kim-github-title {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.kim-github-meta {
+  font-size: 12px;
+  color: #5f676d;
+}
+.kim-github-end {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.kim-github-state {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.kim-github-green {
+  color: #17803d;
+}
+.kim-github-red {
+  color: #b42318;
+}
+.kim-github-pending {
+  color: #a15c07;
+}
+.kim-github-blue {
+  color: #1d4ed8;
+}
+.kim-github-purple {
+  color: #6d28d9;
+}
+.kim-github-grey {
+  color: #5f676d;
+}
+.kim-github-dots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px;
+  max-width: 120px;
+}
+.kim-github-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.kim-github-bg-green {
+  background: #17803d;
+}
+.kim-github-bg-red {
+  background: #b42318;
+}
+.kim-github-bg-pending {
+  background: #e3a008;
+}
+.kim-github-bg-grey {
+  background: #b9c0c4;
+}
+.kim-github-stats {
+  font-family: "IBM Plex Mono", var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.kim-github-add {
+  color: #17803d;
+}
+.kim-github-del {
+  color: #b42318;
+}
+.kim-github-log {
+  font-family: "IBM Plex Mono", var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  background: #15181a;
+  color: #e8ecea;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0 0;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.kim-github-setup p {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+.kim-github-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.kim-github-page a.kim-github-back {
+  font-size: 13px;
+  text-decoration: none;
+}
+.kim-github-pr-head h1 {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 600;
+}
+.kim-github-pr-head h1 .kim-github-icon {
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+}
+.kim-github-check {
+  border-top: 1px solid #eef0ef;
+  padding: 8px 0;
+}
+.kim-github-check-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.kim-github-rows > .kim-github-check-row {
+  border-top: 1px solid #eef0ef;
+  padding: 8px 0;
+}
+.kim-github-diff {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.kim-github-tree {
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  font-size: 12px;
+}
+.kim-github-dir {
+  font-family: "IBM Plex Mono", var(--mono);
+  color: #5f676d;
+  padding: 6px 4px 2px;
+  overflow-wrap: anywhere;
+}
+.kim-github-leaf {
+  display: flex;
+  width: 100%;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 4px 3px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  text-align: left;
+  font-family: "IBM Plex Mono", var(--mono);
+  font-size: 12px;
+  color: #15181a;
+  cursor: pointer;
+}
+.kim-github-leaf:hover {
+  background: #f3f7f6;
+}
+.kim-github-leaf-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kim-github-files {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.kim-github-file {
+  border: 1px solid #e1e4e3;
+  border-radius: 8px;
+  overflow: hidden;
+  scroll-margin-top: 12px;
+}
+.kim-github-file-head {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 0;
+  background: #f6f7f6;
+  text-align: left;
+  color: #15181a;
+  cursor: pointer;
+}
+.kim-github-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kim-github-chevron {
+  width: 12px;
+  color: #5f676d;
+}
+.kim-github-pad {
+  padding: 8px 10px;
+  margin: 0;
+}
+.kim-github-lines {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-family: "IBM Plex Mono", var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.kim-github-lines tbody {
+  display: table;
+  min-width: 100%;
+}
+.kim-github-no {
+  width: 1%;
+  min-width: 36px;
+  padding: 0 6px;
+  text-align: right;
+  color: #9aa2a6;
+  user-select: none;
+  vertical-align: top;
+}
+.kim-github-code {
+  width: 100%;
+  padding: 0 10px 0 4px;
+  white-space: pre;
+}
+.kim-github-add > td {
+  background: #e7f4ec;
+  color: #15181a;
+}
+.kim-github-add > .kim-github-no {
+  background: #d2ecdb;
+}
+.kim-github-del > td {
+  background: #fbeae8;
+  color: #15181a;
+}
+.kim-github-del > .kim-github-no {
+  background: #f5d5d1;
+}
+.kim-github-note > td,
+.kim-github-hunk > td {
+  color: #5f676d;
+}
+.kim-github-hunk > td {
+  background: #eef3f8;
+  padding: 2px 10px;
+}
+.kim-github-inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 760px;
+}
+.kim-github-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.kim-github-chip {
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #eef0ef;
+  color: #5f676d;
+}
+.kim-github-chip-green {
+  background: #e7f4ec;
+  color: #17803d;
+}
+.kim-github-chip-red {
+  background: #fbeae8;
+  color: #b42318;
+}
+.kim-github-chip-pending {
+  background: #fdf3e1;
+  color: #a15c07;
+}
+.kim-github-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.kim-github-inbox a.kim-github-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid #d5dad8;
+  border-radius: 8px;
+  color: #15181a;
+  text-decoration: none;
+}
+@media (max-width: 760px) {
+  .kim-github-diff {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kim-github-tree {
+    position: static;
+    max-height: 240px;
+    border: 1px solid #e1e4e3;
+    border-radius: 8px;
+    padding: 4px;
+  }
+}
