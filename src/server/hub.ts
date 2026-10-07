@@ -754,7 +754,8 @@ const ID = "[^/]+";
 /**
  * The routes an agent key may call; anything else, including routes added
  * later, is refused. A key reports, raises and edits requests, waits on
- * them, beats, and syncs and reads the backlog. Answering, deleting
+ * them, beats, syncs and reads the backlog, and reads a project's context
+ * and writes its summary. Answering, deleting
  * interviews, reconfiguring projects and backlogs, and keys stay with a
  * signed-in CLI.
  */
@@ -773,12 +774,12 @@ const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
   [
     "GET",
     new RegExp(
-      `^/api/sessions/kim/(inbox|automations|machines|prs|backlog|sessions/${ID})$`,
+      `^/api/sessions/kim/(inbox|automations|machines|prs|backlog|projects/context|sessions/${ID})$`,
     ),
   ],
   [
     "POST",
-    /^\/api\/sessions\/kim\/(report|machines\/beat|heartbeat|followups|backlog\/(sync|items|error))$/,
+    /^\/api\/sessions\/kim\/(report|machines\/beat|heartbeat|followups|projects\/summary|backlog\/(sync|items|error))$/,
   ],
 ];
 

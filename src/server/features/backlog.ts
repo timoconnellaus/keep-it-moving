@@ -32,6 +32,8 @@ import type { Feature, FeatureContext } from "./types.js";
 const SYNC_INTERVAL_MS = 15 * 60 * 1000;
 /** The project page lists this many items under "Up next". */
 const UP_NEXT_LIMIT = 20;
+/** A project's summary context lists this many todo items. */
+const CONTEXT_UP_NEXT = 10;
 const SCRIPT_LIMIT = 200_000;
 
 const now = () => new Date().toISOString();
@@ -773,12 +775,51 @@ export function backlogFeature(
     if (due) await syncGithub(mapProject(due)).catch(() => undefined);
   };
 
+  /** The milestone, what's in flight and next, and open follow-ups. */
+  const projectContext = (project: ProjectRow) => {
+    const settings = settingsFor(project);
+    const open = items(project.id, true).map((item) => ({
+      sourceId: item.sourceId,
+      title: item.title,
+      url: item.url,
+      milestone: item.milestone,
+      assignee: item.assignee,
+      status: item.status,
+    }));
+    return {
+      milestone: currentMilestone(project, settings),
+      backlog: {
+        source: settings.source,
+        syncedAt: settings.syncedAt,
+        syncError: settings.syncError,
+        counts: counts(project.id),
+      },
+      inProgress: open.filter((item) => item.status === "in_progress"),
+      upNext: open
+        .filter((item) => item.status === "todo")
+        .slice(0, CONTEXT_UP_NEXT),
+      followUps: sql
+        .all(
+          "SELECT * FROM follow_ups WHERE project_id = ? AND state = 'open' ORDER BY created_at, rowid",
+          project.id,
+        )
+        .map(mapFollowUp)
+        .map(({ id, text, agentSessionId, createdAt }) => ({
+          id,
+          text,
+          agentSessionId,
+          createdAt,
+        })),
+    };
+  };
+
   return {
     name: "backlog",
     agentRoutes,
     browserRoutes,
     inbox,
     projectStats,
+    projectContext,
     tick,
   };
 }

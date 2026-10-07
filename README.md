@@ -203,6 +203,18 @@ kim backlog show
 
 Each command uses the current repo's project; `--project <key>` picks another. Agents report follow-ups with `kim report --follow-up "…"`; they reach the inbox as one item per project, where **To backlog** adds them to the source (a GitHub issue, or a local item for other sources), **Start** copies a `claude "…"` command, and ✕ dismisses them.
 
+## Where it's up to
+
+Under the milestone, the project page shows "where it's up to": two to five sentences on what's done, what's in flight, what's blocked or waiting on you, and what's next. The server calls no model. Agents, which are already Claude, write the summary and the workbench stores it:
+
+```sh
+kim project context                      # one JSON: milestone, in progress, up next, follow-ups,
+                                         # the last week's sessions, open PRs, automations, previous summary
+kim project summary --text "…"           # or --file <path|->; records the calling session as the writer
+```
+
+The skill asks agents to do this after a meaningful chunk of work. A scheduled routine can run it daily to keep it fresh. Every summary is kept, and the page shows the newest one, with the session that wrote it and how long ago. It's marked out of date once it's more than a day old and sessions or PRs have moved since. Until a project has a summary, the page shows its newest session brief and labels it "latest session brief". Agent keys can call both commands, so cloud sessions can write summaries too.
+
 ## Agent keys (cloud sessions)
 
 A cloud session can't run the browser sign-in, so it authenticates with an agent key instead: long-lived, revocable, one per project's cloud environment.

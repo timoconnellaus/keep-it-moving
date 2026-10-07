@@ -466,7 +466,39 @@ async function projectCommand(action: string | undefined, args: string[]) {
       }),
     );
   }
+  if (action === "context")
+    return output(
+      await api(
+        `/api/sessions/kim/projects/context?project=${encodeURIComponent(backlogProject(args))}`,
+      ),
+    );
+  if (action === "summary") return output(await saveSummary(args));
   throw new Error(`Unknown project action: ${action ?? ""}`);
+}
+
+/**
+ * `project summary --text "…" | --file <path|->`: saves where the project
+ * is up to, written by this agent session when there is one.
+ */
+async function saveSummary(args: string[]): Promise<unknown> {
+  const file = flag(args, "--file");
+  let text = flag(args, "--text");
+  if (file === "-") {
+    text = "";
+    for await (const chunk of process.stdin) text += chunk;
+  } else if (file) text = readFileSync(file, "utf8");
+  if (!text?.trim())
+    throw new Error('--text "…" or --file <path|-> is required');
+  const { id, remoteId } = sessionKey(args);
+  return api("/api/sessions/kim/projects/summary", {
+    method: "POST",
+    body: JSON.stringify({
+      project: backlogProject(args),
+      text,
+      ...(id || remoteId ? { agentSessionId: id ?? remoteId } : {}),
+      ...(remoteId ? { remoteId } : {}),
+    }),
+  });
 }
 
 /**
@@ -1685,6 +1717,8 @@ Commands:
   session create --title <text> [--open-stage] [--agent-session <your session title>] [--project <name>]
     the workspace column starts closed unless --open-stage; the project comes from the git remote
   project list | rename <project> --name <name> | color <project> --color <#hex>
+  project context [--project <key>]   what an agent reads to write where the project is up to
+  project summary --text "…" | --file <path|-> [--project <key>]   save where it's up to (2–5 sentences)
   pr list [--project <key>]   open PRs with CI and readiness; defaults to this repo's remote
   session list [--all]|show <id>|stop <id>|resume <id>|delete <id>
   question add <session> --prompt <text> [--type <type>] [--option <text>] [--default <text>] [--recommendation <text>] [--artifact <id>]

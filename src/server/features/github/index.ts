@@ -455,6 +455,28 @@ export function githubFeature(
   return {
     name: "github",
 
+    /** Open PRs as last synced, with CI and whether each is ready. */
+    projectContext(project) {
+      const sync = lastSync(project.id);
+      return {
+        prs: openRows(project.id).map((pr) => ({
+          number: pr.number,
+          title: pr.title,
+          url: pr.url,
+          branch: pr.headRef,
+          author: pr.author,
+          draft: pr.draft,
+          ci: pr.ci,
+          failing: pr.failing,
+          ready: pr.ready,
+          updatedAt: pr.updatedAt,
+        })),
+        prsSyncedAt: sync
+          ? new Date(Number(sync.synced_at)).toISOString()
+          : null,
+      };
+    },
+
     agentRoutes(app: Hono) {
       // The CLI's `pr list`: one project's open PRs, or every project's.
       app.get("/prs", (c) => {

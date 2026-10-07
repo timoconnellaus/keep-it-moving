@@ -3,6 +3,13 @@ import type { InboxItem, ProjectStats } from "../../shared/inbox.js";
 import type { Sql } from "../sql.js";
 import type { InterviewStore } from "../store.js";
 
+/** A project as features pass it around. */
+export interface ProjectRef {
+  id: string;
+  key: string;
+  name: string;
+}
+
 export interface FeatureContext {
   sql: Sql;
   store: InterviewStore;
@@ -34,6 +41,11 @@ export interface Feature {
   inbox?: () => InboxItem[];
   /** This feature's numbers for the project rail, keyed by project id. */
   projectStats?: () => Record<string, ProjectStats>;
+  /**
+   * This feature's part of what an agent reads to write a project's
+   * summary (`kim project context`): a few top-level keys of plain data.
+   */
+  projectContext?: (project: ProjectRef) => Record<string, unknown>;
   /** Runs about once a minute from the Durable Object alarm. */
   tick?: (now: number) => Promise<void> | void;
 }
