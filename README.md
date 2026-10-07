@@ -233,7 +233,7 @@ It creates an agent key named "<project name> cloud" (`--key-name` picks another
 
    ```bash
    #!/bin/bash
-   npm install -g https://interviewer.zerobsai.com/cli.tgz || true
+   curl -fsS -H "Authorization: Bearer $INTERVIEWER_TOKEN" -o /tmp/kim-cli.tgz https://interviewer.zerobsai.com/api/sessions/kim/cli.tgz && npm install -g /tmp/kim-cli.tgz || true
    kim hooks install || true
    exit 0
    ```
@@ -249,7 +249,7 @@ It adds the same five hooks to the repo's `.claude/settings.json`, merged beside
 
 In a cloud session, the CLI also sends `CLAUDE_CODE_REMOTE_SESSION_ID` (`cse_…`) with each hook's report. The session then links to its page on claude.ai (**Open session** on the inbox item and the project page), and `report` and `ask`, which don't get Claude Code's session id there, find the session by that remote id. Until a hook has reported, they file it under the remote id; the hooks' first report adopts it.
 
-The CLI package is public at `/cli.tgz`; it holds no secrets. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. The Worker serves it without the Access check, but Cloudflare Access itself sits in front of the Worker: add `/cli.tgz` to the Access bypass app, then check that `curl -fsSI https://interviewer.zerobsai.com/cli.tgz` answers 200 without a sign-in.
+The CLI package is served behind the agent API at `/api/sessions/kim/cli.tgz`, so the setup script fetches it with the environment's `INTERVIEWER_TOKEN` and nothing new sits outside Cloudflare Access. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. The docs don't say whether a setup script sees the environment's variables; if `kim` is missing in a cloud session, that's why, and the fallback is making `/cli.tgz` public through the Access bypass app.
 
 ## On your phone
 
@@ -333,7 +333,7 @@ browser ──HTTPS/WSS (Access)── Worker ── InterviewHub Durable Object
 - **Hub router and store** (`src/server`): the HTTP API (Hono) and the store, written against a small SQL interface so tests run them on `node:sqlite`.
 - **CLI** (`src/cli.ts`): a thin client. `wait` chains 60 s requests with `partial=1` to stay under Cloudflare's 100 s idle cutoff; `attach` filters out the heartbeat lines that keep its stream alive.
 
-Cloudflare Access has two apps: one for the whole host, allowing only the owner, and a bypass for `/api/sessions`, `/token`, `/register` and `/.well-known`, where OAuth applies instead, and for `/cli.tgz`, which cloud setup scripts install without a sign-in. `ACCESS_AUD` in `wrangler.jsonc` must hold the first app's audience tag.
+Cloudflare Access has two apps: one for the whole host, allowing only the owner, and a bypass for `/api/sessions`, `/token`, `/register` and `/.well-known`, where OAuth applies instead. `ACCESS_AUD` in `wrangler.jsonc` must hold the first app's audience tag.
 
 ## Verification
 

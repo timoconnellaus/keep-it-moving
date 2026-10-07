@@ -8,6 +8,9 @@ export { InterviewHub } from "./hub.js";
 const PUBLIC_FILES =
   /^\/(assets\/|icons\/|manifest\.webmanifest$|sw\.js$|cli\.tgz$)/;
 
+/** Where an agent key downloads the CLI package. */
+const CLI_PACKAGE_PATH = "/api/sessions/kim/cli.tgz";
+
 const hub = (env: Env) => env.HUB.get(env.HUB.idFromName("interviews"));
 
 const page = (status: number, message: string) =>
@@ -24,6 +27,10 @@ const agentApi: ExportedHandler<Env> = {
     ).props;
     if (!isAllowed(props?.email, env))
       return Response.json({ error: "Not allowed" }, { status: 403 });
+    // The CLI package, for a cloud setup script holding the environment's
+    // agent key: behind the token, so nothing new is public past Access.
+    if (new URL(request.url).pathname === CLI_PACKAGE_PATH)
+      return env.ASSETS.fetch(new Request(new URL("/cli.tgz", request.url)));
     // Tell the hub which requests a key made; a client can't claim either way.
     const forwarded = new Request(request);
     forwarded.headers.delete(VIA_KEY_HEADER);

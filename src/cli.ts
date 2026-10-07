@@ -1336,8 +1336,11 @@ async function keyCommand(action: string | undefined, args: string[]) {
   throw new Error(`Unknown key action: ${action ?? ""}`);
 }
 
-/** The CLI as an npm-installable tarball, served publicly by the Worker. */
-const cliPackageUrl = () => `${defaultBase}/cli.tgz`;
+/**
+ * The CLI as an npm-installable tarball, behind the agent API so the
+ * environment's key fetches it and nothing extra sits outside Access.
+ */
+const cliPackageUrl = () => `${defaultBase}/api/sessions/kim/cli.tgz`;
 
 /**
  * `cloud setup`: what a project's claude.ai cloud environment needs, ready
@@ -1387,7 +1390,8 @@ async function cloudCommand(action: string | undefined, args: string[]) {
   const setupScript = [
     "#!/bin/bash",
     "# Keep it moving. Nothing here can stop the session from starting.",
-    `npm install -g ${cliPackageUrl()} || true`,
+    "# The key is the environment's INTERVIEWER_TOKEN variable.",
+    `curl -fsS -H "Authorization: Bearer $INTERVIEWER_TOKEN" -o /tmp/kim-cli.tgz ${cliPackageUrl()} && npm install -g /tmp/kim-cli.tgz || true`,
     "# Experimental: user-level hooks in the VM (/root/.claude/settings.json).",
     "# Cloud sessions may not read them; see the per-repo fallback.",
     "kim hooks install || true",

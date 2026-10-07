@@ -502,7 +502,10 @@ describe("cloud setup", () => {
     expect(stdout).toContain("Level: Custom");
     expect(stdout).toContain(`Allowed domains: ${host}`);
     expect(stdout).toContain(`INTERVIEWER_URL=${address}`);
-    expect(stdout).toContain(`npm install -g ${address}/cli.tgz || true`);
+    expect(stdout).toContain(
+      `-o /tmp/kim-cli.tgz ${address}/api/sessions/kim/cli.tgz && npm install -g /tmp/kim-cli.tgz || true`,
+    );
+    expect(stdout).toContain('"Authorization: Bearer $INTERVIEWER_TOKEN"');
     expect(stdout).toContain("kim hooks install || true");
     expect(stdout).toContain("kim hooks install --project");
     expect(stdout).toContain("kim key revoke 'Frockbot cloud'");
