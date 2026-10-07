@@ -11,9 +11,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { homedir, tmpdir } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import envPaths from "env-paths";
+import { parseDuration } from "./shared/automations.js";
 import { normalizeRemote } from "./shared/remote.js";
 
 const defaultBase = (
@@ -32,6 +33,8 @@ async function main(args: string[]): Promise<void> {
   if (group === "artifact") return artifactCommand(action, rest);
   if (group === "stage") return stageCommand(action, rest);
   if (group === "project") return projectCommand(action, rest);
+  if (group === "heartbeat" || group === "automation")
+    return automationsCommand(group, action, rest);
   if (group === "plan")
     return planCommand(
       [action, ...rest].filter((value): value is string => Boolean(value)),
@@ -493,6 +496,78 @@ async function waitForBatch(args: string[]) {
   }
 }
 
+/** This repo's project key, normalised the same way as detectOrigin's. */
+function currentProjectKey(): string | undefined {
+  const remote = git("remote", "get-url", "origin");
+  if (remote) return normalizeRemote(remote);
+  const common = git("rev-parse", "--path-format=absolute", "--git-common-dir");
+  return common
+    ? `local/${basename(dirname(common)).toLowerCase()}`
+    : undefined;
+}
+
+/** A heartbeat gives up rather than hold up the loop that sends it. */
+const HEARTBEAT_TIMEOUT_MS = 10_000;
+
+/**
+ * `heartbeat <name>` registers an automation and checks in, and beats this
+ * machine too; a loop runs it once per iteration. With --quiet it never
+ * fails the caller: no output, exit 0. `automation list|remove` manage them.
+ */
+async function automationsCommand(
+  group: string,
+  action: string | undefined,
+  rest: string[],
+) {
+  if (group === "heartbeat") {
+    const args = [action, ...rest].filter(
+      (value): value is string => value !== undefined && value !== "--quiet",
+    );
+    const quiet = rest.includes("--quiet") || action === "--quiet";
+    try {
+      const project = flag(args, "--project") ?? currentProjectKey();
+      if (!project)
+        throw new Error("Not in a git repo; pass --project <key> to heartbeat");
+      const result = await api("/api/sessions/kim/heartbeat", {
+        method: "POST",
+        signal: AbortSignal.timeout(HEARTBEAT_TIMEOUT_MS),
+        body: JSON.stringify({
+          project,
+          name: positional(args, 0),
+          every: parseDuration(flag(args, "--every") ?? "5m"),
+          command: flag(args, "--command"),
+          status: flag(args, "--status"),
+          machine: hostname(),
+          platform: process.platform,
+        }),
+      });
+      if (!quiet) output(result);
+    } catch (error) {
+      if (!quiet) throw error;
+    }
+    return;
+  }
+  if (action === "list") {
+    // --project, else this repo's project unless --all.
+    const project =
+      flag(rest, "--project") ??
+      (rest.includes("--all") ? undefined : currentProjectKey());
+    return output(
+      await api(
+        `/api/sessions/kim/automations${project ? `?project=${encodeURIComponent(project)}` : ""}`,
+      ),
+    );
+  }
+  if (action === "remove")
+    return output(
+      await api(
+        `/api/sessions/kim/automations/${encodeURIComponent(positional(rest, 0))}`,
+        { method: "DELETE" },
+      ),
+    );
+  throw new Error(`Unknown automation action: ${action ?? ""}`);
+}
+
 async function api(path: string, init?: RequestInit): Promise<unknown> {
   const response = await authorizedFetch(path, init);
   if (!response.ok) throw new Error(await errorMessage(response));
@@ -820,6 +895,13 @@ Commands:
   artifact show <session> <artifact|none>   choose what the workspace shows
   artifact delete <session> <artifact>
   stage open|close <session>   show or hide the workspace column
+
+Keep it moving:
+  heartbeat <name> [--every 5m] [--project <key>] [--command "/loop /babysitter"] [--status <text>] [--quiet]
+    register an automation and check in (run once per loop iteration); it's down after 2 missed
+    check-ins. The project defaults to this repo; --quiet never fails the caller
+  automation list [--project <key>] [--all]   this repo's automations by default
+  automation remove <id>
 
 INTERVIEWER_URL points at another deployment, such as wrangler dev.
 `,

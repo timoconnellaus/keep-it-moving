@@ -88,6 +88,18 @@ The first interview from a remote creates its project, named from the repo and g
 
 In the browser, the interview title is a switcher (click it, or press ⌘K): every interview, grouped by project, with its branch, agent session, progress and whether it waits on you. A dot on the title counts the other interviews waiting on you, and updates live. The site root lists every interview the same way.
 
+## Automations and machines
+
+A long-running loop, such as a project's `/loop /babysitter`, registers itself and checks in once per iteration:
+
+```sh
+interviewer heartbeat babysitter --every 5m --command "/loop /babysitter" --status "merged #15; 2 queued" --quiet
+```
+
+The first beat registers the automation under the current repo's project (the same key `session create` detects; `--project <key>` overrides it), and each beat records the time, this machine's hostname and an optional `--status` line. `--every` takes `30s`, `5m`, `1h`, `1d` or a number of seconds, and defaults to 5 minutes. With `--quiet` the command prints nothing and always exits 0, so a network blip never breaks the loop. Each heartbeat also counts as the machine checking in.
+
+Once a minute the Worker's alarm marks an automation **down** when it has missed two check-ins (more than twice its interval since the last beat). A down automation shows in the inbox with its expected interval, last beat, last status and whether its machine is still alive (seen in the last 10 minutes): if the machine is alive, the loop itself stopped and needs restarting. The next beat brings it back. The project page lists each project's automations and machines; `interviewer automation list [--project <key>|--all]` and `automation remove <id>` do the same from the CLI, and the page can remove a stale one.
+
 ## On your phone
 
 The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's Access sign-in. It opens on the list of interviews.
