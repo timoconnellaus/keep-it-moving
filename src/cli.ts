@@ -9,10 +9,13 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
@@ -20,7 +23,7 @@ import { homedir, hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import envPaths from "env-paths";
 import { parseDuration } from "./shared/automations.js";
-import { normalizeRemote } from "./shared/remote.js";
+import { normalizeRemote, projectName } from "./shared/remote.js";
 
 const defaultBase = (
   process.env.INTERVIEWER_URL ?? "https://interviewer.zerobsai.com"
@@ -43,6 +46,7 @@ async function main(args: string[]): Promise<void> {
   if (group === "pr") return prCommand(action, rest);
   if (group === "backlog") return backlogCommand(action, rest);
   if (group === "key") return keyCommand(action, rest);
+  if (group === "cloud") return cloudCommand(action, rest);
   if (["hook", "hooks", "report", "ask"].includes(group!))
     return agentSessionCommand(group!, action, rest);
   if (group === "plan")
@@ -810,6 +814,7 @@ async function agentSessionCommand(
   if (group === "hooks") {
     if (action !== "install" && action !== "uninstall")
       throw new Error(`Unknown hooks action: ${action ?? ""}`);
+    if (args.includes("--project")) return projectHooks(action);
     const file =
       flag(args, "--settings") ?? join(homedir(), ".claude", "settings.json");
     return output(editHooks(file, action));
@@ -825,6 +830,27 @@ async function agentSessionCommand(
 function agentSessionId(args: string[]): string | undefined {
   return flag(args, "--session") ?? process.env.CLAUDE_CODE_SESSION_ID;
 }
+
+/**
+ * A cloud session's id on claude.ai (cse_…). Its hooks report it beside
+ * their own session id, so `report` and `ask` can find the session by it
+ * when Claude Code's session id isn't in the environment.
+ */
+function remoteSessionId(): string | undefined {
+  return process.env.CLAUDE_CODE_REMOTE === "true"
+    ? process.env.CLAUDE_CODE_REMOTE_SESSION_ID || undefined
+    : undefined;
+}
+
+/** The session fields a report sends: the id, the remote id, or both. */
+function sessionKey(args: string[]): { id?: string; remoteId?: string } {
+  const id = agentSessionId(args);
+  const remoteId = remoteSessionId();
+  return { ...(id ? { id } : {}), ...(remoteId ? { remoteId } : {}) };
+}
+
+const NO_SESSION =
+  "No agent session: run inside Claude Code (CLAUDE_CODE_SESSION_ID, or CLAUDE_CODE_REMOTE_SESSION_ID in a cloud session) or pass --session <id>";
 
 /** Where an agent session runs, for its report. */
 function sessionContext(cwd?: string): Record<string, string> {
@@ -865,12 +891,9 @@ async function beat(signal: AbortSignal): Promise<void> {
 
 /** `report --status … --brief … --pr <url> --follow-up "…"` from an agent. */
 async function reportCommand(args: string[]) {
-  const id = agentSessionId(args);
-  if (!id)
-    throw new Error(
-      "No agent session: run inside Claude Code (CLAUDE_CODE_SESSION_ID) or pass --session <id>",
-    );
-  const body: Record<string, unknown> = { id, ...sessionContext() };
+  const key = sessionKey(args);
+  if (!key.id && !key.remoteId) throw new Error(NO_SESSION);
+  const body: Record<string, unknown> = { ...key, ...sessionContext() };
   for (const [name, field] of [
     ["--status", "status"],
     ["--title", "title"],
@@ -881,10 +904,12 @@ async function reportCommand(args: string[]) {
     const value = flag(args, name);
     if (value !== undefined) body[field] = value;
   }
-  const [result] = await Promise.all([
+  const [result] = (await Promise.all([
     report(body),
     beat(AbortSignal.timeout(HOOK_TIMEOUT_MS)),
-  ]);
+  ])) as [{ id: string }, void];
+  // The server resolved a remote id to the session the hooks reported.
+  const id = result.id;
   const items = flags(args, "--follow-up");
   // The backlog feature owns follow-ups; a deployment without it says 404.
   if (items.length) {
@@ -908,12 +933,19 @@ async function reportCommand(args: string[]) {
  * like `wait`, and prints the batch.
  */
 async function ask(args: string[]) {
-  const id = agentSessionId(args);
   const questions =
     (await jsonInput(args)) ??
     (flag(args, "--prompt") ? questionFromFlags(args) : null);
   if (!questions)
     throw new Error("--json <questions|-> or --prompt is required");
+  const key = sessionKey(args);
+  // A cloud session known only by its remote id: the server finds the
+  // session its hooks reported (or files one under the remote id).
+  const id =
+    key.id ??
+    (key.remoteId
+      ? ((await report({ ...key, ...sessionContext() })) as { id: string }).id
+      : undefined);
   const origin = detectOrigin(args);
   if (id) origin.agentSessionId = id;
   const session = (await api("/api/sessions", {
@@ -927,6 +959,7 @@ async function ask(args: string[]) {
   const brief = flag(args, "--brief");
   if (id)
     await report({
+      ...key,
       id,
       ...sessionContext(),
       status: "needs_you",
@@ -974,12 +1007,15 @@ async function hook(event: string | undefined): Promise<void> {
   try {
     const name = event ?? "";
     if (!(name in HOOK_EVENTS)) return;
-    const input = JSON.parse(
-      process.stdin.isTTY ? "{}" : await readStdin(),
-    ) as HookInput;
+    const raw = process.stdin.isTTY ? "{}" : await readStdin();
+    const input = JSON.parse(raw) as HookInput;
     if (!input.session_id) return;
+    // Installed at both user and project level, the hook fires twice.
+    if (!firstToHandle(name, raw)) return;
+    const remoteId = remoteSessionId();
     const body: Record<string, unknown> = {
       id: input.session_id,
+      ...(remoteId ? { remoteId } : {}),
       ...sessionContext(input.cwd),
       agent: agentName() ?? "Claude Code",
       status: HOOK_EVENTS[name as keyof typeof HOOK_EVENTS],
@@ -999,6 +1035,45 @@ async function hook(event: string | undefined): Promise<void> {
   } finally {
     process.exitCode = 0;
   }
+}
+
+/** Two copies of one hook firing arrive within this long of each other. */
+const HOOK_DEDUPE_MS = 10_000;
+
+/**
+ * Whether this process is the first to handle a hook firing. Claude Code
+ * runs every matching hook, so one installed in ~/.claude/settings.json and
+ * in the repo's .claude/settings.json runs twice, in parallel, with the same
+ * input. The first to create a marker named after that input reports; the
+ * other sees it and stays quiet. Markers older than a minute are cleared.
+ */
+function firstToHandle(event: string, input: string): boolean {
+  try {
+    const dir = join(tmpdir(), "interviewer-hooks");
+    mkdirSync(dir, { recursive: true });
+    const marker = join(
+      dir,
+      createHash("sha256")
+        .update(`${event}\0${input}`)
+        .digest("hex")
+        .slice(0, 32),
+    );
+    try {
+      writeFileSync(marker, "", { flag: "wx" });
+    } catch {
+      if (Date.now() - statSync(marker).mtimeMs < HOOK_DEDUPE_MS) return false;
+      // The same input again, later: a new firing.
+      utimesSync(marker, new Date(), new Date());
+    }
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (Date.now() - statSync(path).mtimeMs > 60_000)
+        rmSync(path, { force: true });
+    }
+  } catch {
+    /* without markers, report anyway */
+  }
+  return true;
 }
 
 async function readStdin(): Promise<string> {
@@ -1077,6 +1152,8 @@ interface HookGroup {
 function editHooks(
   file: string,
   action: "install" | "uninstall",
+  commandFor: (event: string) => string = (event) =>
+    `interviewer hook ${event}`,
 ): { settings: string; changed: string[] } {
   const settings = existsSync(file)
     ? (JSON.parse(readFileSync(file, "utf8") || "{}") as Record<
@@ -1087,7 +1164,7 @@ function editHooks(
   const hooks = (settings.hooks ?? {}) as Record<string, HookGroup[]>;
   const changed: string[] = [];
   for (const event of Object.keys(HOOK_EVENTS)) {
-    const command = `interviewer hook ${event}`;
+    const command = commandFor(event);
     const groups = hooks[event] ?? [];
     const own = groups
       .flatMap((group) => group.hooks ?? [])
@@ -1127,6 +1204,43 @@ function editHooks(
   renameSync(temporary, file);
   return { settings: file, changed };
 }
+
+/**
+ * A repo's hook command: it runs only where INTERVIEWER_TOKEN is set (a
+ * cloud environment), so teammates without a token, and Tim's machine,
+ * which reports through its user-level hooks, are unaffected. POSIX sh, and
+ * it always exits 0.
+ */
+const projectHookCommand = (event: string) =>
+  `[ -n "$INTERVIEWER_TOKEN" ] && interviewer hook ${event} || true`;
+
+/**
+ * `hooks install|uninstall --project`: the hooks in this repo's committed
+ * .claude/settings.json, for cloud sessions, which read only that. It
+ * never commits; it prints the git command that would.
+ */
+function projectHooks(action: "install" | "uninstall") {
+  const top = git(undefined, "rev-parse", "--show-toplevel");
+  if (!top) throw new Error("Not in a git repository; run it from the repo");
+  const relative = join(".claude", "settings.json");
+  const result = editHooks(join(top, relative), action, projectHookCommand);
+  const message =
+    action === "install"
+      ? "Report cloud sessions to Keep it moving"
+      : "Stop reporting cloud sessions to Keep it moving";
+  const commit = result.changed.length
+    ? `git -C ${shellQuote(top)} add ${relative} && git -C ${shellQuote(top)} commit -m ${shellQuote(message)}`
+    : null;
+  output({ ...result, commit });
+  if (commit)
+    process.stderr.write(
+      `\nNothing is committed. Review the file, then run:\n  ${commit}\n`,
+    );
+}
+
+/** A value as one POSIX shell word. */
+const shellQuote = (value: string) =>
+  /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 
 async function api(path: string, init?: RequestInit): Promise<unknown> {
   const response = await authorizedFetch(path, init);
@@ -1221,6 +1335,104 @@ async function keyCommand(action: string | undefined, args: string[]) {
       ),
     );
   throw new Error(`Unknown key action: ${action ?? ""}`);
+}
+
+/** The CLI as an npm-installable tarball, served publicly by the Worker. */
+const cliPackageUrl = () => `${defaultBase}/cli.tgz`;
+
+/**
+ * `cloud setup`: what a project's claude.ai cloud environment needs, ready
+ * to paste. It creates the environment's agent key, so it needs a signed-in
+ * CLI; an existing key is never shown, since keys can't be read back.
+ */
+async function cloudCommand(action: string | undefined, args: string[]) {
+  if (action !== "setup")
+    throw new Error(`Unknown cloud action: ${action ?? ""}`);
+  const wanted = flag(args, "--project") ?? repoOrigin().projectKey;
+  if (!wanted)
+    throw new Error("Not in a git repository; pass --project <key or name>");
+  const projects = (await api("/api/sessions/projects")) as Array<{
+    key: string;
+    name: string;
+  }>;
+  const known = projects.find(
+    (project) =>
+      project.key === wanted ||
+      project.name.toLowerCase() === wanted.toLowerCase(),
+  );
+  const project = {
+    key: known?.key ?? wanted,
+    name: known?.name ?? projectName(wanted),
+  };
+  const keyName = flag(args, "--key-name") ?? `${project.name} cloud`;
+  const { keys } = (await api("/api/sessions/kim/keys")) as {
+    keys: Array<{ name: string; revokedAt: string | null }>;
+  };
+  if (keys.some((key) => key.name === keyName && !key.revokedAt))
+    throw new Error(
+      `A live key is already named "${keyName}", and keys can't be shown again. ` +
+        `Revoke it first (\`interviewer key revoke ${shellQuote(keyName)}\`) or pass --key-name <another name>.`,
+    );
+  const { key } = (await api("/api/sessions/kim/keys", {
+    method: "POST",
+    body: JSON.stringify({ name: keyName }),
+  })) as { key: string };
+  const host = new URL(defaultBase).host;
+  const environment = [
+    `INTERVIEWER_TOKEN=${key}`,
+    // Another deployment (such as wrangler dev) has to be named too.
+    ...(defaultBase === "https://interviewer.zerobsai.com"
+      ? []
+      : [`INTERVIEWER_URL=${defaultBase}`]),
+  ].join("\n");
+  const setupScript = [
+    "#!/bin/bash",
+    "# Keep it moving. Nothing here can stop the session from starting.",
+    `npm install -g ${cliPackageUrl()} || true`,
+    "# Experimental: user-level hooks in the VM (/root/.claude/settings.json).",
+    "# Cloud sessions may not read them; see the per-repo fallback.",
+    "interviewer hooks install || true",
+    "exit 0",
+  ].join("\n");
+  if (args.includes("--json"))
+    return output({
+      project,
+      keyName,
+      network: { level: "Custom", allow: [host], keepDefaultPackages: true },
+      environment,
+      setupScript,
+      fallback: "interviewer hooks install --project",
+    });
+  process.stdout.write(
+    `Cloud environment for ${project.name} (${project.key})
+Edit the project's environment at claude.ai/code and set these three things.
+
+1. Network access
+   Level: Custom
+   Allowed domains: ${host}
+   Keep the default list of package registries included.
+
+2. Environment variables (anyone using the environment can read them)
+
+${environment}
+
+3. Setup script
+
+${setupScript}
+
+The setup script's hooks are experimental: the docs don't say whether cloud
+sessions read /root/.claude/settings.json. If a cloud session doesn't show up
+in Keep it moving, commit the hooks to the repo instead. From a checkout:
+
+  interviewer hooks install --project
+
+Those hooks do nothing unless INTERVIEWER_TOKEN is set, so teammates and local
+sessions are unaffected. Hooks run only in single-repo cloud sessions.
+
+The key "${keyName}" is shown only here. Revoke it with:
+  interviewer key revoke ${shellQuote(keyName)}
+`,
+  );
 }
 
 async function accessToken(forceRefresh: boolean): Promise<string | null> {
@@ -1503,10 +1715,17 @@ Keep it moving (agent sessions; \`kim\` is the same binary):
   ask --title <text> --json <questions|-> [--brief <text>] [--idle MS] [--timeout MS]
     raise a request linked to this agent session, then wait like \`wait\` and print the batch
   report [--status running|needs_you|idle|done] [--title T] [--brief B] [--pr <url>] [--follow-up <text>]...
-    the session comes from CLAUDE_CODE_SESSION_ID, or --session <id>
+    the session comes from CLAUDE_CODE_SESSION_ID, or --session <id>; in a cloud
+    session, CLAUDE_CODE_REMOTE_SESSION_ID finds the one its hooks reported
   hook <SessionStart|UserPromptSubmit|Notification|Stop|SessionEnd>
     reads Claude Code hook JSON on stdin and reports it; never fails, prints nothing
   hooks install|uninstall [--settings <path>]   add or remove those hooks (default ~/.claude/settings.json)
+  hooks install|uninstall --project   the same in this repo's .claude/settings.json, for cloud
+    sessions; each runs only when INTERVIEWER_TOKEN is set. Commits nothing
+Cloud sessions (claude.ai/code):
+  cloud setup [--project <key>] [--key-name <name>] [--json]
+    creates the project's agent key and prints its cloud environment's network
+    access, environment variables and setup script, ready to paste
 
 INTERVIEWER_URL points at another deployment, such as wrangler dev.
 `,

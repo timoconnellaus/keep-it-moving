@@ -18,12 +18,13 @@
     "LICENSE"
   ],
   "scripts": {
-    "dev": "npm run build:web && wrangler dev",
+    "dev": "npm run build && wrangler dev",
     "dev:web": "vite",
     "build:cli": "tsc -p tsconfig.cli.json",
     "build:web": "vite build",
-    "build": "npm run build:cli && npm run build:web",
-    "deploy": "npm run build:web && wrangler deploy",
+    "build": "npm run build:cli && npm run build:web && npm run pack:cli",
+    "pack:cli": "node scripts/pack-cli.mjs",
+    "deploy": "npm run build && wrangler deploy",
     "typecheck": "tsc -p tsconfig.cli.json --noEmit && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

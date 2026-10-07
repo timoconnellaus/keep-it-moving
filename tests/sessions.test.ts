@@ -243,3 +243,95 @@ describe("reported links", () => {
     expect((await post("https://github.com/o/r/pull/3")).statusCode).toBe(200);
   });
 });
+
+describe("cloud sessions", () => {
+  it("stores the remote id and links the session's claude.ai page", async () => {
+    const { report, inbox } = harness();
+    const hooked = await report({
+      id: "hook-session",
+      remoteId: "cse_01AbC",
+      status: "needs_you",
+      location: "cloud",
+    });
+    expect(hooked).toMatchObject({
+      id: "hook-session",
+      remoteId: "cse_01AbC",
+      url: "https://claude.ai/code/session_01AbC",
+    });
+    // A local session has neither.
+    expect(await report({ id: "local", status: "running" })).toMatchObject({
+      remoteId: null,
+      url: null,
+    });
+    expect((await inbox())[0]!.data).toMatchObject({
+      url: "https://claude.ai/code/session_01AbC",
+    });
+  });
+
+  it("finds the session the hooks reported from the remote id alone", async () => {
+    const { report } = harness();
+    await report({
+      id: "hook-session",
+      remoteId: "cse_one",
+      status: "running",
+    });
+    const explicit = await report({
+      remoteId: "cse_one",
+      status: "idle",
+      brief: "Opened the PR",
+    });
+    expect(explicit).toMatchObject({
+      id: "hook-session",
+      status: "idle",
+      brief: "Opened the PR",
+    });
+  });
+
+  it("files a report under the remote id until the hooks report, then merges", async () => {
+    const { report, store, app } = harness();
+    const early = await report({ remoteId: "cse_two", brief: "Starting" });
+    expect(early).toMatchObject({
+      id: "cse_two",
+      url: "https://claude.ai/code/session_two",
+    });
+    const request = store.createSession("", {
+      title: "Which?",
+      origin: { agentSessionId: "cse_two" },
+    });
+    const merged = await report({
+      id: "hook-two",
+      remoteId: "cse_two",
+      status: "running",
+    });
+    expect(merged).toMatchObject({
+      id: "hook-two",
+      brief: "Starting",
+      remoteId: "cse_two",
+      requests: [{ id: request.id }],
+    });
+    const gone = await app.inject({
+      method: "GET",
+      url: "/api/browser/kim/sessions/cse_two",
+    });
+    expect(gone.statusCode).toBe(404);
+    expect((await report({ remoteId: "cse_two" })).id).toBe("hook-two");
+  });
+
+  it("refuses a report with neither id, or a remote id of another shape", async () => {
+    const { app } = harness();
+    for (const payload of [
+      { status: "running" },
+      { remoteId: "javascript:alert(1)" },
+      { id: "a", remoteId: "session_abc" },
+    ])
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/sessions/kim/report",
+            payload,
+          })
+        ).statusCode,
+      ).toBe(400);
+  });
+});

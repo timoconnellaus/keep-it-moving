@@ -5,7 +5,8 @@ import type { Env } from "./env.js";
 
 export { InterviewHub } from "./hub.js";
 
-const PUBLIC_FILES = /^\/(assets\/|icons\/|manifest\.webmanifest$|sw\.js$)/;
+const PUBLIC_FILES =
+  /^\/(assets\/|icons\/|manifest\.webmanifest$|sw\.js$|cli\.tgz$)/;
 
 const hub = (env: Env) => env.HUB.get(env.HUB.idFromName("interviews"));
 
@@ -37,7 +38,8 @@ const site: ExportedHandler<Env> = {
     const url = new URL(request.url);
     if (url.pathname === "/health") return Response.json({ ok: true });
     // Build output and app-install files hold nothing private, and Google's
-    // servers fetch the icons without the Access cookie when installing.
+    // servers fetch the icons without the Access cookie when installing. A
+    // cloud environment's setup script installs the CLI from cli.tgz.
     if (PUBLIC_FILES.test(url.pathname)) return env.ASSETS.fetch(request);
     const email = await accessEmail(request, env);
     if (!isAllowed(email, env))

@@ -23,3 +23,13 @@ export function normalizeRemote(remote: string): string {
     return trimmed;
   }
 }
+
+/** "github.com/o/frockbot" → "Frockbot"; the user can rename it later. */
+export function projectName(key: string): string {
+  const last = key.split(/[/:]/).filter(Boolean).at(-1) ?? key;
+  const words = last
+    .replace(/\.git$/, "")
+    .split(/[-_\s]+/)
+    .filter(Boolean);
+  return words.map((word) => word[0]!.toUpperCase() + word.slice(1)).join(" ");
+}

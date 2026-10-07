@@ -2,6 +2,7 @@ import type {
   AgentSessionStatus,
   AgentSessionView,
 } from "../../../shared/sessions.js";
+import { safeHref } from "../../../shared/url.js";
 import { Icon, type IconName } from "../shell/icons.js";
 import { age, useJson } from "../shell/live.js";
 
@@ -66,6 +67,16 @@ export function SessionsSection({ projectId }: { projectId: string }) {
             <span className="kim-sessions-meta">{sessionMeta(session)}</span>
             {session.brief && session.status !== "running" && (
               <span className="kim-sessions-brief">{session.brief}</span>
+            )}
+            {safeHref(session.url) && (
+              <a
+                className="kim-sessions-request"
+                href={safeHref(session.url)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open session →
+              </a>
             )}
             {session.requests.map((request) => (
               <a

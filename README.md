@@ -107,7 +107,7 @@ interviewer ask --title "Run the migration?" --brief "It's ready; prod has no ba
 JSON
 ```
 
-Both find the session from `CLAUDE_CODE_SESSION_ID` (or `--session`). `ask` creates an interview linked to the session, marks the session as needing you, prints the URL to stderr, then waits like `wait` and prints the batch with its `interviewId`.
+Both find the session from `CLAUDE_CODE_SESSION_ID` (or `--session`), and in a cloud session from `CLAUDE_CODE_REMOTE_SESSION_ID` ([Cloud sessions](#cloud-sessions)). `ask` creates an interview linked to the session, marks the session as needing you, prints the URL to stderr, then waits like `wait` and prints the batch with its `interviewId`.
 
 In the browser, `/` is the inbox: requests with open questions and sessions waiting on you, oldest first. A request's questions are answered right there. **Done → next** and **Snooze** (an hour) hide an item in that browser. The rail on the left lists each project with what needs you and what's running; `/p/<project>` shows its sessions and their requests. Push notifications fire for each new inbox item.
 
@@ -213,7 +213,43 @@ interviewer key list                      # names, created, last used, revoked
 interviewer key revoke "frockbot cloud"
 ```
 
-Store the key as `INTERVIEWER_TOKEN` in the cloud environment's variables. The CLI sends it instead of an OAuth token; the Worker checks its SHA-256 against the Durable Object (only the hash is stored) and lets it report and work on the agent API: sessions, requests, heartbeats, follow-ups, backlog sync and reads. Environment variables are readable by anyone using the environment, so a key can't delete interviews or automations, rename projects, change backlog settings or sync scripts, or create, list or revoke keys; a leaked one can always be cut off from a signed-in CLI. Live key names are unique, and revoking by name revokes every match.
+Store the key as `INTERVIEWER_TOKEN` in the cloud environment's variables (`interviewer cloud setup`, below, does this for you). The CLI sends it instead of an OAuth token; the Worker checks its SHA-256 against the Durable Object (only the hash is stored) and lets it report and work on the agent API: sessions, requests, heartbeats, follow-ups, backlog sync and reads. Environment variables are readable by anyone using the environment, so a key can't delete interviews or automations, rename projects, change backlog settings or sync scripts, or create, list or revoke keys; a leaked one can always be cut off from a signed-in CLI. Live key names are unique, and revoking by name revokes every match.
+
+## Cloud sessions
+
+Claude Code sessions on claude.ai/code run in a VM that never sees this Mac's `~/.claude`, so they need the CLI, a key and a way to run its hooks. Each project's cloud environment gets three things, and `cloud setup` prints all three, ready to paste:
+
+```sh
+cd ~/repos/frockbot
+interviewer cloud setup                 # or --project github.com/o/frockbot
+interviewer cloud setup --json          # the same, as JSON
+```
+
+It creates an agent key named "<project name> cloud" (`--key-name` picks another). Keys can't be read back, so if a live key already has that name it stops and says so: revoke the old one (`interviewer key revoke "Frockbot cloud"`) or pass `--key-name`. It needs a signed-in CLI, not a key.
+
+1. **Network access**: Custom, add `interviewer.zerobsai.com`, and keep the default package registries included. The default Trusted level allows GitHub and the registries but not this host.
+2. **Environment variables**: `INTERVIEWER_TOKEN=kim_…`. Anyone who uses the environment can read it.
+3. **Setup script**: it installs the CLI from the Worker, then installs the user-level hooks in the VM. Every line ends in `|| true`, so a failure never stops a session from starting:
+
+   ```bash
+   #!/bin/bash
+   npm install -g https://interviewer.zerobsai.com/cli.tgz || true
+   interviewer hooks install || true
+   exit 0
+   ```
+
+The setup script's hooks are **experimental**. They write `/root/.claude/settings.json`, and Claude Code's docs say cloud sessions run hooks from the repo's committed `.claude/settings.json` but don't say whether they read the user-level file. Start a cloud session and check that it shows up in Keep it moving. If it doesn't, use the per-repo fallback, from a checkout of the repo:
+
+```sh
+interviewer hooks install --project     # writes .claude/settings.json; commits nothing
+git add .claude/settings.json && git commit -m "Report cloud sessions to Keep it moving"
+```
+
+It adds the same five hooks to the repo's `.claude/settings.json`, merged beside what's there and idempotent like the user-level install, each guarded so it runs only where `INTERVIEWER_TOKEN` is set: `[ -n "$INTERVIEWER_TOKEN" ] && interviewer hook Stop || true`. Teammates without a token are unaffected, and so is your Mac, which reports through its user-level hooks and normally has no `INTERVIEWER_TOKEN`. If both copies do fire (a token set locally, or a VM that reads both files), the hook reports once: the first copy to start writes a marker named after the hook's input, and the other sees it and stays quiet. `hooks uninstall --project` removes them. Cloud hooks run only in single-repo sessions.
+
+In a cloud session, the CLI also sends `CLAUDE_CODE_REMOTE_SESSION_ID` (`cse_…`) with each hook's report. The session then links to its page on claude.ai (**Open session** on the inbox item and the project page), and `report` and `ask`, which don't get Claude Code's session id there, find the session by that remote id. Until a hook has reported, they file it under the remote id; the hooks' first report adopts it.
+
+The CLI package is public at `/cli.tgz`; it holds no secrets. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. The Worker serves it without the Access check, but Cloudflare Access itself sits in front of the Worker: add `/cli.tgz` to the Access bypass app, then check that `curl -fsSI https://interviewer.zerobsai.com/cli.tgz` answers 200 without a sign-in.
 
 ## On your phone
 
@@ -297,7 +333,7 @@ browser ──HTTPS/WSS (Access)── Worker ── InterviewHub Durable Object
 - **Hub router and store** (`src/server`): the HTTP API (Hono) and the store, written against a small SQL interface so tests run them on `node:sqlite`.
 - **CLI** (`src/cli.ts`): a thin client. `wait` chains 60 s requests with `partial=1` to stay under Cloudflare's 100 s idle cutoff; `attach` filters out the heartbeat lines that keep its stream alive.
 
-Cloudflare Access has two apps: one for the whole host, allowing only the owner, and a bypass for `/api/sessions`, `/token`, `/register` and `/.well-known`, where OAuth applies instead. `ACCESS_AUD` in `wrangler.jsonc` must hold the first app's audience tag.
+Cloudflare Access has two apps: one for the whole host, allowing only the owner, and a bypass for `/api/sessions`, `/token`, `/register` and `/.well-known`, where OAuth applies instead, and for `/cli.tgz`, which cloud setup scripts install without a sign-in. `ACCESS_AUD` in `wrangler.jsonc` must hold the first app's audience tag.
 
 ## Verification
 
