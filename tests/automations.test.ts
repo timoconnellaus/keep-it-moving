@@ -202,9 +202,10 @@ describe("heartbeats", () => {
     await beat(app);
     let listed = await projects();
     expect(listed.find((p) => p.key === KEY)!.stats.heartbeat).toBe("alive");
-    expect(listed.find((p) => p.key === "github.com/o/quiet")!.stats).toEqual({
-      needsYou: 0,
-    });
+    // No automations, no heartbeat state (other features add their own stats).
+    expect(
+      listed.find((p) => p.key === "github.com/o/quiet")!.stats.heartbeat,
+    ).toBeUndefined();
 
     age(sql, 30 * MINUTE);
     await hub.tick(Date.now());

@@ -5,6 +5,9 @@ import { AutomationsSection } from "./automations/AutomationsSection.js";
 import { CiFailedDetail, PrsReadyDetail } from "./github/InboxDetails.js";
 import { PrPage } from "./github/PrPage.js";
 import { PullRequests } from "./github/PullRequests.js";
+import { FollowUpsDetail, FollowUpsSection } from "./backlog/FollowUps.js";
+import { MilestoneSection } from "./backlog/Milestone.js";
+import { UpNextSection } from "./backlog/UpNext.js";
 
 /** A section of the project page, in order. Each feature adds its own. */
 export interface ProjectSection {
@@ -24,10 +27,10 @@ export type InboxDetail = ComponentType<{
 
 export const projectSections: ProjectSection[] = [
   {
-    id: "automations",
-    title: "Automations & machines",
-    column: "side",
-    Component: AutomationsSection,
+    id: "milestone",
+    title: "Milestone",
+    column: "main",
+    Component: MilestoneSection,
   },
   {
     id: "prs",
@@ -35,12 +38,26 @@ export const projectSections: ProjectSection[] = [
     column: "main",
     Component: PullRequests,
   },
+  { id: "up-next", title: "Up next", column: "side", Component: UpNextSection },
+  {
+    id: "follow-ups",
+    title: "Follow-ups",
+    column: "side",
+    Component: FollowUpsSection,
+  },
+  {
+    id: "automations",
+    title: "Automations & machines",
+    column: "side",
+    Component: AutomationsSection,
+  },
 ];
 
 export const inboxDetails: Partial<Record<InboxKind, InboxDetail>> = {
   automation_down: AutomationDown,
   ci_failed: CiFailedDetail,
   prs_ready: PrsReadyDetail,
+  follow_ups: FollowUpsDetail,
 };
 
 /** Extra full pages under /p/<projectId>/…, matched in order. */

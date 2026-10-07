@@ -222,9 +222,15 @@ export class InterviewStore {
     return id;
   }
 
-  /** The project with this normalised remote key, created if it's new. */
+  /**
+   * The project for a normalised remote key (github.com/o/r), created when
+   * new; a value without a slash is matched as an existing name first.
+   */
   projectForKey(key: string): ProjectView {
-    return this.projectFor(this.resolveProject({ projectKey: key }))!;
+    const id = this.resolveProject(
+      key.includes("/") ? { projectKey: key } : { project: key },
+    );
+    return this.projectFor(id)!;
   }
 
   listProjects(): ProjectView[] {

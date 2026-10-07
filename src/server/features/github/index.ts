@@ -42,7 +42,13 @@ export const TOKEN_MISSING = "GITHUB_TOKEN not set";
 export function repoOf(key: string): string | null {
   if (!key.startsWith(GITHUB_PREFIX)) return null;
   const parts = key.slice(GITHUB_PREFIX.length).split("/");
-  return parts.length === 2 && parts.every(Boolean) ? parts.join("/") : null;
+  // The repo goes into API paths: GitHub's name characters only, no "..".
+  const valid =
+    parts.length === 2 &&
+    /^[A-Za-z0-9-]+$/.test(parts[0]!) &&
+    /^[A-Za-z0-9._-]+$/.test(parts[1]!) &&
+    !/^\.\.?$/.test(parts[1]!);
+  return valid ? parts.join("/") : null;
 }
 
 /**

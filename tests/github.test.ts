@@ -1,3 +1,4 @@
+import { githubRepo } from "../src/server/features/backlogGithub.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { groupByDirectory, parsePatch, prLabel } from "../src/shared/github.js";
 import {
@@ -498,7 +499,11 @@ describe("PR sync", () => {
     const t0 = Date.parse("2026-10-07T01:00:00Z");
 
     await hub.tick(t0);
-    expect(github.fetch.mock.calls.length).toBeLessThanOrEqual(40);
+    // The backlog feature's tick shares the stubbed fetch; count PR calls only.
+    const prCalls = github.fetch.mock.calls.filter(
+      ([url]) => !/\/(issues|milestones)\b/.test(String(url)),
+    );
+    expect(prCalls.length).toBeLessThanOrEqual(40);
     const rows = () => sql.all("SELECT number, ci FROM prs");
     // Every PR shows up; those past the budget wait for their checks.
     expect(rows()).toHaveLength(20);
@@ -591,5 +596,23 @@ describe("PR sync", () => {
       url: `/api/browser/kim/projects/${project.id}/prs/404`,
     });
     expect(missing.statusCode).toBe(404);
+  });
+});
+
+describe("repo keys", () => {
+  it("only lets GitHub's own name characters into API paths", () => {
+    expect(repoOf("github.com/tim/interviewer")).toBe("tim/interviewer");
+    expect(repoOf("github.com/tim/my.repo_2")).toBe("tim/my.repo_2");
+    for (const key of [
+      "github.com/../users",
+      "github.com/tim/..",
+      "github.com/tim/r?x=1",
+      "github.com/tim/r%2F..",
+      "github.com/tim/r#x",
+      "github.com/tim/r/extra",
+    ]) {
+      expect(repoOf(key)).toBeNull();
+      expect(githubRepo(key)).toBeNull();
+    }
   });
 });
