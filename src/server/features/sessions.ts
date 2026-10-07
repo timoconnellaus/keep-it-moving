@@ -6,6 +6,7 @@ import {
   type AgentSessionView,
   type LinkedRequest,
 } from "../../shared/sessions.js";
+import { isWebUrl } from "../../shared/url.js";
 import { first, type Row } from "../sql.js";
 import type { Feature, FeatureContext } from "./types.js";
 
@@ -23,7 +24,7 @@ const ReportSchema = z.object({
   branch: text(300).optional(),
   worktree: text(300).optional(),
   cwd: text(1_000).optional(),
-  prUrl: text(500).optional(),
+  prUrl: text(500).refine(isWebUrl, "http(s) URLs only").optional(),
   brief: text(4_000).optional(),
   message: text(2_000).optional(),
 });

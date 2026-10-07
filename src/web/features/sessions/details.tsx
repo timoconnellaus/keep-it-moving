@@ -1,3 +1,4 @@
+import { safeHref } from "../../../shared/url.js";
 import { useCallback, useEffect, useState } from "react";
 import type { InboxItem } from "../../../shared/inbox.js";
 import type { SessionView } from "../../../shared/schema.js";
@@ -85,8 +86,13 @@ export function NeedsYouDetail({ item }: { item: InboxItem }) {
             </div>
           ))}
       </dl>
-      {data.prUrl && (
-        <a className="kim-sessions-open" href={data.prUrl}>
+      {safeHref(data.prUrl) && (
+        <a
+          className="kim-sessions-open"
+          href={safeHref(data.prUrl)}
+          target="_blank"
+          rel="noreferrer"
+        >
           Open its pull request →
         </a>
       )}

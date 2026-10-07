@@ -229,3 +229,17 @@ describe("new inbox item push", () => {
     expect(sent).toHaveLength(1);
   });
 });
+
+describe("reported links", () => {
+  it("accepts only http(s) PR URLs, so none becomes a script link", async () => {
+    const { app } = harness();
+    const post = (prUrl: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/sessions/kim/report",
+        payload: { id: "s-link", status: "running", prUrl },
+      });
+    expect((await post("javascript:alert(1)")).statusCode).toBe(400);
+    expect((await post("https://github.com/o/r/pull/3")).statusCode).toBe(200);
+  });
+});
