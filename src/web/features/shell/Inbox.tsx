@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { InboxItem, InboxKind } from "../../../shared/inbox.js";
 import { inboxDetails } from "../registry.js";
 import { Icon, type IconName } from "./icons.js";
@@ -41,6 +41,11 @@ export function Inbox({
   const [showDetail, setShowDetail] = useState(false);
   const list = items ?? [];
   const current = list.find((item) => item.id === selectedId) ?? list[0];
+  // The detail scrolls on its own, so a newly chosen item starts at its top.
+  const detail = useRef<HTMLElement>(null);
+  useEffect(() => {
+    detail.current?.scrollTo?.({ top: 0 });
+  }, [current?.id]);
   const projectOf = (item: InboxItem) =>
     projects?.find((project) => project.id === item.projectId);
 
@@ -105,7 +110,11 @@ export function Inbox({
           );
         })}
       </section>
-      <section className="kim-shell-detail" aria-label="Selected item">
+      <section
+        ref={detail}
+        className="kim-shell-detail"
+        aria-label="Selected item"
+      >
         {current && kind ? (
           <>
             <button

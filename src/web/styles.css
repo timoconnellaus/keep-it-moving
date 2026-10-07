@@ -2663,3 +2663,40 @@ a.kim-backlog-milestone-name:hover {
   color: var(--muted, #5f676d);
   font-size: 13px;
 }
+
+/*
+ * Desktop: the shell is a fixed frame and each pane scrolls on its own: the
+ * rail, the content, and on the inbox the list and the selected item. Phones
+ * stack the panes and scroll the page instead.
+ */
+@media (min-width: 761px) {
+  .kim-shell {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .kim-shell-body {
+    overflow: hidden;
+  }
+  .kim-shell-rail,
+  .kim-shell-content,
+  .kim-shell-inbox-list,
+  .kim-shell-detail {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .kim-shell-inbox {
+    height: 100%;
+    min-height: 0;
+  }
+  .kim-shell-inbox-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: #fafbfa;
+  }
+  .kim-github-tree {
+    max-height: calc(100dvh - 80px);
+  }
+}
