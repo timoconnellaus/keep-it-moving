@@ -2,13 +2,11 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "What the hosted site may do from inside the desktop app: notify, badge the dock, open links outside, and open its own pages in new windows.",
-  "windows": ["*"],
+  "windows": ["main", "page-*"],
   "remote": {
     "urls": [
       "https://keep-it-moving.zerobsai.com/*",
-      "https://interviewer.zerobsai.com/*",
-      "http://localhost:*/*",
-      "http://127.0.0.1:*/*"
+      "https://interviewer.zerobsai.com/*"
     ]
   },
   "permissions": [

@@ -34,6 +34,8 @@ npm run desktop:build   # desktop/src-tauri/target/release/bundle/macos/Keep it 
 
 The window loads `KEEP_IT_MOVING_URL` (default https://keep-it-moving.zerobsai.com) and signs in through Cloudflare Access once; the webview keeps the cookie. Web push doesn't reach a webview, so a script injected into the site (`desktop/src-tauri/src/desktop.js`) polls the inbox every 30 seconds instead: the dock badge shows how many items there are, and each new one raises a native notification while the window isn't focused. Links to other sites open in the default browser, the site's own links that ask for a new tab open in a new window, and ⌘R reloads. The window remembers its size and position.
 
+The main window only loads the site and its Access login (`*.cloudflareaccess.com`); any other page opens in the default browser. Only the hosted origins get the native bridge (notifications, badge, opening links and windows), set in `desktop/src-tauri/capabilities/default.json`. Debug builds add `http://localhost:8787` for `wrangler dev`, so point a dev build there rather than a release build. If Access ever signs in through another identity provider, add its host to the list in `desktop/src-tauri/src/main.rs`.
+
 ## First interview
 
 ```sh

@@ -1,0 +1,16 @@
+{
+  "identifier": "local-dev",
+  "description": "Debug builds only: the same access for wrangler dev on localhost.",
+  "windows": ["main", "page-*"],
+  "remote": {
+    "urls": ["http://localhost:8787/*", "http://127.0.0.1:8787/*"]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-badge-count",
+    "core:webview:allow-create-webview-window",
+    "notification:default",
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
+  ]
+}
