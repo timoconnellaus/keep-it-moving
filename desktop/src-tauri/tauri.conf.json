@@ -4,7 +4,7 @@
   "identifier": "com.zerobsai.keep-it-moving",
   "version": "0.1.0",
   "build": {
-    "frontendDist": "../dist"
+    "frontendDist": "../placeholder"
   },
   "app": {
     "withGlobalTauri": true,
