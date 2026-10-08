@@ -1,7 +1,9 @@
 // No console window behind the app on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+#[cfg(debug_assertions)]
+use tauri::Manager;
+use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
 const DEFAULT_URL: &str = "https://keep-it-moving.zerobsai.com";
