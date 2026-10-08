@@ -1,0 +1,9 @@
+<!-- The web icon on a macOS-style rounded square with the standard inset. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#315647"/>
+  <g transform="translate(100 100) scale(1.609375)">
+    <path d="M136 150a40 40 0 0 1 40-40h160a40 40 0 0 1 40 40v130a40 40 0 0 1-40 40h-92l-62 56v-56h-6a40 40 0 0 1-40-40z" fill="#ffffff"/>
+    <path d="M222 178c4-24 22-36 36-36 22 0 36 14 36 32 0 26-34 28-34 50" fill="none" stroke="#315647" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="260" cy="270" r="13" fill="#315647"/>
+  </g>
+</svg>

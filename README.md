@@ -23,6 +23,17 @@ Deploy with `npm run deploy`, which builds the web client and runs `wrangler dep
 
 For local development, put `DEV_EMAIL=<the allowed email>` and `PUBLIC_URL=http://localhost` in `.dev.vars` and run `npx wrangler dev --local --host localhost` (`.claude/launch.json` has it as `worker`). `--host localhost` keeps requests on localhost, where `DEV_EMAIL` stands in for the Access login.
 
+## Desktop app
+
+`desktop/` is a [Tauri](https://tauri.app) shell around the hosted site, for macOS. It needs Rust (`rustup`) and Xcode's command-line tools.
+
+```sh
+npm run desktop:dev     # run it
+npm run desktop:build   # desktop/src-tauri/target/release/bundle/macos/Keep it moving.app and a .dmg
+```
+
+The window loads `KEEP_IT_MOVING_URL` (default https://keep-it-moving.zerobsai.com) and signs in through Cloudflare Access once; the webview keeps the cookie. Web push doesn't reach a webview, so a script injected into the site (`desktop/src-tauri/src/desktop.js`) polls the inbox every 30 seconds instead: the dock badge shows how many items there are, and each new one raises a native notification while the window isn't focused. Links to other sites open in the default browser, the site's own links that ask for a new tab open in a new window, and ⌘R reloads. The window remembers its size and position.
+
 ## First interview
 
 ```sh
