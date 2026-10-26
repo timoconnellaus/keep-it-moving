@@ -24,6 +24,12 @@ Use the `interviewer` CLI to run an adaptive interview in the user's browser.
 
 3. Open the returned URL when browser-opening capability is available; otherwise give the URL to the user.
 
+## Someone else answers it
+
+When the user wants another person to fill in an interview (a client, a colleague), assign it to that person's email: `kim session create … --assign <email>`, or `kim session assign <session-id> <email>` for an existing one (`--clear` takes it back; one assignee at a time). Give the user the returned `url` to send them; nothing is emailed. That person signs in with Google as exactly that email and sees only this interview: its questions, the workspace items you show, and the chat. Write the questions for them, not the user.
+
+Then wait as usual. Their answers and chat messages come back in `wait` batches with `answeredBy` (on answers) and `from` (on messages) set to their email; reply in the chat as you would to the user. They may take hours or days, so keep the background `kim wait` loop going while your session lasts, and before you stop, tell the user the session ID and that `kim wait <session-id>` picks up their answers later. The user's inbox counts the interview as waiting on the assignee, and their phone is notified when answers arrive.
+
 Question types are `text`, `single-choice`, `multiple-choice`, `yes-no`, and `number`. Every widget accepts a free-text answer; for choice questions a typed note arrives appended as `Option — note`.
 
 For genuine decisions, set `default` to the answer you recommend, and use `recommendation` (Markdown) for the short reasoning. The browser pre-selects the default and offers one-click and bulk acceptance, so a good default saves the user time. A default is exactly one option for `single-choice`, one or more options for `multiple-choice`, `"Yes"`/`"No"` for `yes-no`, a number for `number`, or suggested text for `text`. Omit both when asking for facts only the user knows. An answer equal to the default means the user accepted it.
@@ -85,6 +91,7 @@ Run `kim wait <session-id>` as a background process. It exits with one JSON batc
 - `events`: everything queued, including your own edits.
 - `openQuestions`: how many questions remain open.
 - `messages`: what the user wrote in the interview's chat since the last batch, each with its `messageId`, `text`, and `about` (the question's id, number and prompt) when they asked about a specific question.
+- On an assigned interview, `answeredBy` on an answer and `from` on a message name the assignee who wrote it.
 
 Handle `messages` first: the user is waiting on the reply. A message from the user wakes `wait` straight away.
 

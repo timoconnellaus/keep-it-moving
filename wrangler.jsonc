@@ -25,10 +25,12 @@
   ],
   "vars": {
     "PUBLIC_URL": "https://keep-it-moving.zerobsai.com",
-    "ALLOWED_EMAIL": "tim.oconnell.australia@gmail.com",
-    "ACCESS_TEAM_DOMAIN": "timoconnellaus.cloudflareaccess.com",
+    "OWNER_EMAIL": "tim.oconnell.australia@gmail.com",
+    // The Google OAuth client (web application) for "Sign in with Google". Its
+    // redirect URI is PUBLIC_URL + /auth/google/callback; the client secret is
+    // the GOOGLE_CLIENT_SECRET secret.
+    "GOOGLE_CLIENT_ID": "579404099276-3qfi99tid70udrhcfrkj68r3uivsk1ek.apps.googleusercontent.com",
     "VAPID_PUBLIC_KEY": "BFBJwVqp8ONGf6it588x_gLRsw5dkqlyXVc9T3PlX0_QMrNLfc7aEqXPotuFR-g2CP_KGjxZTDyasvmg2eBNPjM",
-    "ACCESS_AUD": "75090c8c3ba047cd1cc5bae6416450f9cbfd1f71567be1def519e6304b0c9e64",
   },
   "observability": { "enabled": true },
 }

@@ -270,7 +270,8 @@ export function sessionsFeature(ctx: FeatureContext): Feature {
       .join(" · ");
 
   const inbox = (): InboxItem[] => {
-    // Interviews waiting on answers. Agents raise these with `ask`.
+    // Interviews waiting on answers. Agents raise these with `ask`; one
+    // assigned to someone else waits on them instead.
     const requests = sql.all(
       `SELECT s.*, COUNT(q.id) open_count, MIN(q.created_at) since,
         (SELECT q2.prompt FROM questions q2 LEFT JOIN answers a2 ON a2.question_id = q2.id
@@ -279,7 +280,7 @@ export function sessionsFeature(ctx: FeatureContext): Feature {
        FROM sessions s
        JOIN questions q ON q.session_id = s.id AND q.deleted = 0
        LEFT JOIN answers a ON a.question_id = q.id
-       WHERE s.status = 'active' AND a.question_id IS NULL
+       WHERE s.status = 'active' AND a.question_id IS NULL AND s.assignee IS NULL
        GROUP BY s.id`,
     );
     const linked = new Set<string>();

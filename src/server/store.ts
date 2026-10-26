@@ -61,6 +61,20 @@ const ORIGIN_COLUMNS = [
   "location",
 ] as const;
 
+/**
+ * Who an interview is assigned to (and who assigned it), and who wrote each
+ * answer and chat message when it wasn't the owner.
+ */
+const ATTRIBUTION_COLUMNS = [
+  ["sessions", "assignee"],
+  ["sessions", "assigned_by"],
+  ["answers", "answered_by"],
+  ["chat_messages", "author_email"],
+] as const;
+
+/** Just enough to catch a typo; Google checks the address at sign-in. */
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 /** 192 random bits, URL-safe: the secret part of a session's browser URL. */
 function sessionToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(24));
@@ -122,9 +136,12 @@ export class InterviewStore {
       CREATE INDEX IF NOT EXISTS chat_session ON chat_messages(session_id, created_at);
     `);
     // Columns added after the first deploy; adding one that exists throws.
-    for (const column of ORIGIN_COLUMNS)
+    for (const [table, column] of [
+      ...ORIGIN_COLUMNS.map((column) => ["sessions", column] as const),
+      ...ATTRIBUTION_COLUMNS,
+    ])
       try {
-        sql.exec(`ALTER TABLE sessions ADD COLUMN ${column} TEXT`);
+        sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
       } catch {
         /* already there */
       }
@@ -299,7 +316,9 @@ export class InterviewStore {
           origin: mapOrigin(row),
           answered,
           total,
-          open: status === "active" ? total - answered : 0,
+          // An assigned interview waits on its assignee, not the owner.
+          open: status === "active" && !row.assignee ? total - answered : 0,
+          assignee: optional(row.assignee),
           lastActivity: String(row.last_event ?? row.updated_at),
           lastReply: row.last_reply
             ? json<{ text: string; at: string }>(row.last_reply)
@@ -312,12 +331,14 @@ export class InterviewStore {
   openQuestions(sessionId: string): number {
     const row = first(
       this.sql,
-      `SELECT s.status, (SELECT COUNT(*) FROM questions q LEFT JOIN answers a ON a.question_id = q.id
+      `SELECT s.status, s.assignee, (SELECT COUNT(*) FROM questions q LEFT JOIN answers a ON a.question_id = q.id
          WHERE q.session_id = s.id AND q.deleted = 0 AND a.question_id IS NULL) open
        FROM sessions s WHERE s.id = ?`,
       sessionId,
     );
-    return row && row.status === "active" ? Number(row.open) : 0;
+    return row && row.status === "active" && !row.assignee
+      ? Number(row.open)
+      : 0;
   }
 
   /** Push endpoints of the user's devices; pushes carry no data. */
@@ -375,7 +396,8 @@ export class InterviewStore {
     const session = first(this.sql, "SELECT * FROM sessions WHERE id = ?", id);
     if (!session) throw new Error("Session not found");
     const questions = this.sql.all(
-      `SELECT q.*, a.text answer_text, a.skipped, a.revision, a.delivered, a.updated_at answer_updated_at
+      `SELECT q.*, a.text answer_text, a.skipped, a.revision, a.delivered, a.updated_at answer_updated_at,
+        a.answered_by
       FROM questions q LEFT JOIN answers a ON a.question_id = q.id
       WHERE q.session_id = ? AND q.deleted = 0 ORDER BY q.position, q.created_at`,
       id,
@@ -419,6 +441,7 @@ export class InterviewStore {
                 revision: Number(row.revision),
                 delivered: Boolean(row.delivered),
                 updatedAt: String(row.answer_updated_at),
+                answeredBy: optional(row.answered_by),
               },
       })),
       artifacts: artifacts.map(this.mapArtifact),
@@ -435,6 +458,8 @@ export class InterviewStore {
       project: this.projectFor(session.project_id),
       origin: mapOrigin(session),
       chat: this.chat(id),
+      assignee: optional(session.assignee),
+      assignedBy: optional(session.assigned_by),
     };
   }
 
@@ -453,6 +478,7 @@ export class InterviewStore {
         replyTo: optional(row.reply_to),
         delivered: Boolean(row.delivered),
         createdAt: String(row.created_at),
+        authorEmail: optional(row.author_email),
       }));
   }
 
@@ -464,6 +490,8 @@ export class InterviewStore {
     sessionId: string,
     author: ChatAuthor,
     input: unknown,
+    /** The assignee who wrote it; null for the owner and the agent. */
+    by: string | null = null,
   ): ChatMessageView {
     this.requireActive(sessionId);
     const parsed = ChatInputSchema.parse(input);
@@ -489,12 +517,13 @@ export class InterviewStore {
         text: parsed.text,
         ...(questionId ? { questionId } : {}),
         ...(replyTo ? { replyTo } : {}),
+        ...(by ? { by } : {}),
       },
     );
     // Only the user's messages wait to be delivered; the agent wrote its own.
     this.sql.all(
-      `INSERT INTO chat_messages (id, session_id, author, text, question_id, reply_to, delivered, event_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO chat_messages (id, session_id, author, text, question_id, reply_to, delivered, event_id, created_at, author_email)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       sessionId,
       author,
@@ -504,6 +533,7 @@ export class InterviewStore {
       author === "agent" ? 1 : 0,
       event.id,
       event.createdAt,
+      by,
     );
     return this.chat(sessionId).find((message) => message.id === id)!;
   }
@@ -544,6 +574,45 @@ export class InterviewStore {
         this.sql.all(`DELETE FROM ${table} WHERE session_id = ?`, id);
       this.sql.all("DELETE FROM sessions WHERE id = ?", id);
     });
+  }
+
+  /**
+   * Assigns the interview to someone else to answer, or clears it with
+   * null. One assignee at a time; returns the one it replaced.
+   */
+  assignSession(
+    id: string,
+    email: string | null,
+    by: string | null,
+  ): { assignee: string | null; previous: string | null } {
+    const row = first(
+      this.sql,
+      "SELECT assignee FROM sessions WHERE id = ?",
+      id,
+    );
+    if (!row) throw new Error("Session not found");
+    const assignee = email?.trim().toLowerCase() || null;
+    if (assignee && !EMAIL.test(assignee))
+      throw new Error(`"${email}" is not an email address`);
+    this.sql.all(
+      "UPDATE sessions SET assignee = ?, assigned_by = ?, updated_at = ? WHERE id = ?",
+      assignee,
+      assignee ? by : null,
+      now(),
+      id,
+    );
+    this.emit(id, "session.assigned", { assignee });
+    return { assignee, previous: optional(row.assignee) };
+  }
+
+  /** Who the interview with this browser token is assigned to, if anyone. */
+  assigneeForToken(token: string): string | null {
+    const row = first(
+      this.sql,
+      "SELECT assignee FROM sessions WHERE token = ?",
+      token,
+    );
+    return row ? optional(row.assignee) : null;
   }
 
   addQuestions(sessionId: string, inputs: unknown[]): QuestionView[] {
@@ -721,6 +790,8 @@ export class InterviewStore {
     sessionId: string,
     questionId: string,
     input: unknown,
+    /** The assignee who answered; null for the owner. */
+    by: string | null = null,
   ): { revision: number; event: InterviewEvent } {
     this.requireActive(sessionId);
     this.questionRow(sessionId, questionId);
@@ -734,17 +805,24 @@ export class InterviewStore {
     const event = this.emit(
       sessionId,
       previous ? "answer.revised" : "answer.submitted",
-      { questionId, answer: parsed.answer, skipped: parsed.skipped, revision },
+      {
+        questionId,
+        answer: parsed.answer,
+        skipped: parsed.skipped,
+        revision,
+        ...(by ? { by } : {}),
+      },
     );
     this.sql.all(
-      `INSERT INTO answers (question_id,text,skipped,revision,delivered,event_id,updated_at) VALUES (?,?,?,?,0,?,?)
-      ON CONFLICT(question_id) DO UPDATE SET text=excluded.text, skipped=excluded.skipped, revision=excluded.revision, delivered=0, event_id=excluded.event_id, updated_at=excluded.updated_at`,
+      `INSERT INTO answers (question_id,text,skipped,revision,delivered,event_id,updated_at,answered_by) VALUES (?,?,?,?,0,?,?,?)
+      ON CONFLICT(question_id) DO UPDATE SET text=excluded.text, skipped=excluded.skipped, revision=excluded.revision, delivered=0, event_id=excluded.event_id, updated_at=excluded.updated_at, answered_by=excluded.answered_by`,
       questionId,
       parsed.answer,
       parsed.skipped ? 1 : 0,
       revision,
       event.id,
       now(),
+      by,
     );
     return { revision, event };
   }

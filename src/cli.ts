@@ -84,7 +84,13 @@ async function sessionCommand(action: string | undefined, args: string[]) {
         origin: detectOrigin(args),
       }),
     });
-    return output(session);
+    const assignee = flag(args, "--assign");
+    if (!assignee) return output(session);
+    const { id } = session as { id: string };
+    return output({
+      ...(session as object),
+      ...((await assign(id, assignee)) as object),
+    });
   }
   if (action === "list")
     return output(
@@ -100,8 +106,22 @@ async function sessionCommand(action: string | undefined, args: string[]) {
   }
   if (action === "delete")
     return output(await api(`/api/sessions/${id}`, { method: "DELETE" }));
+  if (action === "assign") {
+    const email = args.includes("--clear") ? null : positional(args, 1);
+    return output(await assign(id, email));
+  }
   throw new Error(`Unknown session action: ${action ?? ""}`);
 }
+
+/**
+ * Hands an interview to someone else to answer, or takes it back with null.
+ * They sign in with Google as that email at the returned URL.
+ */
+const assign = (id: string, email: string | null) =>
+  api(`/api/sessions/${id}/assign`, {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
 
 async function questionCommand(action: string | undefined, args: string[]) {
   const sessionId = positional(args, 0);
@@ -1428,7 +1448,7 @@ async function keyCommand(action: string | undefined, args: string[]) {
 
 /**
  * The CLI as an npm-installable tarball, behind the agent API so the
- * environment's key fetches it and nothing extra sits outside Access.
+ * environment's key fetches it and nothing extra is public.
  */
 const cliPackageUrl = () => `${defaultBase}/api/sessions/kim/cli.tgz`;
 
@@ -1617,7 +1637,7 @@ function credentialsFrom(
 }
 
 /**
- * Signs in through the browser: the Worker's Cloudflare Access login, then
+ * Signs in through the browser: Google sign-in on the Worker, then
  * OAuth (authorization code with PKCE) back to a one-off loopback callback.
  */
 async function login() {
@@ -1783,7 +1803,13 @@ function questionFromFlags(args: string[]): Record<string, unknown> {
   return result;
 }
 /** Flags that take no value, so the next argument stays positional. */
-const BOOLEAN_FLAGS = new Set(["--all", "--show", "--stdin", "--open-stage"]);
+const BOOLEAN_FLAGS = new Set([
+  "--all",
+  "--show",
+  "--stdin",
+  "--open-stage",
+  "--clear",
+]);
 
 function positional(args: string[], index: number): string {
   const values: string[] = [];
@@ -1818,9 +1844,11 @@ function printHelp(): void {
 (\`interviewer\` is the same command.)
 
 Commands:
-  login | logout | whoami   sign in through the browser (Cloudflare Access, then OAuth)
-  session create --title <text> [--open-stage] [--agent-session <your session title>] [--project <name>]
+  login | logout | whoami   sign in through the browser (Google, then OAuth)
+  session create --title <text> [--open-stage] [--agent-session <your session title>] [--project <name>] [--assign <email>]
     the workspace column starts closed unless --open-stage; the project comes from the git remote
+  session assign <session> <email> | --clear
+    someone else answers it: they sign in with Google as that email at the url; answers come back to you
   project list | rename <project> --name <name> | color <project> --color <#hex>
   project context [--project <key>]   what an agent reads to write where the project is up to
   project summary --text "…" | --file <path|-> [--project <key>]   save where it's up to (2–5 sentences)

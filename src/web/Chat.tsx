@@ -236,6 +236,9 @@ function Message({
   if (message.author === "user")
     return (
       <div className="chat-message user">
+        {message.authorEmail && (
+          <span className="chat-by">{message.authorEmail}</span>
+        )}
         {message.questionId && (
           <span className="chat-chip">
             <span>

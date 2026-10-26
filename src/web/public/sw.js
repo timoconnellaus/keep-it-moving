@@ -1,6 +1,6 @@
 /*
  * Shows a notification when the Worker pushes. Pushes carry no data, so
- * this asks the server which interview is waiting; with the Access session
+ * this asks the server which interview is waiting; with the sign-in
  * expired that request fails and a plain "needs you" opens the home page.
  */
 self.addEventListener("install", () => self.skipWaiting());

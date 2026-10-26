@@ -57,9 +57,11 @@ beforeEach(() => {
         ? { projects: [project] }
         : url.endsWith("/kim/inbox")
           ? { items }
-          : url.includes("/sessions")
-            ? { sessions: [] }
-            : { sessions: [] };
+          : url.endsWith("/browser/me")
+            ? { email: "ann@example.com", name: "Ann" }
+            : url.includes("/sessions")
+              ? { sessions: [] }
+              : { sessions: [] };
       return { ok: true, json: async () => structuredClone(body) };
     }),
   );
@@ -86,6 +88,18 @@ describe("Keep it moving shell", () => {
     ).toHaveTextContent("Booking refactor");
     expect(screen.getByText("1 left")).toBeInTheDocument();
     expect(localStorage.getItem("kim-inbox-hidden")).toContain("needs_you:a@1");
+  });
+
+  it("shows who is signed in, with Sign out behind the avatar", async () => {
+    render(<Shell />);
+    const avatar = await screen.findByRole("button", {
+      name: "Signed in as ann@example.com",
+    });
+    fireEvent.click(avatar);
+    expect(screen.getByRole("menu")).toHaveTextContent("ann@example.com");
+    expect(
+      screen.getByRole("menuitem", { name: "Sign out" }).closest("form"),
+    ).toHaveAttribute("action", "/auth/logout");
   });
 
   it("shows projects in the rail and opens a project page in place", async () => {
