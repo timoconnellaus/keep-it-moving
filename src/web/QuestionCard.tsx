@@ -168,6 +168,7 @@ export function QuestionCard({
 
   return (
     <article
+      data-question-id={question.id}
       className={`question ${open ? "open" : ""} ${emphasized ? "emphasized" : ""} ${question.answer?.delivered ? "received" : ""}`}
     >
       <div className="question-heading">
