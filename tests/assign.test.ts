@@ -52,8 +52,6 @@ describe("an assignee in the owner's hub", () => {
     ).toBe(200);
     for (const [method, url] of [
       ["GET", "/api/browser/overview"],
-      ["GET", "/api/browser/kim/inbox"],
-      ["GET", "/api/browser/kim/projects"],
       ["POST", "/api/browser/push/subscribe"],
       ["POST", `${base}/assign`],
       ["GET", `/api/browser/${other.token}/session`],

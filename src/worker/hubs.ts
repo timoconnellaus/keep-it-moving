@@ -8,7 +8,7 @@ const isOwner = (email: string, env: Env) =>
 
 /**
  * Each user's workspace is its own InterviewHub, and everything they own
- * (interviews, keys, sessions, inbox, devices) lives in it. This is the one
+ * (interviews, keys, devices) lives in it. This is the one
  * place an email becomes a Durable Object.
  */
 export function hubFor(env: Env, email: string) {
@@ -17,7 +17,3 @@ export function hubFor(env: Env, email: string) {
     : `user:${email.trim().toLowerCase()}`;
   return env.HUB.get(env.HUB.idFromName(name));
 }
-
-/** Whether a hub is the owner's, which alone gets the server's GitHub token. */
-export const isOwnerHub = (env: Env, id: DurableObjectId) =>
-  id.equals(env.HUB.idFromName(OWNER_HUB));

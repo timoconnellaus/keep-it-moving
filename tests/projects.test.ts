@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { normalizeRemote } from "../src/shared/remote.js";
-import { PROJECT_COLORS } from "../src/server/store.js";
 import { hubHarness } from "./helpers/harness.js";
 
 const closers: Array<() => void> = [];
@@ -46,10 +45,10 @@ describe("projects", () => {
 
     expect(local.project).toMatchObject({
       name: "Frockbot",
-      color: PROJECT_COLORS[0],
+      color: expect.stringMatching(/^#[0-9a-f]{6}$/),
     });
     expect(cloud.project).toEqual(local.project);
-    expect(other.project?.color).toBe(PROJECT_COLORS[1]);
+    expect(other.project?.color).not.toBe(local.project?.color);
     expect(local.origin).toEqual({
       branch: "claude/checkout",
       worktree: "frockbot-checkout",
@@ -59,28 +58,17 @@ describe("projects", () => {
     });
   });
 
-  it("lets the agent name a project, and the user rename or recolour it", () => {
+  it("lets the agent name an existing project", () => {
     const { store } = harness();
     const first = store.createSession("", {
       origin: { projectKey: "github.com/o/frockbot" },
     });
-    store.updateProject("github.com/o/frockbot", {
-      name: "FrockBot",
-      color: "#123456",
-    });
     // A session without the remote finds it by name, case-insensitively.
     const named = store.createSession("", {
-      origin: { project: "frockbot", projectKey: "local/elsewhere" },
+      origin: { project: "FROCKBOT", projectKey: "local/elsewhere" },
     });
-    expect(named.project).toEqual({
-      ...first.project,
-      name: "FrockBot",
-      color: "#123456",
-    });
+    expect(named.project).toEqual(first.project);
     expect(store.listProjects()).toHaveLength(1);
-    expect(() => store.updateProject("FrockBot", { color: "red" })).toThrow(
-      /hex/,
-    );
   });
 
   it("summarises every interview for the switcher, counting what waits on the user", async () => {
@@ -128,6 +116,19 @@ describe("projects", () => {
     store.addQuestions(session.id, [{ prompt: "One?" }]);
     await new Promise((resolve) => setTimeout(resolve, 400));
     // A burst of changes sends one ping.
+    expect(pings).toEqual([JSON.stringify({ type: "overview" })]);
+  });
+
+  it("pings open pages when a chat message changes who an interview waits on", async () => {
+    const pings: string[] = [];
+    const { store } = hubHarness({
+      sockets: { send: () => undefined, sendAll: (data) => pings.push(data) },
+    });
+    const session = store.createSession("", {});
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    pings.length = 0;
+    store.addChatMessage(session.id, "user", { text: "Why A?" });
+    await new Promise((resolve) => setTimeout(resolve, 400));
     expect(pings).toEqual([JSON.stringify({ type: "overview" })]);
   });
 });

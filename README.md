@@ -1,6 +1,6 @@
 # Keep it moving
 
-Keep it moving (formerly Interviewer) is a CLI and browser app for keeping every running project moving: agent sessions report in, raise requests, and run interviews and live planning, with PRs, CI, automations and backlogs alongside. It's hosted on a Cloudflare Worker at https://keep-it-moving.zerobsai.com. The CLI is `kim`; `interviewer` is the same command, kept so older hooks and scripts still work.
+Keep it moving (formerly Interviewer) runs interviews between agents and people: an agent asks questions in the browser, beside a living plan, diagrams and mockups, and waits for the answers; the person answers, chats with the agent, or hands the interview to someone else. The home page lists every interview and what's left to do on it. It's hosted on a Cloudflare Worker at https://keep-it-moving.zerobsai.com. The CLI is `kim`; `interviewer` is the same command, kept so older scripts still work.
 
 ## Requirements
 
@@ -31,11 +31,11 @@ The browser signs in with Google; anyone with a Google account can, and each use
 2. Put its client ID in `GOOGLE_CLIENT_ID` in `wrangler.jsonc`.
 3. Run `npx wrangler secret put GOOGLE_CLIENT_SECRET` and paste its secret.
 
-`OWNER_EMAIL` in `wrangler.jsonc` names the deployment's owner. Their workspace is the one from before there were other users, and only theirs gets the `GITHUB_TOKEN` secret, so other users go without the PR, CI and GitHub backlog features.
+`OWNER_EMAIL` in `wrangler.jsonc` names the deployment's owner. Their workspace is the one from before there were other users.
 
 ### Assigning an interview to someone else
 
-An interview can be assigned to someone else's email, for them to answer: `kim session create … --assign <email>`, `kim session assign <session> <email>` (or `--clear`), or **Assign** on the interview page. Send them the interview's link yourself; nothing is emailed. They sign in with Google as that email and see only that interview (its questions, the workspace items on stage, and the chat) under "From <you>"; any other account gets a page naming the masked address it was shared with and a **Switch account** link. Their answers and messages carry their email (`answeredBy` and `from` in `wait` batches, "by …" on the page), wake the waiting agent as yours do, and push to your devices once per burst. While it's assigned, its open questions wait on them, not you: the switcher says "Assigned to … · 3 of 7 answered" and the inbox leaves it out. Their own inbox lists it under **Shared with you**.
+An interview can be assigned to someone else's email, for them to answer: `kim session create … --assign <email>`, `kim session assign <session> <email>` (or `--clear`), or **Assign** on the interview page. Send them the interview's link yourself; nothing is emailed. They sign in with Google as that email and see only that interview (its questions, the workspace items on stage, and the chat) under "From <you>"; any other account gets a page naming the masked address it was shared with and a **Switch account** link. Their answers and messages carry their email (`answeredBy` and `from` in `wait` batches, "by …" on the page), wake the waiting agent as yours do, and push to your devices once per burst. While it's assigned, its open questions wait on them, not you: the home page and the switcher say "Waiting on …". Their own home page lists it under **Shared with you**, from you.
 
 The interview stays in the owner's workspace. The Worker keeps a directory in `OAUTH_KV` (`share:<token>` → owner and assignee, `assigned:<email>:<token>` for the list) to route the assignee there, marked with a header only the Worker sets; the owner's hub then allows that header on the one interview's page routes only, and only while the interview is still assigned to that email, so clearing the assignment locks them out at once, before KV catches up. Deleting the interview removes the entries.
 
@@ -48,7 +48,7 @@ npm run desktop:dev     # run it
 npm run desktop:build   # desktop/src-tauri/target/release/bundle/macos/Keep it moving.app and a .dmg
 ```
 
-The window loads `KEEP_IT_MOVING_URL` (default https://keep-it-moving.zerobsai.com) and signs in with Google once; the webview keeps the cookie. Web push doesn't reach a webview, so a script injected into the site (`desktop/src-tauri/src/desktop.js`) polls the inbox every 30 seconds instead: the dock badge shows how many items there are, and each new one raises a native notification while the window isn't focused. Links to other sites open in the default browser, the site's own links that ask for a new tab open in a new window, and ⌘R reloads. The window remembers its size and position.
+The window loads `KEEP_IT_MOVING_URL` (default https://keep-it-moving.zerobsai.com) and signs in with Google once; the webview keeps the cookie. Web push doesn't reach a webview, so a script injected into the site (`desktop/src-tauri/src/desktop.js`) polls the interview list every 30 seconds instead: the dock badge counts the interviews waiting on you, and each one that starts waiting raises a native notification while the window isn't focused. Links to other sites open in the default browser, the site's own links that ask for a new tab open in a new window, and ⌘R reloads. The window remembers its size and position.
 
 The main window only loads the site and Google's sign-in (`accounts.google.com`); any other page opens in the default browser. Only the hosted origins get the native bridge (notifications, badge, opening links and windows), set in `desktop/src-tauri/capabilities/default.json`. Debug builds add `http://localhost:8787` for `wrangler dev`, so point a dev build there rather than a release build. Google may refuse to sign in inside an embedded webview; if it does, the sign-in has to move to the default browser.
 
@@ -84,7 +84,7 @@ kim chat reply <session-id> --text "Sync means…" --to <message-id>
 kim chat list <session-id>
 ```
 
-The page shows whether an agent is watching, so a message sent while none is says it will be read at the next check-in. The user's own messages never put an interview in their inbox or notify them; the agent's replies notify like new questions do.
+The page shows whether an agent is watching, so a message sent while none is says it will be read at the next check-in. A message from the user puts the interview on the agent ("Waiting on the agent" on the home page) and never notifies the user; the agent's replies notify like new questions do.
 
 Two lower-level watchers remain. `attach` emits a snapshot and queued events, then streams NDJSON until cancelled. `events next <session-id> --timeout 25000` long-polls for the next event. Cancelling a watcher never stops the interview. One watcher holds a session at a time, and the newest wins: a new `wait`, `attach` or `events next` takes over, the old one ends (`wait` and `events next` fail with "Replaced by a newer watcher", `attach` emits a `replaced` line and closes), and anything still queued goes to the new one. So a killed watcher never blocks the next.
 
@@ -111,148 +111,34 @@ kim question delete <session-id> <question-id>
 kim session stop <session-id>
 kim session resume <session-id>
 kim session list --all
-kim session delete <session-id>
+kim session delete <session-id> [<session-id>...]
+kim session delete --stopped      # every stopped interview
 ```
+
+`session delete` prints `{"deleted": [{id, title, assignee}]}`; an id that fails is listed under `failed`, the rest still go, and the command exits 1. Deleting an assigned interview also removes it from its assignee's **Shared with you**.
+
+A quick question can skip the steps: `kim ask --title "Run the migration?" --prompt "Back up first?" --type yes-no` (or `--json` with questions) creates the interview, adds the questions, prints the URL to stderr, then waits like `wait` and prints the batch with its `interviewId`.
 
 CLI output is JSON except for the long-running NDJSON attachment stream and `--help`.
 
-## Projects and switching interviews
+## Home page, projects and switching interviews
 
-Interviews from every agent session (local or cloud, Claude Code or Codex) are grouped by project. `session create` detects where it runs:
+The site root (`/`) lists every interview and what's left to do on it: its title and project, "N of M answered" with a bar, who it is waiting on, whom it's assigned to, and its last activity. Who it waits on:
+
+- **you**, while it has open questions and isn't assigned;
+- **the assignee**, while an assigned interview has open questions;
+- **the agent**, once nothing is open, or whenever the latest chat message is yours (or the assignee's) and the agent hasn't replied.
+
+Interviews waiting on you come first, then the other active ones, then stopped ones, newest activity first within each. Interviews other people assigned to you are listed above, under **Shared with you**. The list updates live.
+
+Each interview carries its project as a label. `session create` detects where it runs:
 
 - **Project**: the `origin` remote, normalised to `host/owner/repo`, so SSH, HTTPS and a cloud sandbox's proxied remote all match. Without a remote it is `local/<main checkout folder>`. `--project <name>` picks an existing project by name instead.
 - **Branch and worktree** from git, the **agent** from the `AI_AGENT` convention (or `--agent`), and `--agent-session "<title>"` for the session's name. `--location cloud|local` overrides where it says it runs.
 
-The first interview from a remote creates its project, named from the repo and given the next free colour, which then stays the same everywhere. `kim project list`, `project rename <project> --name <name>` and `project color <project> --color <#hex>` manage them.
+The first interview from a remote creates its project, named from the repo and given the next free colour, which then stays the same everywhere. `kim project list` lists them.
 
-In the browser, the interview title is a switcher (click it, or press ⌘K): every interview, grouped by project, with its branch, agent session, progress and whether it waits on you. A dot on the title counts the other interviews waiting on you, and updates live. The site root is the Keep it moving inbox (below), whose ⌘K switcher lists every interview the same way.
-
-## Keep it moving
-
-The site is becoming **Keep it moving** ([the spec](docs/keep-it-moving.md)): one place that shows what every project's agent sessions are doing and what needs you. The binary has a `kim` alias.
-
-```sh
-kim hooks install    # once per machine: Claude Code sessions report in
-```
-
-`hooks install` adds a `SessionStart`, `UserPromptSubmit`, `Notification`, `Stop` and `SessionEnd` hook to `~/.claude/settings.json` (or `--settings <path>`), next to the hooks already there; it is idempotent, and `hooks uninstall` removes only its own. Each runs `kim hook <event>`, which reads the hook's JSON and reports the session: running, needs you (a notification, with its message), idle (its turn ended, with the last assistant message as the brief) or done. It works out the project, branch and worktree from the session's directory, prints nothing, and always exits 0 within about 3 seconds, so it never holds Claude Code up.
-
-Agents can also report explicitly, and raise a request and wait for the answer in one command:
-
-```sh
-kim report --status idle --brief "Opened PR 16; tests pass" --pr <url> --follow-up "Add rate limiting"
-kim ask --title "Run the migration?" --brief "It's ready; prod has no backup from today" --json - <<'JSON'
-{"questions":[{"type":"single-choice","prompt":"Run it now?","options":["Back up first","Run now","Stop"],"default":"Back up first"}]}
-JSON
-```
-
-Both find the session from `CLAUDE_CODE_SESSION_ID` (or `--session`), and in a cloud session from `CLAUDE_CODE_REMOTE_SESSION_ID` ([Cloud sessions](#cloud-sessions)). `ask` creates an interview linked to the session, marks the session as needing you, prints the URL to stderr, then waits like `wait` and prints the batch with its `interviewId`.
-
-In the browser, `/` is the inbox: requests with open questions and sessions waiting on you, oldest first. A request's questions are answered right there. **Done → next** and **Snooze** (an hour) hide an item in that browser. The rail on the left lists each project with what needs you and what's running; `/p/<project>` shows its sessions and their requests. Push notifications fire for each new inbox item.
-
-## Automations and machines
-
-A long-running loop, such as a project's `/loop /babysitter`, registers itself and checks in once per iteration:
-
-```sh
-kim heartbeat babysitter --every 5m --command "/loop /babysitter" --status "merged #15; 2 queued" --quiet
-```
-
-The first beat registers the automation under the current repo's project (the same key `session create` detects; `--project <key>` overrides it), and each beat records the time, this machine's hostname and an optional `--status` line. `--every` takes `30s`, `5m`, `1h`, `1d` or a number of seconds, and defaults to 5 minutes. With `--quiet` the command prints nothing and always exits 0, so a network blip never breaks the loop. Each heartbeat also counts as the machine checking in.
-
-Once a minute the Worker's alarm marks an automation **down** when it has missed two check-ins (more than twice its interval since the last beat). A down automation shows in the inbox with its expected interval, last beat, last status and whether its machine is still alive (seen in the last 10 minutes): if the machine is alive, the loop itself stopped and needs restarting. The next beat brings it back. The project page lists each project's automations and machines; `kim automation list [--project <key>|--all]` and `automation remove <id>` do the same from the CLI, and the page can remove a stale one.
-
-## Pull requests and CI
-
-For projects keyed by a `github.com/owner/repo` remote, the Worker reads open PRs from GitHub: checks, reviews, mergeability and diffs. It needs a token, set as a Worker secret:
-
-1. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) for the repos you want, with **read-only** access to Contents, Pull requests, Checks (where offered; otherwise Commit statuses), Actions, Issues and Metadata.
-2. Run `npx wrangler secret put GITHUB_TOKEN` and paste it. For `wrangler dev`, put `GITHUB_TOKEN=…` in `.dev.vars`.
-
-Without the token, the PR routes answer 503 `{"error":"GITHUB_TOKEN not set"}` and the page shows these steps.
-
-The Durable Object's once-a-minute alarm syncs each GitHub project at most every 2 minutes, within about 40 GitHub requests a tick. A PR whose head and update time haven't moved is only refetched every 15 minutes, unless its checks are running or failing; the timer backs off when the rate limit runs low. **Sync** on the project page syncs one project at once.
-
-- A PR's **CI** is red when any check failed (failure, timed out, cancelled, action required), pending while any runs, green when all passed, none without checks.
-- A PR is **ready** on GitHub's verdict: not a draft, no check failing or running, no reviewer's latest review requesting changes, and `mergeable_state` `clean` (or `has_hooks`). While GitHub is still computing it (`unknown`), green checks and a mergeable PR count as ready.
-- The inbox gets one **CI failed** item per red PR, dated from when it went red, and one **PRs ready** item per project, dated from its oldest ready PR.
-- The PR page (`/p/<project>/pr/<number>`) fetches live detail, cached for a minute: checks with log excerpts from failing Actions jobs, reviews, and the diff with a file tree.
-
-```sh
-kim pr list                       # this repo's open PRs (from the git remote)
-kim pr list --project github.com/owner/repo
-```
-
-## Backlog, milestones and follow-ups
-
-Each project shows one current milestone with its progress, an "Up next" list (the backlog in milestone order) and the follow-ups finished sessions left undone. The workbench only reads the backlog; it writes back to the source when you accept a follow-up, or on every follow-up once `backlog auto-write on` is set.
-
-- **GitHub Issues** sync on the server with the Worker's `GITHUB_TOKEN`, and are the default for any `github.com` project: open issues plus those closed in the last 14 days, and open milestones. An assignee or an "in progress" label means in progress; labels like `P1` or `priority: high` set the priority. They sync on demand (**Sync now**, `backlog sync`, `backlog next`) and every 15 minutes in the background.
-- **Any other source** uses a per-project **sync script**. The Worker stores it, `kim backlog sync` runs it locally with the current `node` (from the current directory, with your environment, for up to 60 seconds) and uploads what it prints on stdout. A failure is recorded on the project and its stderr shown. The script comes from the Worker, so each machine runs only scripts it approved: one saved with `backlog script set` from that machine is approved, and any other needs `backlog sync --trust` once (read it first with `backlog show`). Approvals are SHA-256 hashes in the CLI's config folder, so an edited script needs approving again.
-- The **current milestone** is the one you set (`backlog milestone set <name>`), else the open one due soonest that still has open items, else the one with the most open items. A source without milestones can use one defined here: `backlog milestone add <name> --due 2026-11-30`.
-
-A sync script prints this shape. Statuses are `todo`, `in_progress`, `done` and `cancelled`; a lower `priority` or `order` comes first, and an item's `milestone` names a milestone's `sourceId` or `name`. For example, the current Linear cycle's issues:
-
-```js
-// sync.mjs: LINEAR_API_KEY comes from the environment of whoever runs the sync.
-const query = `{ viewer { teams(first: 1) { nodes { activeCycle {
-  id name endsAt
-  issues { nodes { identifier title url priority sortOrder
-    state { type } assignee { name } labels { nodes { name } } } } } } } } }`;
-const response = await fetch("https://api.linear.app/graphql", {
-  method: "POST",
-  headers: {
-    authorization: process.env.LINEAR_API_KEY,
-    "content-type": "application/json",
-  },
-  body: JSON.stringify({ query }),
-});
-if (!response.ok) throw new Error(`Linear ${response.status}`);
-const cycle = (await response.json()).data.viewer.teams.nodes[0].activeCycle;
-const status = {
-  started: "in_progress",
-  completed: "done",
-  canceled: "cancelled",
-};
-console.log(
-  JSON.stringify({
-    milestones: [{ sourceId: cycle.id, name: cycle.name, due: cycle.endsAt }],
-    items: cycle.issues.nodes.map((issue) => ({
-      sourceId: issue.identifier,
-      title: issue.title,
-      status: status[issue.state.type] ?? "todo",
-      url: issue.url,
-      milestone: cycle.id,
-      priority: issue.priority || undefined,
-      order: issue.sortOrder,
-      assignee: issue.assignee?.name,
-      labels: issue.labels.nodes.map((label) => label.name),
-    })),
-  }),
-);
-```
-
-```sh
-kim backlog script set --file sync.mjs   # saves it and switches the project to it
-kim backlog sync                          # runs it and uploads the result
-kim backlog next --limit 5                # sync, then the top open items as JSON
-kim backlog source github|script|none
-kim backlog show
-```
-
-Each command uses the current repo's project; `--project <key>` picks another. Agents report follow-ups with `kim report --follow-up "…"`; they reach the inbox as one item per project, where **To backlog** adds them to the source (a GitHub issue, or a local item for other sources), **Start** copies a `claude "…"` command, and ✕ dismisses them.
-
-## Where it's up to
-
-Under the milestone, the project page shows "where it's up to": two to five sentences on what's done, what's in flight, what's blocked or waiting on you, and what's next. The server calls no model. Agents, which are already Claude, write the summary and the workbench stores it:
-
-```sh
-kim project context                      # one JSON: milestone, in progress, up next, follow-ups,
-                                         # the last week's sessions, open PRs, automations, previous summary
-kim project summary --text "…"           # or --file <path|->; records the calling session as the writer
-```
-
-The skill asks agents to do this after a meaningful chunk of work. A scheduled routine can run it daily to keep it fresh. Every summary is kept, and the page shows the newest one, with the session that wrote it and how long ago. It's marked out of date once it's more than a day old and sessions or PRs have moved since. Until a project has a summary, the page shows its newest session brief and labels it "latest session brief". Agent keys can call both commands, so cloud sessions can write summaries too.
+On an interview's page, the title is a switcher (click it, or press ⌘K): every interview, grouped by project, with its branch, agent session, progress and who it waits on. A dot on the title counts the other interviews waiting on you, and updates live.
 
 ## Agent keys (cloud sessions)
 
@@ -264,11 +150,11 @@ kim key list                      # names, created, last used, revoked
 kim key revoke "frockbot cloud"
 ```
 
-Store the key as `KEEP_IT_MOVING_TOKEN` in the cloud environment's variables (`kim cloud setup`, below, does this for you). The CLI sends it instead of an OAuth token; the Worker checks its SHA-256 against the Durable Object (only the hash is stored) and lets it report and work on the agent API: sessions, requests, heartbeats, follow-ups, backlog sync and reads. Environment variables are readable by anyone using the environment, so a key can't delete interviews or automations, rename projects, change backlog settings or sync scripts, or create, list or revoke keys; a leaked one can always be cut off from a signed-in CLI. Live key names are unique, and revoking by name revokes every match.
+Store the key as `KEEP_IT_MOVING_TOKEN` in the cloud environment's variables (`kim cloud setup`, below, does this for you). The CLI sends it instead of an OAuth token; the Worker checks its SHA-256 against the Durable Object (only the hash is stored) and lets it work on the agent API: create and edit interviews, wait on them, reply in their chat and assign them. Environment variables are readable by anyone using the environment, so a key can't answer questions, delete interviews, or create, list or revoke keys; a leaked one can always be cut off from a signed-in CLI. Live key names are unique, and revoking by name revokes every match.
 
 ## Cloud sessions
 
-Claude Code sessions on claude.ai/code run in a VM that never sees this Mac's `~/.claude`, so they need the CLI, a key and a way to run its hooks. Each project's cloud environment gets three things, and `cloud setup` prints all three, ready to paste:
+Claude Code sessions on claude.ai/code run in a VM that never sees this Mac's `~/.claude`, so they need the CLI and a key. Each project's cloud environment gets three things, and `cloud setup` prints all three, ready to paste:
 
 ```sh
 cd ~/repos/frockbot
@@ -280,31 +166,19 @@ It creates an agent key named "<project name> cloud" (`--key-name` picks another
 
 1. **Network access**: Custom, add `keep-it-moving.zerobsai.com`, and keep the default package registries included. The default Trusted level allows GitHub and the registries but not this host.
 2. **Environment variables**: `KEEP_IT_MOVING_TOKEN=kim_…`. Anyone who uses the environment can read it.
-3. **Setup script**: it installs the CLI from the Worker, then installs the user-level hooks in the VM. Every line ends in `|| true`, so a failure never stops a session from starting:
+3. **Setup script**: it installs the CLI from the Worker. Every line ends in `|| true`, so a failure never stops a session from starting:
 
    ```bash
    #!/bin/bash
    curl -fsS -H "Authorization: Bearer ${KEEP_IT_MOVING_TOKEN:-$INTERVIEWER_TOKEN}" -o /tmp/kim-cli.tgz https://keep-it-moving.zerobsai.com/api/sessions/kim/cli.tgz && npm install -g /tmp/kim-cli.tgz || true
-   kim hooks install || true
    exit 0
    ```
-
-The setup script's hooks are **experimental**. They write `/root/.claude/settings.json`, and Claude Code's docs say cloud sessions run hooks from the repo's committed `.claude/settings.json` but don't say whether they read the user-level file. Start a cloud session and check that it shows up in Keep it moving. If it doesn't, use the per-repo fallback, from a checkout of the repo:
-
-```sh
-kim hooks install --project     # writes .claude/settings.json; commits nothing
-git add .claude/settings.json && git commit -m "Report cloud sessions to Keep it moving"
-```
-
-It adds the same five hooks to the repo's `.claude/settings.json`, merged beside what's there and idempotent like the user-level install, each guarded so it runs only where `KEEP_IT_MOVING_TOKEN` is set: `[ -n "$KEEP_IT_MOVING_TOKEN" ] && kim hook Stop || true`. Teammates without a token are unaffected, and so is your Mac, which reports through its user-level hooks and normally has no `KEEP_IT_MOVING_TOKEN`. If both copies do fire (a token set locally, or a VM that reads both files), the hook reports once: the first copy to start writes a marker named after the hook's input, and the other sees it and stays quiet. `hooks uninstall --project` removes them. Cloud hooks run only in single-repo sessions.
-
-In a cloud session, the CLI also sends `CLAUDE_CODE_REMOTE_SESSION_ID` (`cse_…`) with each hook's report. The session then links to its page on claude.ai (**Open session** on the inbox item and the project page), and `report` and `ask`, which don't get Claude Code's session id there, find the session by that remote id. Until a hook has reported, they file it under the remote id; the hooks' first report adopts it.
 
 The CLI package is served behind the agent API at `/api/sessions/kim/cli.tgz`, so the setup script fetches it with the environment's `KEEP_IT_MOVING_TOKEN` and nothing new is public. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. The docs don't say whether a setup script sees the environment's variables; if `kim` is missing in a cloud session, that's why, and `/cli.tgz` is public as a fallback.
 
 ## On your phone
 
-The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's sign-in cookie. It opens on the inbox.
+The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's sign-in cookie. It opens on the interview list.
 
 **Notify me** on that page turns on push notifications for the device. When an interview with nothing open gains questions, the Worker pushes to every subscribed device, and the notification names the interview (for example "FrockBot · Checkout flow, 3 questions waiting") and opens it when tapped. **Send a test** checks the setup.
 
@@ -380,7 +254,7 @@ browser ──HTTPS/WSS (Google sign-in)── Worker ── InterviewHub Durabl
 ```
 
 - **Worker** (`src/worker`): wraps everything in `@cloudflare/workers-oauth-provider`. `/api/sessions/**` needs an OAuth access token or an agent key, and goes to its user's workspace. Every other route needs the browser session from Google sign-in (`/auth/google/start`, `/auth/google/callback`, `/auth/logout`): a random id in an HttpOnly cookie, kept in `OAUTH_KV` for 30 days from last use. Signed-out pages go to `/signin`, signed-out API calls get a 401. `/authorize` completes OAuth straight from that session, and only for loopback redirect URIs, so only the CLI can collect a code. An agent key's owner is recorded in `OAUTH_KV` when it is made; a key with none recorded predates other users and is the owner's.
-- **InterviewHub** (`src/worker/hub.ts`): one SQLite Durable Object per user, holding everything of theirs: interviews, agent keys, agent sessions, inbox, devices, projects and automations. `hubFor` (`src/worker/hubs.ts`) picks it: `user:<email>` for most, and the original `interviews` for `OWNER_EMAIL`. Browser WebSockets hibernate, tagged by session.
+- **InterviewHub** (`src/worker/hub.ts`): one SQLite Durable Object per user, holding everything of theirs: interviews, projects, agent keys and devices. Tables from features that have since been removed stay in older workspaces, unused. `hubFor` (`src/worker/hubs.ts`) picks it: `user:<email>` for most, and the original `interviews` for `OWNER_EMAIL`. Browser WebSockets hibernate, tagged by session.
 - **Hub router and store** (`src/server`): the HTTP API (Hono) and the store, written against a small SQL interface so tests run them on `node:sqlite`.
 - **CLI** (`src/cli.ts`): a thin client. `wait` chains 60 s requests with `partial=1` to stay under Cloudflare's 100 s idle cutoff; `attach` filters out the heartbeat lines that keep its stream alive.
 
@@ -399,5 +273,5 @@ The suite runs the hub and store on in-memory `node:sqlite`, and the CLI against
 
 ## Current limitations
 
-- One user per deployment, and one watcher per session (the newest takes over).
+- One watcher per session (the newest takes over).
 - Canvas, drawing, uploads, ranking, and rich HTML questions are future work.

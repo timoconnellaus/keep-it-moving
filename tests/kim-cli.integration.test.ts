@@ -1,11 +1,5 @@
-import { execFile, spawn } from "node:child_process";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { execFile } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,225 +62,24 @@ const env = (address: string, extra: Record<string, string> = {}) => {
   };
 };
 
-/** Runs `kim hook <event>` with JSON on stdin, as Claude Code does. */
-function runHook(
-  address: string,
-  event: string,
-  input: unknown,
-  extra: Record<string, string> = {},
-) {
-  // Its own temp dir, so another run's dedupe markers never match.
-  const markers = tempDir();
-  return new Promise<{ code: number | null; stdout: string; stderr: string }>(
-    (resolve) => {
-      const child = spawn(process.execPath, [tsx, cli, "hook", event], {
-        env: env(address, { TMPDIR: markers, ...extra }),
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk) => (stdout += chunk));
-      child.stderr.on("data", (chunk) => (stderr += chunk));
-      child.on("close", (code) => resolve({ code, stdout, stderr }));
-      child.stdin.end(JSON.stringify(input));
-    },
-  );
-}
+/** Runs the CLI against the harness, from this repo. */
+const kim = (address: string, ...args: string[]) =>
+  exec(process.execPath, [tsx, cli, ...args], { env: env(address), cwd: repo });
 
-describe("hooks install", () => {
-  it("merges its hooks beside existing ones, idempotently, and uninstalls only its own", async () => {
-    const dir = tempDir();
-    const settings = join(dir, "settings.json");
-    const original = {
-      model: "opus",
-      hooks: {
-        Stop: [
-          { hooks: [{ type: "command", command: "afplay /System/done.aiff" }] },
-        ],
-        PreToolUse: [
-          { matcher: "Bash", hooks: [{ type: "command", command: "guard" }] },
-        ],
-      },
-    };
-    writeFileSync(settings, JSON.stringify(original));
-    const run = async (action: string) =>
-      JSON.parse(
-        (
-          await exec(process.execPath, [
-            tsx,
-            cli,
-            "hooks",
-            action,
-            "--settings",
-            settings,
-          ])
-        ).stdout,
-      );
-    const read = () => JSON.parse(readFileSync(settings, "utf8"));
-
-    expect((await run("install")).changed).toEqual([
-      "SessionStart",
-      "UserPromptSubmit",
-      "Notification",
-      "Stop",
-      "SessionEnd",
-    ]);
-    const installed = read();
-    expect(installed.model).toBe("opus");
-    expect(installed.hooks.PreToolUse).toEqual(original.hooks.PreToolUse);
-    expect(
-      installed.hooks.Stop.map(
-        (group: { hooks: Array<{ command: string }> }) =>
-          group.hooks[0]!.command,
-      ),
-    ).toEqual(["afplay /System/done.aiff", "kim hook Stop"]);
-    expect(installed.hooks.Notification[0].hooks[0].command).toBe(
-      "kim hook Notification",
-    );
-
-    expect((await run("install")).changed).toEqual([]);
-    expect(read()).toEqual(installed);
-
-    await run("uninstall");
-    expect(read()).toEqual(original);
-  });
-});
-
-describe("hook command", () => {
-  it("maps Claude Code hooks to session reports, and never fails", async () => {
-    const { address, app } = await listeningHarness();
-    const dir = tempDir();
-    const transcript = join(dir, "transcript.jsonl");
-    writeFileSync(
-      transcript,
-      [
-        { type: "user", message: { content: "Fix the lease" } },
-        {
-          type: "assistant",
-          message: { content: [{ type: "text", text: "Looking now." }] },
-        },
-        {
-          type: "assistant",
-          message: {
-            content: [
-              { type: "text", text: "Fixed the watcher lease; tests pass." },
-              { type: "tool_use", name: "Bash" },
-            ],
-          },
-        },
-        { type: "assistant", message: { content: [{ type: "tool_use" }] } },
-      ]
-        .map((line) => JSON.stringify(line))
-        .join("\n"),
-    );
-    const base = { session_id: "cc-1", cwd: repo, transcript_path: transcript };
-    const session = async () =>
-      (
-        await app.inject({
-          method: "GET",
-          url: "/api/browser/kim/sessions/cc-1",
-        })
-      ).json();
-
-    const started = await runHook(address, "UserPromptSubmit", {
-      ...base,
-      hook_event_name: "UserPromptSubmit",
-      prompt: `  Fix the watcher lease\n so a dead CLI ${"never blocks ".repeat(10)}`,
-    });
-    expect(started).toEqual({ code: 0, stdout: "", stderr: "" });
-    const running = await session();
-    expect(running.status).toBe("running");
-    expect(running.title).toHaveLength(80);
-    expect(
-      running.title.startsWith("Fix the watcher lease so a dead CLI"),
-    ).toBe(true);
-    expect(running.cwd).toBe(repo);
-    expect(running.location).toBe("local");
-    expect(running.machine).toBeTruthy();
-    expect(running.projectId).toBeTruthy();
-
-    await runHook(address, "Notification", {
-      ...base,
-      message: "Claude needs your permission to use Bash",
-    });
-    expect(await session()).toMatchObject({
-      status: "needs_you",
-      message: "Claude needs your permission to use Bash",
-    });
-
-    await runHook(address, "Stop", base);
-    expect(await session()).toMatchObject({
-      status: "idle",
-      brief: "Fixed the watcher lease; tests pass.",
-    });
-
-    await runHook(address, "SessionEnd", base);
-    expect((await session()).status).toBe("done");
-
-    // Bad input, an unknown event and an unreachable server all exit quietly.
-    expect(await runHook(address, "Stop", "not json")).toEqual({
-      code: 0,
-      stdout: "",
-      stderr: "",
-    });
-    expect(await runHook(address, "PreToolUse", base)).toMatchObject({
-      code: 0,
-      stdout: "",
-    });
-    expect(await runHook("http://127.0.0.1:9", "Stop", base)).toMatchObject({
-      code: 0,
-      stdout: "",
-    });
-  });
-});
-
-describe("report and ask", () => {
-  it("reports explicitly, ignoring a missing follow-ups route", async () => {
-    const { address } = await listeningHarness();
-    const { stdout } = await exec(
-      process.execPath,
-      [
-        tsx,
-        cli,
-        "report",
-        "--status",
-        "idle",
-        "--brief",
-        "Opened the PR",
-        "--pr",
-        "https://github.com/o/r/pull/3",
-        "--follow-up",
-        "Add rate limiting",
-      ],
-      { env: env(address, { CLAUDE_CODE_SESSION_ID: "cc-2" }), cwd: repo },
-    );
-    expect(JSON.parse(stdout)).toMatchObject({
-      id: "cc-2",
-      status: "idle",
-      brief: "Opened the PR",
-      prUrl: "https://github.com/o/r/pull/3",
-    });
-  });
-
-  it("raises a request linked to the agent session and waits", async () => {
-    const { address, app, store } = await listeningHarness();
-    const { stdout, stderr } = await exec(
-      process.execPath,
-      [
-        tsx,
-        cli,
-        "ask",
-        "--title",
-        "Run the migration?",
-        "--brief",
-        "Migration is ready.",
-        "--prompt",
-        "Back up first?",
-        "--type",
-        "yes-no",
-        "--timeout",
-        "500",
-      ],
-      { env: env(address, { CLAUDE_CODE_SESSION_ID: "cc-3" }), cwd: repo },
+describe("ask", () => {
+  it("creates an interview with its questions, then waits like wait", async () => {
+    const { address, store } = await listeningHarness();
+    const { stdout, stderr } = await kim(
+      address,
+      "ask",
+      "--title",
+      "Run the migration?",
+      "--prompt",
+      "Back up first?",
+      "--type",
+      "yes-no",
+      "--timeout",
+      "500",
     );
     const result = JSON.parse(stdout);
     expect(stderr).toContain(result.url);
@@ -294,221 +87,73 @@ describe("report and ask", () => {
       events: expect.any(Array),
       openQuestions: 1,
     });
-    const items = (
-      await app.inject({ method: "GET", url: "/api/browser/kim/inbox" })
-    ).json().items;
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      kind: "request",
-      title: "Run the migration?",
-      brief: "Migration is ready.",
-    });
-    expect(store.getSession(result.interviewId, "").questions[0]!.prompt).toBe(
-      "Back up first?",
-    );
-    const session = (
-      await app.inject({ method: "GET", url: "/api/browser/kim/sessions/cc-3" })
-    ).json();
-    expect(session.status).toBe("needs_you");
-    expect(session.requests[0]).toMatchObject({
-      id: result.interviewId,
-      open: 1,
-    });
+    const session = store.getSession(result.interviewId, "");
+    expect(session.title).toBe("Run the migration?");
+    expect(session.questions[0]!.prompt).toBe("Back up first?");
   });
 });
 
-describe("project summaries", () => {
-  it("prints the project's context and saves a summary from text or a file", async () => {
-    const { address } = await listeningHarness();
-    const run = async (...args: string[]) =>
-      JSON.parse(
-        (
-          await exec(process.execPath, [tsx, cli, ...args], {
-            env: env(address, { CLAUDE_CODE_SESSION_ID: "cc-sum" }),
-            cwd: repo,
-          })
-        ).stdout,
-      );
-    await run("report", "--title", "Summaries", "--brief", "Routes done");
-    const saved = await run(
-      "project",
-      "summary",
-      "--text",
-      "Routes are in; the page is next.",
-    );
-    expect(saved.summary).toMatchObject({
-      text: "Routes are in; the page is next.",
-      writtenBy: "cc-sum",
-      writtenByTitle: "Summaries",
+describe("session delete", () => {
+  it("deletes several interviews by id and prints what went", async () => {
+    const { address, store } = await listeningHarness();
+    const a = store.createSession("", { title: "A" });
+    const b = store.createSession("", { title: "B" });
+    const kept = store.createSession("", { title: "Kept" });
+    const { stdout } = await kim(address, "session", "delete", a.id, b.id);
+    expect(JSON.parse(stdout)).toEqual({
+      deleted: [
+        { id: a.id, title: "A", assignee: null },
+        { id: b.id, title: "B", assignee: null },
+      ],
     });
-    const file = join(tempDir(), "summary.md");
-    writeFileSync(file, "The page shows it now.\n");
-    await run("project", "summary", "--file", file);
-    const context = await run("project", "context");
-    expect(context.project.key).toBe(saved.project.key);
-    expect(context.sessions[0]).toMatchObject({
-      id: "cc-sum",
-      brief: "Routes done",
-    });
-    expect(context.previousSummary.text).toBe("The page shows it now.");
-  });
-});
-
-const cloud = {
-  CLAUDE_CODE_REMOTE: "true",
-  CLAUDE_CODE_REMOTE_SESSION_ID: "cse_01Cloud",
-};
-
-describe("cloud sessions", () => {
-  it("links the hooks' session to report and ask by the remote id", async () => {
-    const { address, app } = await listeningHarness();
-    const session = async () =>
-      (
-        await app.inject({
-          method: "GET",
-          url: "/api/browser/kim/sessions/cc-cloud",
-        })
-      ).json();
-    await runHook(
-      address,
-      "SessionStart",
-      { session_id: "cc-cloud", cwd: repo },
-      cloud,
-    );
-    expect(await session()).toMatchObject({
-      location: "cloud",
-      remoteId: "cse_01Cloud",
-      url: "https://claude.ai/code/session_01Cloud",
-    });
-
-    // No CLAUDE_CODE_SESSION_ID: the remote id finds the hooks' session.
-    const reported = JSON.parse(
-      (
-        await exec(
-          process.execPath,
-          [tsx, cli, "report", "--status", "idle", "--brief", "Pushed"],
-          { env: env(address, cloud), cwd: repo },
-        )
-      ).stdout,
-    );
-    expect(reported).toMatchObject({ id: "cc-cloud", brief: "Pushed" });
-
-    const asked = JSON.parse(
-      (
-        await exec(
-          process.execPath,
-          [
-            tsx,
-            cli,
-            "ask",
-            "--title",
-            "Ship?",
-            "--prompt",
-            "Ship it?",
-            "--timeout",
-            "300",
-          ],
-          { env: env(address, cloud), cwd: repo },
-        )
-      ).stdout,
-    );
-    const asking = await session();
-    expect(asking.status).toBe("needs_you");
-    expect(asking.requests[0].id).toBe(asked.interviewId);
-  });
-
-  it("reports under the remote id before any hook has", async () => {
-    const { address } = await listeningHarness();
-    const { stdout } = await exec(
-      process.execPath,
-      [tsx, cli, "report", "--brief", "Early"],
-      { env: env(address, cloud), cwd: repo },
-    );
-    expect(JSON.parse(stdout)).toMatchObject({
-      id: "cse_01Cloud",
-      url: "https://claude.ai/code/session_01Cloud",
-    });
-  });
-
-  it("reports once when user and project hooks both fire", async () => {
-    const { address, requests } = await listeningHarness();
-    const markers = tempDir();
-    const input = { session_id: "cc-twice", cwd: repo };
-    await Promise.all([
-      runHook(address, "Stop", input, { TMPDIR: markers }),
-      runHook(address, "Stop", input, { TMPDIR: markers }),
+    expect(store.listSessions("", true).map((session) => session.id)).toEqual([
+      kept.id,
     ]);
-    expect(
-      requests.filter((request) => request === "POST /api/sessions/kim/report"),
-    ).toHaveLength(1);
   });
-});
 
-describe("hooks install --project", () => {
-  it("merges guarded hooks into the repo's settings, idempotently, and commits nothing", async () => {
-    const dir = tempDir();
-    await exec("git", ["init", "-q", dir]);
-    mkdirSync(join(dir, ".claude"));
-    const settings = join(dir, ".claude", "settings.json");
-    const original = {
-      permissions: { allow: ["Bash(npm test)"] },
-      hooks: {
-        Stop: [{ hooks: [{ type: "command", command: "npm run lint" }] }],
-      },
+  it("deletes every stopped interview with --stopped", async () => {
+    const { address, store } = await listeningHarness();
+    const done = store.createSession("", { title: "Done" });
+    store.setSessionStatus(done.id, "stopped");
+    const shared = store.createSession("", { title: "Shared" });
+    store.assignSession(shared.id, "bob@example.com", "Ann");
+    store.setSessionStatus(shared.id, "stopped");
+    const active = store.createSession("", { title: "Active" });
+    const { stdout } = await kim(address, "session", "delete", "--stopped");
+    const { deleted } = JSON.parse(stdout) as {
+      deleted: Array<{ id: string; title: string; assignee: string | null }>;
     };
-    writeFileSync(settings, JSON.stringify(original));
-    const run = async (action: string) => {
-      const { stdout, stderr } = await exec(
-        process.execPath,
-        [tsx, cli, "hooks", action, "--project"],
-        { cwd: dir, env: env("http://127.0.0.1:9") },
-      );
-      return { result: JSON.parse(stdout), stderr };
-    };
-    const read = () => JSON.parse(readFileSync(settings, "utf8"));
-    const guarded = (event: string) =>
-      `[ -n "$KEEP_IT_MOVING_TOKEN$INTERVIEWER_TOKEN" ] && kim hook ${event} || true`;
-
-    const first = await run("install");
-    expect(first.result.changed).toHaveLength(5);
-    expect(first.result.commit).toContain("add .claude/settings.json");
-    expect(first.stderr).toContain("Nothing is committed");
-    const installed = read();
-    expect(installed.permissions).toEqual(original.permissions);
-    expect(
-      installed.hooks.Stop.map(
-        (group: { hooks: Array<{ command: string }> }) =>
-          group.hooks[0]!.command,
-      ),
-    ).toEqual(["npm run lint", guarded("Stop")]);
-    expect(installed.hooks.SessionStart[0].hooks[0].command).toBe(
-      guarded("SessionStart"),
+    expect(deleted).toHaveLength(2);
+    expect(deleted).toEqual(
+      expect.arrayContaining([
+        { id: done.id, title: "Done", assignee: null },
+        { id: shared.id, title: "Shared", assignee: "bob@example.com" },
+      ]),
     );
+    expect(store.listSessions("", true).map((session) => session.id)).toEqual([
+      active.id,
+    ]);
+    // Nothing left to delete is not an error.
+    expect(
+      JSON.parse((await kim(address, "session", "delete", "--stopped")).stdout),
+    ).toEqual({ deleted: [] });
+  });
 
-    const again = await run("install");
-    expect(again.result).toMatchObject({ changed: [], commit: null });
-    expect(read()).toEqual(installed);
-    // Nothing committed: the repo still has no commits.
-    await expect(
-      exec("git", ["-C", dir, "rev-parse", "--verify", "HEAD"]),
-    ).rejects.toThrow();
-
-    // Under sh the guard runs nothing without a token, and always exits 0.
-    const sh = (token?: string) =>
-      new Promise<number | null>((resolve) => {
-        const shellEnv: Record<string, string> = { PATH: dir };
-        if (token) shellEnv.KEEP_IT_MOVING_TOKEN = token;
-        spawn("/bin/sh", ["-c", guarded("Stop")], { env: shellEnv }).on(
-          "close",
-          resolve,
-        );
-      });
-    expect(await sh()).toBe(0);
-    // With a token it runs interviewer, missing from this PATH: still 0.
-    expect(await sh("kim_x")).toBe(0);
-
-    await run("uninstall");
-    expect(read()).toEqual(original);
+  it("keeps going past an id that fails, and exits 1", async () => {
+    const { address, store } = await listeningHarness();
+    const a = store.createSession("", { title: "A" });
+    const failure = (await kim(
+      address,
+      "session",
+      "delete",
+      "missing",
+      a.id,
+    ).catch((error: unknown) => error)) as { code: number; stdout: string };
+    expect(failure.code).toBe(1);
+    expect(JSON.parse(failure.stdout)).toEqual({
+      deleted: [{ id: a.id, title: "A", assignee: null }],
+      failed: [{ id: "missing", error: "Session not found" }],
+    });
   });
 });
 
@@ -545,8 +190,7 @@ describe("cloud setup", () => {
     expect(stdout).toContain(
       '"Authorization: Bearer ${KEEP_IT_MOVING_TOKEN:-$INTERVIEWER_TOKEN}"',
     );
-    expect(stdout).toContain("kim hooks install || true");
-    expect(stdout).toContain("kim hooks install --project");
+    expect(stdout).not.toContain("hooks");
     expect(stdout).toContain("kim key revoke 'Frockbot cloud'");
     if (process.env.SHOW_CLOUD_SETUP) process.stderr.write(stdout);
 
@@ -596,7 +240,6 @@ describe("the CLI package", () => {
       "package/LICENSE",
       "package/README.md",
       "package/dist/cli.js",
-      "package/dist/shared/automations.js",
       "package/dist/shared/remote.js",
       "package/package.json",
       "package/skills/interviewer/SKILL.md",
@@ -621,10 +264,10 @@ describe("settings from before the rename", () => {
     delete (base as Record<string, unknown>).KEEP_IT_MOVING_TOKEN;
     const { stdout } = await exec(
       process.execPath,
-      [tsx, cli, "automation", "list", "--all"],
+      [tsx, cli, "session", "list"],
       { env: { ...base, INTERVIEWER_URL: address, INTERVIEWER_TOKEN: "test" } },
     );
-    expect(JSON.parse(stdout)).toEqual({ automations: [] });
-    expect(requests).toContain("GET /api/sessions/kim/automations");
+    expect(JSON.parse(stdout)).toEqual([]);
+    expect(requests).toContain("GET /api/sessions");
   });
 });

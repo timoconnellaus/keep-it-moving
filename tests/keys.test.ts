@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { VIA_KEY_HEADER } from "../src/server/features/keys.js";
+import { VIA_KEY_HEADER } from "../src/server/keys.js";
 import { hubHarness } from "./helpers/harness.js";
 
 const closers: Array<() => void> = [];
@@ -74,7 +74,7 @@ describe("agent keys", () => {
 });
 
 describe("what a key may do", () => {
-  it("lets a key report and work, but not delete, reconfigure or manage keys", async () => {
+  it("lets a key work, but not answer, delete or manage keys", async () => {
     const { app } = harness();
     const asKey = (
       method: "GET" | "POST" | "DELETE",
@@ -89,35 +89,14 @@ describe("what a key may do", () => {
       });
     const session = (await asKey("POST", "/api/sessions", {})).json();
     expect(session.id).toBeTruthy();
-    expect(
-      (
-        await asKey("POST", "/api/sessions/kim/report", {
-          id: "cloud-1",
-          status: "running",
-        })
-      ).statusCode,
-    ).toBe(200);
     for (const [method, url, payload] of [
       ["DELETE", `/api/sessions/${session.id}`],
       ["DELETE", `/api/sessions/${session.id}/`],
-      ["POST", "/api/sessions/projects/update", { project: "x", name: "y" }],
-      ["DELETE", "/api/sessions/kim/automations/any"],
-      [
-        "POST",
-        "/api/sessions/kim/backlog/settings",
-        { project: "github.com/o/r", script: "x" },
-      ],
-      // Answers are Tim's; milestones are configuration; new routes are out
-      // until they're allowed.
+      // Answers are the user's; new routes are out until they're allowed.
       [
         "POST",
         `/api/sessions/${session.id}/questions/q1/answer`,
         { answer: "x" },
-      ],
-      [
-        "POST",
-        "/api/sessions/kim/backlog/milestones",
-        { project: "p", name: "m" },
       ],
       ["POST", "/api/sessions/kim/something-new", {}],
     ] as const)
@@ -172,26 +151,10 @@ describe("what a key may do", () => {
     const session = (await asKey("POST", "/api/sessions", {})).json();
     for (const [method, url, payload] of [
       ["POST", `/api/sessions/${session.id}/questions`, { prompt: "Which?" }],
+      ["POST", `/api/sessions/${session.id}/chat`, { text: "On it." }],
       ["POST", `/api/sessions/${session.id}/stop`, {}],
       ["GET", `/api/sessions/${session.id}`],
-      ["GET", "/api/sessions/kim/inbox"],
-      ["GET", "/api/sessions/kim/backlog?project=github.com/o/r"],
-      [
-        "POST",
-        "/api/sessions/kim/heartbeat",
-        { project: "github.com/o/r", name: "loop", every: 300 },
-      ],
-      [
-        "POST",
-        "/api/sessions/kim/followups",
-        { projectKey: "github.com/o/r", items: ["Later"] },
-      ],
-      ["GET", "/api/sessions/kim/projects/context?project=github.com/o/r"],
-      [
-        "POST",
-        "/api/sessions/kim/projects/summary",
-        { project: "github.com/o/r", text: "Where it's up to." },
-      ],
+      ["GET", "/api/sessions/projects"],
     ] as const)
       expect(
         (await asKey(method, url, payload)).statusCode,

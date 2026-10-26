@@ -3,12 +3,11 @@ import { createHub, RESPONDENT_HEADER, sameSite } from "../server/hub.js";
 import { durableObjectSql } from "../server/sql.js";
 import { InterviewStore } from "../server/store.js";
 import type { Env } from "./env.js";
-import { isOwnerHub } from "./hubs.js";
 import { webPush } from "./push.js";
 
 /**
  * One user's workspace, in one SQLite-backed Durable Object: their
- * interviews and everything else. Browser sockets hibernate, tagged with
+ * interviews, agent keys and devices. Browser sockets hibernate, tagged with
  * their session id, or `respondent:<id>` for an assignee's page.
  */
 export class InterviewHub extends DurableObject<Env> {
@@ -20,10 +19,6 @@ export class InterviewHub extends DurableObject<Env> {
     this.hub = createHub({
       store: new InterviewStore(sql),
       sql,
-      // The server's GitHub token is the owner's; other users go without.
-      env: {
-        githubToken: isOwnerHub(env, ctx.id) ? env.GITHUB_TOKEN : undefined,
-      },
       baseUrl: env.PUBLIC_URL,
       push: webPush(env),
       sockets: {
@@ -68,7 +63,6 @@ export class InterviewHub extends DurableObject<Env> {
   }
 
   override async fetch(request: Request): Promise<Response> {
-    await this.scheduleTick();
     const socket = new URL(request.url).pathname.match(/^\/ws\/([^/]+)$/);
     if (!socket) return this.hub.app.fetch(request);
     // WebSockets skip CORS, so check the page opening one is our own.
@@ -103,16 +97,8 @@ export class InterviewHub extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  /** Feature timer work (missed heartbeats, CI polling) runs once a minute. */
-  override async alarm(): Promise<void> {
-    await this.hub.tick();
-    await this.ctx.storage.setAlarm(Date.now() + TICK_MS);
-  }
-
-  private async scheduleTick(): Promise<void> {
-    if ((await this.ctx.storage.getAlarm()) === null)
-      await this.ctx.storage.setAlarm(Date.now() + TICK_MS);
-  }
+  /** Older deploys ran a once-a-minute alarm; one still set ends here. */
+  override async alarm(): Promise<void> {}
 
   override webSocketMessage(): void {
     // The page only listens; it writes through the HTTP API.
@@ -122,7 +108,5 @@ export class InterviewHub extends DurableObject<Env> {
     socket.close(code === 1005 ? 1000 : code);
   }
 }
-
-const TICK_MS = 60_000;
 
 const respondentTag = (sessionId: string) => `respondent:${sessionId}`;

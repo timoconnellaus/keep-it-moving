@@ -36,11 +36,7 @@ async function waitingNotification() {
   const latest = waiting[0];
   const reply = latestReply(sessions);
   // An agent's chat reply pushes too; show it when it is the newest thing.
-  if (
-    reply &&
-    (!latest || reply.lastReply.at >= latest.lastActivity) &&
-    !((await newestInboxItem())?.since > reply.lastReply.at)
-  ) {
+  if (reply && (!latest || reply.lastReply.at >= latest.lastActivity)) {
     const text = reply.lastReply.text;
     return self.registration.showNotification(
       reply.project ? `${reply.project.name} · ${reply.title}` : reply.title,
@@ -55,25 +51,12 @@ async function waitingNotification() {
     );
   }
   // Every push must show something; this one is a test or already answered.
-  if (!latest && !(await newestInboxItem()))
+  if (!latest)
     return self.registration.showNotification("Keep it moving", {
       body: "Nothing is waiting on you right now.",
       icon: ICON,
       badge: BADGE,
       tag: "keep-it-moving",
-      data: { url: "/" },
-    });
-  // Keep it moving pushes for other inbox items too (an agent waiting, a
-  // failed check); show whichever is newer, that or the interview.
-  const item = await newestInboxItem();
-  if (item && (!latest || item.since > latest.lastActivity))
-    return self.registration.showNotification(item.title, {
-      body:
-        item.brief.length > 180 ? `${item.brief.slice(0, 179)}…` : item.brief,
-      icon: ICON,
-      badge: BADGE,
-      tag: "keep-it-moving",
-      renotify: true,
       data: { url: "/" },
     });
   const others = waiting.length - 1;
@@ -101,25 +84,6 @@ function latestReply(sessions) {
       .filter((session) => session.status === "active" && session.lastReply)
       .sort((a, b) => b.lastReply.at.localeCompare(a.lastReply.at))[0] ?? null
   );
-}
-
-/** The newest inbox item other than a request (those are interviews). */
-async function newestInboxItem() {
-  try {
-    const response = await fetch("/api/browser/kim/inbox", {
-      credentials: "same-origin",
-      redirect: "error",
-    });
-    if (!response.ok) return null;
-    const { items } = await response.json();
-    return (
-      items
-        .filter((item) => item.kind !== "request")
-        .sort((a, b) => b.since.localeCompare(a.since))[0] ?? null
-    );
-  } catch {
-    return null;
-  }
 }
 
 self.addEventListener("push", (event) =>

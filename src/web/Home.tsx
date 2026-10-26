@@ -1,19 +1,32 @@
 import { useEffect, useState } from "react";
+import { Account } from "./Account.js";
+import { NotifyToggle } from "./Notify.js";
 import {
-  groupByProject,
-  OriginLine,
+  homeOrder,
   ProjectChip,
   Progress,
+  relativeTime,
   sessionState,
   useOverview,
+  waitingOn,
 } from "./overview.js";
-import { NotifyToggle } from "./Notify.js";
 
-/** Every interview, grouped by project, at the site root. */
+/** An interview someone else assigned to the signed-in user to answer. */
+interface SharedInterview {
+  token: string;
+  title: string;
+  from: string;
+}
+
+/**
+ * The site root: every interview and what's left to do on it, those
+ * waiting on you first, plus the ones others have shared with you. The
+ * badge says who each waits on, or that it's stopped.
+ */
 export function Home() {
   const [version, setVersion] = useState(0);
   const sessions = useOverview(version);
-  const [filter, setFilter] = useState("");
+  const [shared, setShared] = useState<SharedInterview[]>([]);
 
   useEffect(() => {
     // The server pings open pages whenever an interview changes.
@@ -37,114 +50,109 @@ export function Home() {
     };
   }, []);
 
-  const query = filter.trim().toLowerCase();
-  const shown = (sessions ?? []).filter(
-    (item) =>
-      !query ||
-      [item.title, item.project?.name, item.origin.branch].some((value) =>
-        value?.toLowerCase().includes(query),
-      ),
-  );
-  const count = (predicate: (state: string) => boolean) =>
-    (sessions ?? []).filter((item) => predicate(sessionState(item).label))
-      .length;
+  useEffect(() => {
+    void fetch("/api/browser/shared")
+      .then((response) =>
+        response.ok
+          ? (response.json() as Promise<{ interviews: SharedInterview[] }>)
+          : null,
+      )
+      .then((body) => setShared(body?.interviews ?? []))
+      .catch(() => undefined);
+  }, []);
+
+  const count = (who: string) =>
+    (sessions ?? []).filter((item) => waitingOn(item)?.who === who).length;
+  const active = (sessions ?? []).filter(
+    (item) => item.status === "active",
+  ).length;
 
   return (
-    <main className="home">
-      <div className="home-head">
-        <h1>Interviews</h1>
-        {sessions && (
-          <span className="home-summary">
-            {count((state) => state === "Needs you")} need you ·{" "}
-            {count((state) => state === "All answered")} all answered ·{" "}
-            {count((state) => state === "Finished")} finished
-          </span>
-        )}
+    <div className="home-page">
+      <header className="top-bar">
+        <a href="/" className="top-bar-brand">
+          Keep it moving
+        </a>
         <span className="spacer" />
         <NotifyToggle />
-        <label className="home-filter">
-          <span aria-hidden="true">⌕</span>
-          <input
-            type="text"
-            aria-label="Filter interviews"
-            placeholder="Filter by name or branch"
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-          />
-        </label>
-      </div>
-      {sessions === null && <p className="home-empty">Loading…</p>}
-      {sessions !== null && !sessions.length && (
-        <div className="empty">
-          <h2>No interviews yet</h2>
-          <p>
-            Interviews appear here when an agent runs{" "}
-            <code>kim session create</code>.
-          </p>
+        <Account />
+      </header>
+      <main className="home">
+        <div className="home-head">
+          <h1>Interviews</h1>
+          {sessions && (
+            <span className="home-summary">
+              {count("you")} waiting on you · {active} active ·{" "}
+              {sessions.length - active} stopped
+            </span>
+          )}
         </div>
-      )}
-      {groupByProject(shown).map((group) => {
-        const need = group.sessions.filter((item) => item.open > 0).length;
-        return (
-          <section
-            key={group.project?.id ?? "none"}
-            className="home-project"
-            aria-label={group.project?.name ?? "No project"}
-          >
-            <div
-              className="home-project-head"
-              style={{
-                background: group.project
-                  ? `color-mix(in srgb, ${group.project.color} 9%, white)`
-                  : undefined,
-              }}
-            >
-              <ProjectChip project={group.project} size={26} />
-              <span
-                className="home-project-name"
-                style={{ color: group.project?.color }}
+        {shared.length > 0 && (
+          <section className="home-list" aria-label="Shared with you">
+            <h2>Shared with you</h2>
+            {shared.map((interview) => (
+              <a
+                key={interview.token}
+                className="home-row"
+                href={`/s/${interview.token}`}
               >
-                {group.project?.name ?? "No project"}
-              </span>
-              <span className="home-project-count">
-                {group.sessions.length} interview
-                {group.sessions.length === 1 ? "" : "s"}
-                {need ? ` · ${need} need${need === 1 ? "s" : ""} you` : ""}
-              </span>
-              <span className="spacer" />
-              {group.project && (
-                <span className="home-project-key">{group.project.key}</span>
-              )}
-            </div>
-            {group.sessions.map((item) => {
+                <span className="home-row-main">
+                  <span className="home-row-title">{interview.title}</span>
+                  <span className="home-row-meta">
+                    From {interview.from || "someone"}
+                  </span>
+                </span>
+                <span className="state-badge state-you">For you to answer</span>
+              </a>
+            ))}
+          </section>
+        )}
+        {sessions === null && <p className="home-empty">Loading…</p>}
+        {sessions !== null && !sessions.length && (
+          <div className="empty">
+            <h2>No interviews yet</h2>
+            <p>
+              Interviews appear here when an agent runs{" "}
+              <code>kim session create</code>.
+            </p>
+          </div>
+        )}
+        {sessions !== null && sessions.length > 0 && (
+          <section className="home-list" aria-label="Your interviews">
+            {shared.length > 0 && <h2>Yours</h2>}
+            {homeOrder(sessions).map((item) => {
               const state = sessionState(item);
               return (
-                <div
+                <a
                   key={item.id}
-                  className={`home-row ${item.status === "stopped" ? "finished" : ""}`}
+                  className={`home-row ${item.status === "stopped" ? "stopped" : ""}`}
+                  href={`/s/${item.token}`}
                 >
-                  <div className="home-row-main">
-                    <a className="home-row-title" href={`/s/${item.token}`}>
-                      {item.title}
-                    </a>
-                    <OriginLine session={item} />
-                  </div>
-                  <Progress answered={item.answered} total={item.total} />
+                  <span className="home-row-main">
+                    <span className="home-row-title">{item.title}</span>
+                    <span className="home-row-meta">
+                      {item.project && (
+                        <span className="home-row-project">
+                          <ProjectChip project={item.project} size={16} />
+                          {item.project.name}
+                        </span>
+                      )}
+                      {item.assignee && (
+                        <span>Assigned to {item.assignee}</span>
+                      )}
+                      <span>{relativeTime(item.lastActivity)}</span>
+                    </span>
+                  </span>
+                  <Progress answered={item.answered} total={item.total} long />
                   <span className={`state-badge ${state.className}`}>
                     {state.label}
                   </span>
-                  <a
-                    className={item.open > 0 ? "home-answer" : "home-open"}
-                    href={`/s/${item.token}`}
-                  >
-                    {item.open > 0 ? `Answer ${item.open}` : "Open"}
-                  </a>
-                </div>
+                </a>
               );
             })}
           </section>
-        );
-      })}
-    </main>
+        )}
+      </main>
+    </div>
   );
 }

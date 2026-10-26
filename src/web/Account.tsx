@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useJson } from "./live.js";
 
 interface Me {
   email: string;
@@ -9,8 +8,16 @@ interface Me {
 
 /** Who is signed in, as an avatar in the top bar, with Sign out behind it. */
 export function Account() {
-  const me = useJson<Me>("/api/browser/me").data;
+  const [me, setMe] = useState<Me | null>(null);
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    void fetch("/api/browser/me")
+      .then((response) =>
+        response.ok ? (response.json() as Promise<Me>) : null,
+      )
+      .then(setMe)
+      .catch(() => undefined);
+  }, []);
   const root = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) return;
@@ -29,10 +36,10 @@ export function Account() {
   }, [open]);
   if (!me?.email) return null;
   return (
-    <div className="kim-account" ref={root}>
+    <div className="account" ref={root}>
       <button
         type="button"
-        className="kim-account-button"
+        className="account-button"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Signed in as ${me.email}`}
@@ -48,8 +55,8 @@ export function Account() {
         )}
       </button>
       {open && (
-        <div className="kim-account-menu" role="menu">
-          <div className="kim-account-who">
+        <div className="account-menu" role="menu">
+          <div className="account-who">
             {me.name && <b>{me.name}</b>}
             <span>{me.email}</span>
           </div>

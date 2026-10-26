@@ -9,7 +9,7 @@ import {
   signInUrl,
   type User,
 } from "./auth.js";
-import { KEY_PREFIX, sha256, VIA_KEY_HEADER } from "../server/features/keys.js";
+import { KEY_PREFIX, sha256, VIA_KEY_HEADER } from "../server/keys.js";
 import { ASSIGNED_BY_HEADER, RESPONDENT_HEADER } from "../server/hub.js";
 import type { Env } from "./env.js";
 import { hubFor } from "./hubs.js";
@@ -185,12 +185,8 @@ const site: ExportedHandler<Env> = {
       url.pathname.startsWith("/ws/")
     )
       return hubFor(env, user.email).fetch(forwardable(request));
-    // The inbox, each project page and each interview are the same app.
-    if (
-      url.pathname === "/" ||
-      url.pathname.startsWith("/s/") ||
-      url.pathname.startsWith("/p/")
-    )
+    // The interview list and each interview are the same app.
+    if (url.pathname === "/" || url.pathname.startsWith("/s/"))
       return env.ASSETS.fetch(new Request(new URL("/index.html", url)));
     return env.ASSETS.fetch(request);
   },

@@ -10,7 +10,6 @@ import {
 } from "@testing-library/react";
 import { App } from "../src/web/App.js";
 import type { SessionSummary, SessionView } from "../src/shared/schema.js";
-import { Home } from "../src/web/Home.js";
 
 const state: SessionView = {
   id: "s1",
@@ -80,6 +79,7 @@ const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
   open: 0,
   lastActivity: new Date().toISOString(),
   lastReply: null,
+  awaitingReply: false,
   assignee: null,
   ...overrides,
 });
@@ -294,7 +294,7 @@ describe("questionnaire UI seam", () => {
     const menu = screen.getByRole("dialog", { name: "Switch interview" });
     expect(menu).toHaveTextContent("FrockBot");
     expect(menu).toHaveTextContent("3 open");
-    expect(menu).toHaveTextContent("Finished");
+    expect(menu).toHaveTextContent("Stopped");
     fireEvent.change(screen.getByLabelText("Search interviews"), {
       target: { value: "frock" },
     });
@@ -712,25 +712,5 @@ describe("questionnaire UI seam", () => {
         ]),
       );
     });
-  });
-});
-
-describe("home page", () => {
-  it("groups every interview by project with what each needs", async () => {
-    overview = [
-      summary({ title: "Checkout flow", open: 2, answered: 1, total: 3 }),
-      summary({ id: "s2", title: "Data import", project: null, open: 0 }),
-    ];
-    render(<Home />);
-    expect(
-      await screen.findByRole("region", { name: "Interviewer" }),
-    ).toHaveTextContent("1 needs you");
-    expect(screen.getByRole("link", { name: "Answer 2" })).toHaveAttribute(
-      "href",
-      "/s/token",
-    );
-    expect(
-      screen.getByRole("region", { name: "No project" }),
-    ).toHaveTextContent("Data import");
   });
 });
