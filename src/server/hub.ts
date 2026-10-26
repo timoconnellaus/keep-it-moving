@@ -52,9 +52,24 @@ const REPLACED = "Replaced by a newer watcher on this interview";
 export function createHub(options: HubOptions) {
   const { store, baseUrl, sockets } = options;
   const watchers = new Map<string, Watcher>();
+  // `kim wait` chains short requests, so an agent counts as watching for a
+  // moment after its request ends; the chat says whether anyone will read.
+  const watchedUntil = new Map<string, number>();
+  const watching = (id: string) =>
+    watchers.has(id) || (watchedUntil.get(id) ?? 0) > Date.now();
   const claim = (id: string, watcher: Watcher) => {
+    const was = watching(id);
     watchers.get(id)?.replace();
     watchers.set(id, watcher);
+    if (!was) later(() => broadcast(id));
+  };
+  const release = (id: string, watcher: Watcher | null) => {
+    if (!watcher || watchers.get(id) !== watcher) return;
+    watchers.delete(id);
+    watchedUntil.set(id, Date.now() + WATCH_GRACE_MS);
+    setTimeout(() => {
+      if (!watching(id)) broadcast(id);
+    }, WATCH_GRACE_MS + 50);
   };
   const app = new Hono();
 
@@ -70,8 +85,10 @@ export function createHub(options: HubOptions) {
     return c.json({ error: message }, status);
   });
 
-  const browserView = (sessionId: string): SessionView =>
-    forBrowser(store.getSession(sessionId, baseUrl));
+  const browserView = (sessionId: string): SessionView => ({
+    ...forBrowser(store.getSession(sessionId, baseUrl)),
+    agentWatching: watching(sessionId),
+  });
   const stateMessage = (sessionId: string) =>
     JSON.stringify({ type: "state", session: browserView(sessionId) });
   const broadcast = (sessionId: string) => {
@@ -108,6 +125,8 @@ export function createHub(options: HubOptions) {
       }),
     );
   };
+  // The agent's chat replies notify too, once per burst.
+  const replied = new Set<string>();
   const checkWaiting = (sessionId: string) => {
     const count = added.get(sessionId) ?? 0;
     added.delete(sessionId);
@@ -210,6 +229,13 @@ export function createHub(options: HubOptions) {
       if (!added.has(event.sessionId))
         setTimeout(() => checkWaiting(event.sessionId), PUSH_SETTLE_MS);
       added.set(event.sessionId, (added.get(event.sessionId) ?? 0) + 1);
+    }
+    if (event.type === "chat.reply" && !replied.has(event.sessionId)) {
+      replied.add(event.sessionId);
+      setTimeout(() => {
+        replied.delete(event.sessionId);
+        void notify();
+      }, PUSH_SETTLE_MS);
     }
     later(() => {
       const watcher = watchers.get(event.sessionId);
@@ -392,15 +418,21 @@ export function createHub(options: HubOptions) {
     store.setStageVisible(c.req.param("id"), Boolean(input.visible), "agent");
     return c.json({ ok: true, stageVisible: Boolean(input.visible) });
   });
+  app.get("/api/sessions/:id/chat", (c) =>
+    c.json({ messages: store.getSession(c.req.param("id"), baseUrl).chat }),
+  );
+  app.post("/api/sessions/:id/chat", async (c) =>
+    c.json(store.addChatMessage(c.req.param("id"), "agent", await body(c))),
+  );
   app.get("/api/sessions/:id/attach", (c) => {
     const id = c.req.param("id");
     store.getSession(id, baseUrl);
     const encoder = new TextEncoder();
     let lease: Watcher | null = null;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
-    const release = () => {
+    const stop = () => {
       if (heartbeat) clearInterval(heartbeat);
-      if (lease && watchers.get(id) === lease) watchers.delete(id);
+      release(id, lease);
     };
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -412,7 +444,7 @@ export function createHub(options: HubOptions) {
             return true;
           } catch {
             open = false;
-            release();
+            stop();
             return false;
           }
         };
@@ -428,7 +460,7 @@ export function createHub(options: HubOptions) {
           replace: () => {
             writeLine({ type: "replaced", message: REPLACED });
             open = false;
-            release();
+            stop();
             try {
               controller.close();
             } catch {
@@ -444,11 +476,11 @@ export function createHub(options: HubOptions) {
         );
         c.req.raw.signal.addEventListener("abort", () => {
           open = false;
-          release();
+          stop();
         });
         later(() => broadcast(id));
       },
-      cancel: release,
+      cancel: stop,
     });
     return new Response(stream, {
       headers: {
@@ -474,7 +506,7 @@ export function createHub(options: HubOptions) {
     const events = await new Promise<InterviewEvent[] | null>((resolve) => {
       const finish = (found: InterviewEvent[] | null) => {
         clearTimeout(timer);
-        if (watchers.get(id) === watcher) watchers.delete(id);
+        release(id, watcher);
         resolve(found);
       };
       const watcher: Watcher = {
@@ -504,9 +536,7 @@ export function createHub(options: HubOptions) {
       signal: c.req.raw.signal,
       store,
       claim: (watcher) => claim(id, watcher),
-      release: (watcher) => {
-        if (watchers.get(id) === watcher) watchers.delete(id);
-      },
+      release: (watcher) => release(id, watcher),
       broadcast,
     });
     if (!batch) throw new Error(REPLACED);
@@ -555,6 +585,15 @@ export function createHub(options: HubOptions) {
       ),
     ),
   );
+  app.post("/api/browser/:token/chat", async (c) =>
+    c.json(
+      store.addChatMessage(
+        tokenSession(c.req.param("token")),
+        "user",
+        await body(c),
+      ),
+    ),
+  );
   app.post("/api/browser/:token/stage", async (c) => {
     const input = await body(c);
     store.showArtifact(
@@ -580,6 +619,8 @@ const HEARTBEAT_MS = 25_000;
 const OVERVIEW_PING_MS = 300;
 /** Agents add a batch of questions in a burst; notify once it has landed. */
 const PUSH_SETTLE_MS = 1_500;
+/** How long an agent between chained `wait` requests still counts as watching. */
+const WATCH_GRACE_MS = 5_000;
 /** Marks kim_inbox_seen as seeded; never an inbox item id. */
 const SEEDED = "*seeded*";
 /** Events that change an interview's place in the switcher. */
@@ -651,7 +692,11 @@ function bounded(
 }
 
 /** Events the user caused; the agent's own edits never wake a batch wait. */
-const USER_EVENTS = new Set(["answer.submitted", "answer.revised"]);
+const USER_EVENTS = new Set([
+  "answer.submitted",
+  "answer.revised",
+  "chat.message",
+]);
 /** Gathers a trailing burst, such as "Accept all defaults", into one batch. */
 const SETTLE_MS = 750;
 
@@ -699,8 +744,12 @@ async function waitForBatch(
       const open = store
         .getSession(id, "")
         .questions.filter((question) => !question.answer).length;
-      const since = Date.now() - Date.parse(userEvents.at(-1)!.createdAt);
-      const wait = Math.max(0, (open ? options.idle : SETTLE_MS) - since);
+      const latest = userEvents.at(-1)!;
+      const since = Date.now() - Date.parse(latest.createdAt);
+      // Someone who asked something is waiting on the reply.
+      const quiet =
+        open && latest.type !== "chat.message" ? options.idle : SETTLE_MS;
+      const wait = Math.max(0, quiet - since);
       if (quietTimer) clearTimeout(quietTimer);
       quietTimer = setTimeout(() => finish(true), wait);
     };
@@ -719,15 +768,47 @@ async function waitForBatch(
   });
 }
 
-/** The batch an agent needs: what happened, plus the latest answer to each touched question. */
+/**
+ * The batch an agent needs: what happened, the latest answer to each touched
+ * question, and the user's new chat messages with the question each is about.
+ */
 function batchSummary(session: SessionView, events: InterviewEvent[]) {
   const touched = new Set(
     events
       .filter((event) => event.type.startsWith("answer."))
       .map((event) => String(event.payload.questionId)),
   );
+  const asked = new Set(
+    events
+      .filter((event) => event.type === "chat.message")
+      .map((event) => String(event.payload.messageId)),
+  );
+  const numbered = new Map(
+    session.questions.map((question, index) => [
+      question.id,
+      { question, number: index + 1 },
+    ]),
+  );
   return {
     events,
+    messages: session.chat
+      .filter((message) => asked.has(message.id))
+      .map((message) => {
+        const about = message.questionId
+          ? numbered.get(message.questionId)
+          : undefined;
+        return {
+          messageId: message.id,
+          text: message.text,
+          about: about
+            ? {
+                questionId: about.question.id,
+                number: about.number,
+                prompt: about.question.prompt,
+              }
+            : null,
+        };
+      }),
     answers: session.questions
       .map((question, index) => ({ question, number: index + 1 }))
       .filter(({ question }) => touched.has(question.id) && question.answer)
@@ -754,19 +835,22 @@ const ID = "[^/]+";
 /**
  * The routes an agent key may call; anything else, including routes added
  * later, is refused. A key reports, raises and edits requests, waits on
- * them, beats, syncs and reads the backlog, and reads a project's context
- * and writes its summary. Answering, deleting
+ * them, replies in their chat, beats, syncs and reads the backlog, and reads
+ * a project's context and writes its summary. Answering, deleting
  * interviews, reconfiguring projects and backlogs, and keys stay with a
  * signed-in CLI.
  */
 const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
   ["GET", /^\/api\/sessions(\/projects)?$/],
-  ["GET", new RegExp(`^/api/sessions/${ID}(/(attach|wait|events/next))?$`)],
+  [
+    "GET",
+    new RegExp(`^/api/sessions/${ID}(/(attach|wait|events/next|chat))?$`),
+  ],
   ["POST", /^\/api\/sessions$/],
   [
     "POST",
     new RegExp(
-      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility)$`,
+      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat)$`,
     ),
   ],
   ["PATCH", new RegExp(`^/api/sessions/${ID}/(questions|artifacts)/${ID}$`)],

@@ -115,6 +115,29 @@ export const AnswerInputSchema = z
     path: ["answer"],
   });
 
+/** A message in an interview's chat: a clarification, or a direction for the agent. */
+export const ChatInputSchema = z.object({
+  text: z.string().trim().min(1).max(20_000),
+  /** The user's message is about this question. */
+  questionId: z.string().uuid().nullable().optional(),
+  /** The agent's reply answers this message. */
+  replyTo: z.string().uuid().nullable().optional(),
+});
+
+export type ChatAuthor = "user" | "agent";
+/** One message in an interview's single chat thread. */
+export interface ChatMessageView {
+  id: string;
+  author: ChatAuthor;
+  /** Markdown. */
+  text: string;
+  questionId: string | null;
+  replyTo: string | null;
+  /** A user's message reached the agent, as an answer does. */
+  delivered: boolean;
+  createdAt: string;
+}
+
 export type SessionStatus = "active" | "stopped";
 export interface AnswerView {
   text: string;
@@ -188,6 +211,8 @@ export interface SessionSummary {
   /** Unanswered questions in an active interview: they wait on the user. */
   open: number;
   lastActivity: string;
+  /** The agent's latest chat message, for the reply notification. */
+  lastReply: { text: string; at: string } | null;
 }
 export interface SessionView {
   id: string;
@@ -210,6 +235,10 @@ export interface SessionView {
   stageVisibilitySource: StageSource | null;
   project: ProjectView | null;
   origin: OriginView;
+  /** The chat with the agent, oldest first. */
+  chat: ChatMessageView[];
+  /** Browser views only: whether an agent is waiting on this interview now. */
+  agentWatching?: boolean;
 }
 export interface InterviewEvent {
   id: number;
