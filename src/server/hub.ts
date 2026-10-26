@@ -141,7 +141,7 @@ export function createHub(options: HubOptions) {
           a.since.localeCompare(b.since),
       );
 
-  // Any feature's new inbox item pushes to Tim's devices once. Requests are
+  // Any feature's new inbox item pushes to the user's devices once. Requests are
   // left out: checkWaiting above already pushes when questions arrive.
   options.sql.exec(
     "CREATE TABLE IF NOT EXISTS kim_inbox_seen (id TEXT PRIMARY KEY, seen_at TEXT NOT NULL)",
@@ -232,7 +232,7 @@ export function createHub(options: HubOptions) {
 
   app.get("/health", (c) => c.json({ ok: true }));
 
-  // Browser routes ride on the Access cookie, so refuse writes another site
+  // Browser routes ride on the session cookie, so refuse writes another site
   // could forge with it. Agent routes use bearer tokens and need no check.
   app.use("/api/browser/*", async (c, next) => {
     if (c.req.method !== "GET" && !sameSite(c.req.raw))
@@ -513,8 +513,8 @@ export function createHub(options: HubOptions) {
     return c.json(batch);
   });
 
-  // Browser routes. Cloudflare Access already limits them to the owner, so
-  // the interview list needs no session token.
+  // Browser routes. The Worker sends only this workspace's signed-in user
+  // here, so the interview list needs no session token.
   app.get("/api/browser/overview", (c) =>
     c.json({ sessions: store.summaries() }),
   );

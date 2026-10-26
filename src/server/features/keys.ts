@@ -13,7 +13,7 @@ const TOUCH_MS = 60_000;
 
 const now = () => new Date().toISOString();
 
-async function sha256(text: string): Promise<string> {
+export async function sha256(text: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(text),
@@ -39,7 +39,7 @@ function newKey(): string {
  * Agent keys: long-lived, revocable credentials for places the CLI can't
  * sign in through a browser, such as a cloud session's environment. One
  * per project's cloud environment. Only a hash is stored; the key is shown
- * once. A key acts as Tim on the agent API, but can't manage keys.
+ * once. A key acts as its owner on the agent API, but can't manage keys.
  */
 export function keysFeature(ctx: FeatureContext): Feature {
   const { sql } = ctx;

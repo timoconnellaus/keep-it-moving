@@ -8,7 +8,7 @@ use tauri_plugin_opener::OpenerExt;
 
 const DEFAULT_URL: &str = "https://keep-it-moving.zerobsai.com";
 
-/// Runs in every page the window loads, including the Access login; it acts
+/// Runs in every page the window loads, including Google's sign-in; it acts
 /// only on the Keep it moving origin.
 const DESKTOP_JS: &str = include_str!("desktop.js");
 
@@ -36,7 +36,7 @@ fn main() {
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(720.0, 480.0)
                 .initialization_script(&script)
-                // Only the site and its Access login load here; anything
+                // Only the site and Google's sign-in load here; anything
                 // else goes to the default browser.
                 .on_navigation(move |target| {
                     // about:, blob: and data: frames stay in the page.
@@ -47,9 +47,7 @@ fn main() {
                         || target.host_str() == Some("keep-it-moving.zerobsai.com")
                         || target.host_str() == Some("interviewer.zerobsai.com")
                         || (target.scheme() == "https"
-                            && target
-                                .host_str()
-                                .is_some_and(|host| host.ends_with(".cloudflareaccess.com")));
+                            && target.host_str() == Some("accounts.google.com"));
                     if !allowed {
                         let _ = handle.opener().open_url(target.as_str(), None::<&str>);
                     }

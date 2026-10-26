@@ -3,11 +3,13 @@ import { createHub, sameSite } from "../server/hub.js";
 import { durableObjectSql } from "../server/sql.js";
 import { InterviewStore } from "../server/store.js";
 import type { Env } from "./env.js";
+import { isOwnerHub } from "./hubs.js";
 import { webPush } from "./push.js";
 
 /**
- * Every interview, in one SQLite-backed Durable Object: the deployment has a
- * single user. Browser sockets hibernate, tagged with their session id.
+ * One user's workspace, in one SQLite-backed Durable Object: their
+ * interviews and everything else. Browser sockets hibernate, tagged with
+ * their session id.
  */
 export class InterviewHub extends DurableObject<Env> {
   private readonly hub: ReturnType<typeof createHub>;
@@ -18,7 +20,10 @@ export class InterviewHub extends DurableObject<Env> {
     this.hub = createHub({
       store: new InterviewStore(sql),
       sql,
-      env: { githubToken: env.GITHUB_TOKEN },
+      // The server's GitHub token is the owner's; other users go without.
+      env: {
+        githubToken: isOwnerHub(env, ctx.id) ? env.GITHUB_TOKEN : undefined,
+      },
       baseUrl: env.PUBLIC_URL,
       push: webPush(env),
       sockets: {

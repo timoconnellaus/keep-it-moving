@@ -14,14 +14,24 @@ Keep it moving (formerly Interviewer) is a CLI and browser app for keeping every
 npm install
 npm run link:dev        # builds the CLI and links the `interviewer` executable
 npm run setup:agents    # links the skill and adds the /grill-me pointer
-kim login       # browser sign-in: Cloudflare Access, then OAuth back to the CLI
+kim login       # browser sign-in: Google, then OAuth back to the CLI
 ```
 
 `login` stores a refresh token in the user config directory (readable only by you), keyed by service URL. `kim whoami` checks it and `kim logout` forgets it. Set `KEEP_IT_MOVING_URL` to point the CLI at another deployment, such as `wrangler dev` on `http://localhost:8787`.
 
 Deploy with `npm run deploy`, which builds the web client and runs `wrangler deploy`.
 
-For local development, put `DEV_EMAIL=<the allowed email>` and `PUBLIC_URL=http://localhost` in `.dev.vars` and run `npx wrangler dev --local --host localhost` (`.claude/launch.json` has it as `worker`). `--host localhost` keeps requests on localhost, where `DEV_EMAIL` stands in for the Access login.
+For local development, put `DEV_EMAIL=<your email>` and `PUBLIC_URL=http://localhost` in `.dev.vars` and run `npx wrangler dev --local --host localhost` (`.claude/launch.json` has it as `worker`). `--host localhost` keeps requests on localhost, where `DEV_EMAIL` stands in for Google sign-in. To try the real sign-in locally instead, leave `DEV_EMAIL` out, put `GOOGLE_CLIENT_SECRET` in `.dev.vars`, and add `http://localhost:8787/auth/google/callback` to the OAuth client's redirect URIs.
+
+### Sign-in and secrets
+
+The browser signs in with Google; anyone with a Google account can, and each user gets a private workspace of their own. The Worker runs the sign-in itself (OpenID Connect with PKCE, checking Google's ID token and its verified email), so it needs a Google OAuth client:
+
+1. In Google Cloud Console, create an OAuth client of type **Web application** with the redirect URI `https://keep-it-moving.zerobsai.com/auth/google/callback` (that is, `PUBLIC_URL` + `/auth/google/callback`).
+2. Put its client ID in `GOOGLE_CLIENT_ID` in `wrangler.jsonc`.
+3. Run `npx wrangler secret put GOOGLE_CLIENT_SECRET` and paste its secret.
+
+`OWNER_EMAIL` in `wrangler.jsonc` names the deployment's owner. Their workspace is the one from before there were other users, and only theirs gets the `GITHUB_TOKEN` secret, so other users go without the PR, CI and GitHub backlog features.
 
 ## Desktop app
 
@@ -32,9 +42,9 @@ npm run desktop:dev     # run it
 npm run desktop:build   # desktop/src-tauri/target/release/bundle/macos/Keep it moving.app and a .dmg
 ```
 
-The window loads `KEEP_IT_MOVING_URL` (default https://keep-it-moving.zerobsai.com) and signs in through Cloudflare Access once; the webview keeps the cookie. Web push doesn't reach a webview, so a script injected into the site (`desktop/src-tauri/src/desktop.js`) polls the inbox every 30 seconds instead: the dock badge shows how many items there are, and each new one raises a native notification while the window isn't focused. Links to other sites open in the default browser, the site's own links that ask for a new tab open in a new window, and ⌘R reloads. The window remembers its size and position.
+The window loads `KEEP_IT_MOVING_URL` (default https://keep-it-moving.zerobsai.com) and signs in with Google once; the webview keeps the cookie. Web push doesn't reach a webview, so a script injected into the site (`desktop/src-tauri/src/desktop.js`) polls the inbox every 30 seconds instead: the dock badge shows how many items there are, and each new one raises a native notification while the window isn't focused. Links to other sites open in the default browser, the site's own links that ask for a new tab open in a new window, and ⌘R reloads. The window remembers its size and position.
 
-The main window only loads the site and its Access login (`*.cloudflareaccess.com`); any other page opens in the default browser. Only the hosted origins get the native bridge (notifications, badge, opening links and windows), set in `desktop/src-tauri/capabilities/default.json`. Debug builds add `http://localhost:8787` for `wrangler dev`, so point a dev build there rather than a release build. If Access ever signs in through another identity provider, add its host to the list in `desktop/src-tauri/src/main.rs`.
+The main window only loads the site and Google's sign-in (`accounts.google.com`); any other page opens in the default browser. Only the hosted origins get the native bridge (notifications, badge, opening links and windows), set in `desktop/src-tauri/capabilities/default.json`. Debug builds add `http://localhost:8787` for `wrangler dev`, so point a dev build there rather than a release build. Google may refuse to sign in inside an embedded webview; if it does, the sign-in has to move to the default browser.
 
 ## First interview
 
@@ -274,15 +284,15 @@ It adds the same five hooks to the repo's `.claude/settings.json`, merged beside
 
 In a cloud session, the CLI also sends `CLAUDE_CODE_REMOTE_SESSION_ID` (`cse_…`) with each hook's report. The session then links to its page on claude.ai (**Open session** on the inbox item and the project page), and `report` and `ask`, which don't get Claude Code's session id there, find the session by that remote id. Until a hook has reported, they file it under the remote id; the hooks' first report adopts it.
 
-The CLI package is served behind the agent API at `/api/sessions/kim/cli.tgz`, so the setup script fetches it with the environment's `KEEP_IT_MOVING_TOKEN` and nothing new sits outside Cloudflare Access. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. The docs don't say whether a setup script sees the environment's variables; if `kim` is missing in a cloud session, that's why, and the fallback is making `/cli.tgz` public through the Access bypass app.
+The CLI package is served behind the agent API at `/api/sessions/kim/cli.tgz`, so the setup script fetches it with the environment's `KEEP_IT_MOVING_TOKEN` and nothing new is public. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. The docs don't say whether a setup script sees the environment's variables; if `kim` is missing in a cloud session, that's why, and `/cli.tgz` is public as a fallback.
 
 ## On your phone
 
-The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's Access sign-in. It opens on the inbox.
+The interviewer installs as an app. On Android, open the site in Chrome, sign in, and choose **Install app** from the menu; Chrome builds a real app (a WebAPK) that shares Chrome's sign-in cookie. It opens on the inbox.
 
 **Notify me** on that page turns on push notifications for the device. When an interview with nothing open gains questions, the Worker pushes to every subscribed device, and the notification names the interview (for example "FrockBot · Checkout flow, 3 questions waiting") and opens it when tapped. **Send a test** checks the setup.
 
-Pushes carry no data: the Worker signs an empty Web Push with its VAPID key (`VAPID_PUBLIC_KEY` in `wrangler.jsonc`, the private key in the `VAPID_PRIVATE_JWK` secret), and the service worker asks the server what is waiting. The icons, manifest and service worker are public, outside Cloudflare Access, because Google's servers fetch the icons without a sign-in when they build the app.
+Pushes carry no data: the Worker signs an empty Web Push with its VAPID key (`VAPID_PUBLIC_KEY` in `wrangler.jsonc`, the private key in the `VAPID_PRIVATE_JWK` secret), and the service worker asks the server what is waiting. The icons, manifest and service worker are public, outside the sign-in, because Google's servers fetch the icons without a sign-in when they build the app.
 
 ## Questionnaire behavior
 
@@ -350,15 +360,15 @@ Questions can point at the workspace:
 ```text
 agent CLI ──HTTPS + OAuth bearer──┐
                                   │
-browser ──HTTPS/WSS (Access)── Worker ── InterviewHub Durable Object (SQLite)
+browser ──HTTPS/WSS (Google sign-in)── Worker ── InterviewHub Durable Object per user (SQLite)
 ```
 
-- **Worker** (`src/worker`): wraps everything in `@cloudflare/workers-oauth-provider`. `/api/sessions/**` needs an OAuth access token whose account is `ALLOWED_EMAIL`. Every other route sits behind Cloudflare Access, and the Worker also verifies the Access JWT and email itself, so a misconfigured policy fails closed. `/authorize` completes OAuth straight from the Access identity, and only for loopback redirect URIs, so only the CLI can collect a code.
-- **InterviewHub** (`src/worker/hub.ts`): one SQLite Durable Object holding every session. The deployment has a single user. Browser WebSockets hibernate, tagged by session.
+- **Worker** (`src/worker`): wraps everything in `@cloudflare/workers-oauth-provider`. `/api/sessions/**` needs an OAuth access token or an agent key, and goes to its user's workspace. Every other route needs the browser session from Google sign-in (`/auth/google/start`, `/auth/google/callback`, `/auth/logout`): a random id in an HttpOnly cookie, kept in `OAUTH_KV` for 30 days from last use. Signed-out pages go to `/signin`, signed-out API calls get a 401. `/authorize` completes OAuth straight from that session, and only for loopback redirect URIs, so only the CLI can collect a code. An agent key's owner is recorded in `OAUTH_KV` when it is made; a key with none recorded predates other users and is the owner's.
+- **InterviewHub** (`src/worker/hub.ts`): one SQLite Durable Object per user, holding everything of theirs: interviews, agent keys, agent sessions, inbox, devices, projects and automations. `hubFor` (`src/worker/hubs.ts`) picks it: `user:<email>` for most, and the original `interviews` for `OWNER_EMAIL`. Browser WebSockets hibernate, tagged by session.
 - **Hub router and store** (`src/server`): the HTTP API (Hono) and the store, written against a small SQL interface so tests run them on `node:sqlite`.
 - **CLI** (`src/cli.ts`): a thin client. `wait` chains 60 s requests with `partial=1` to stay under Cloudflare's 100 s idle cutoff; `attach` filters out the heartbeat lines that keep its stream alive.
 
-Cloudflare Access has two apps: one for the whole host, allowing only the owner, and a bypass for `/api/sessions`, `/token`, `/register` and `/.well-known`, where OAuth applies instead. `ACCESS_AUD` in `wrangler.jsonc` must hold the first app's audience tag. Both apps cover keep-it-moving.zerobsai.com and the old interviewer.zerobsai.com, which the Worker still serves while everything moves over.
+The Worker still serves the old interviewer.zerobsai.com while everything moves over; sign-in there moves the browser to keep-it-moving.zerobsai.com.
 
 ## Verification
 

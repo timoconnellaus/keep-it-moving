@@ -2,6 +2,7 @@ import type { InboxItem } from "../../../shared/inbox.js";
 import { NotifyToggle } from "../../Notify.js";
 import { useOverview } from "../../overview.js";
 import { Switcher } from "../../Switcher.js";
+import { Account } from "./Account.js";
 import { useHiddenItems } from "./hidden.js";
 import { Icon } from "./icons.js";
 import { Inbox } from "./Inbox.js";
@@ -55,6 +56,7 @@ function ShellContent({ version }: { version: number }) {
         <span className="kim-shell-spacer" />
         <NotifyToggle />
         <Switcher session={null} sessions={sessions} />
+        <Account />
       </header>
       <div className="kim-shell-body">
         <ProjectRail

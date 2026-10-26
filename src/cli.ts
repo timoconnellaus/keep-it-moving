@@ -1394,7 +1394,7 @@ async function keyCommand(action: string | undefined, args: string[]) {
 
 /**
  * The CLI as an npm-installable tarball, behind the agent API so the
- * environment's key fetches it and nothing extra sits outside Access.
+ * environment's key fetches it and nothing extra is public.
  */
 const cliPackageUrl = () => `${defaultBase}/api/sessions/kim/cli.tgz`;
 
@@ -1537,7 +1537,7 @@ function credentialsFrom(
 }
 
 /**
- * Signs in through the browser: the Worker's Cloudflare Access login, then
+ * Signs in through the browser: Google sign-in on the Worker, then
  * OAuth (authorization code with PKCE) back to a one-off loopback callback.
  */
 async function login() {
@@ -1738,7 +1738,7 @@ function printHelp(): void {
 (\`interviewer\` is the same command.)
 
 Commands:
-  login | logout | whoami   sign in through the browser (Cloudflare Access, then OAuth)
+  login | logout | whoami   sign in through the browser (Google, then OAuth)
   session create --title <text> [--open-stage] [--agent-session <your session title>] [--project <name>]
     the workspace column starts closed unless --open-stage; the project comes from the git remote
   project list | rename <project> --name <name> | color <project> --color <#hex>
