@@ -138,7 +138,53 @@ h1 {
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 7px;
+  /* clip, not hidden: hidden would make this the more-below pill's sticky container. */
+  overflow: clip;
+}
+.question-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font: 600 11px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.question-progress-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
   overflow: hidden;
+}
+.question-progress-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--received);
+  transition: width 0.2s;
+}
+.more-below {
+  position: sticky;
+  bottom: 12px;
+  display: block;
+  width: fit-content;
+  margin: 6px auto 10px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow:
+    0 0 0 6px rgb(255 255 255 / 0.85),
+    0 4px 14px rgb(24 32 28 / 0.18);
+  cursor: pointer;
+}
+.more-below:hover {
+  background: #26463a;
 }
 .question {
   scroll-margin: 64px;
