@@ -25,13 +25,22 @@ export interface ProjectGroup {
   sessions: SessionSummary[];
 }
 
+/** Waiting on you, then the rest still active, then stopped. */
 const rank = (session: SessionSummary) =>
-  session.status === "stopped" ? 2 : session.open > 0 ? 0 : 1;
+  session.status === "stopped" ? 2 : waitingOn(session)?.who === "you" ? 0 : 1;
+
+const byRankThenActivity = (a: SessionSummary, b: SessionSummary) =>
+  rank(a) - rank(b) || Date.parse(b.lastActivity) - Date.parse(a.lastActivity);
+
+/** Every interview in the home page's order: rank, then newest activity. */
+export function homeOrder(sessions: SessionSummary[]): SessionSummary[] {
+  return [...sessions].sort(byRankThenActivity);
+}
 
 /**
  * Interviews grouped by project. Projects are ordered by their latest
  * activity; within one, interviews waiting on the user come first, then
- * fully answered ones, then finished ones, each most recent first.
+ * other active ones, then stopped ones, each most recent first.
  */
 export function groupByProject(sessions: SessionSummary[]): ProjectGroup[] {
   const groups = new Map<string, ProjectGroup>();
@@ -43,27 +52,41 @@ export function groupByProject(sessions: SessionSummary[]): ProjectGroup[] {
   }
   const latest = (group: ProjectGroup) =>
     Math.max(...group.sessions.map((item) => Date.parse(item.lastActivity)));
-  for (const group of groups.values())
-    group.sessions.sort(
-      (a, b) =>
-        rank(a) - rank(b) ||
-        Date.parse(b.lastActivity) - Date.parse(a.lastActivity),
-    );
+  for (const group of groups.values()) group.sessions.sort(byRankThenActivity);
   return [...groups.values()].sort((a, b) =>
     !a.project ? 1 : !b.project ? -1 : latest(b) - latest(a),
   );
 }
 
-export function sessionState(session: SessionSummary) {
-  if (session.status === "stopped")
-    return { label: "Finished", className: "state-done" };
+/** Who an active interview is waiting on to move. */
+export interface WaitingOn {
+  who: "you" | "assignee" | "agent";
+  label: string;
+}
+
+/**
+ * A chat message the agent hasn't answered waits on the agent; then open
+ * questions wait on their assignee, or else on you; with nothing open the
+ * agent has the next move. A stopped interview waits on nobody.
+ */
+export function waitingOn(session: SessionSummary): WaitingOn | null {
+  if (session.status === "stopped") return null;
+  if (session.awaitingReply)
+    return { who: "agent", label: "Waiting on the agent" };
   if (session.assignee && session.answered < session.total)
-    return {
-      label: `Assigned to ${session.assignee} · ${session.answered} of ${session.total} answered`,
-      className: "state-agent",
-    };
-  if (session.open > 0) return { label: "Needs you", className: "state-you" };
-  return { label: "All answered", className: "state-agent" };
+    return { who: "assignee", label: `Waiting on ${session.assignee}` };
+  if (session.open > 0) return { who: "you", label: "Waiting on you" };
+  return { who: "agent", label: "Waiting on the agent" };
+}
+
+/** The badge for an interview: who it waits on, or that it's stopped. */
+export function sessionState(session: SessionSummary) {
+  const waiting = waitingOn(session);
+  if (!waiting) return { label: "Stopped", className: "state-done" };
+  return {
+    label: waiting.label,
+    className: waiting.who === "you" ? "state-you" : "state-agent",
+  };
 }
 
 export function relativeTime(iso: string, now = Date.now()): string {
@@ -159,12 +182,15 @@ function CloudIcon() {
   );
 }
 
+/** "3/5" and a bar; `long` spells it out as "3 of 5 answered". */
 export function Progress({
   answered,
   total,
+  long = false,
 }: {
   answered: number;
   total: number;
+  long?: boolean;
 }) {
   return (
     <span
@@ -172,7 +198,7 @@ export function Progress({
       aria-label={`${answered} of ${total} answered`}
     >
       <span className="progress-count">
-        {answered}/{total}
+        {long ? `${answered} of ${total} answered` : `${answered}/${total}`}
       </span>
       <span className="progress-bar" aria-hidden="true">
         <span style={{ width: `${total ? (answered / total) * 100 : 0}%` }} />

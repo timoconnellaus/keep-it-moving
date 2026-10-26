@@ -1,14 +1,12 @@
 import { Hono, type Context } from "hono";
 import { defaultAnswerText } from "../shared/answers.js";
-import type { ProjectStats } from "../shared/inbox.js";
 import type {
   ArtifactView,
   InterviewEvent,
   SessionView,
 } from "../shared/schema.js";
 import { ARTIFACT_VIEW_HEADERS } from "./artifactView.js";
-import { allFeatures, type Feature } from "./features/index.js";
-import { VIA_KEY_HEADER } from "./features/keys.js";
+import { agentKeys, VIA_KEY_HEADER } from "./keys.js";
 import type { Sql } from "./sql.js";
 import type { InterviewStore } from "./store.js";
 
@@ -37,10 +35,8 @@ export type PushSender = (endpoint: string) => Promise<number>;
 
 export interface HubOptions {
   store: InterviewStore;
-  /** The store's database, for Keep it moving features' own tables. */
+  /** The store's database, for the agent keys table. */
   sql: Sql;
-  /** Worker secrets the features use. */
-  env?: { githubToken?: string | undefined };
   /** The public origin, used in session URLs. */
   baseUrl: string;
   sockets: BrowserSockets;
@@ -124,8 +120,8 @@ export function createHub(options: HubOptions) {
   const respondentMayUse = (token: string, email: string) =>
     Boolean(email) && store.assigneeForToken(token) === email.toLowerCase();
   const later = (fn: () => void) => setTimeout(fn, 0);
-  // Pages refetch the interview list when told, so the switcher's
-  // "waiting on you" dot stays current; a burst of events sends one ping.
+  // Pages refetch the interview list when told, so the home page and the
+  // switcher's "waiting on you" dot stay current; a burst sends one ping.
   let overviewPing: ReturnType<typeof setTimeout> | null = null;
   const pingOverview = () => {
     overviewPing ??= setTimeout(() => {
@@ -157,97 +153,6 @@ export function createHub(options: HubOptions) {
     const open = store.openQuestions(sessionId);
     if (open > 0 && open - count <= 0) void notify();
   };
-  const features: Feature[] = allFeatures({
-    sql: options.sql,
-    store,
-    env: options.env ?? {},
-    notify: () => void notify(),
-    changed: () => {
-      pingOverview();
-      scheduleInboxCheck();
-    },
-  });
-  /** Oldest first; items that can wait (an idle agent) after the rest. */
-  const inbox = () =>
-    features
-      .flatMap((feature) => {
-        try {
-          return feature.inbox?.() ?? [];
-        } catch (error) {
-          console.error(`inbox ${feature.name}`, error);
-          return [];
-        }
-      })
-      .sort(
-        (a, b) =>
-          Number(Boolean(a.later)) - Number(Boolean(b.later)) ||
-          a.since.localeCompare(b.since),
-      );
-
-  // Any feature's new inbox item pushes to the user's devices once. Requests are
-  // left out: checkWaiting above already pushes when questions arrive.
-  options.sql.exec(
-    "CREATE TABLE IF NOT EXISTS kim_inbox_seen (id TEXT PRIMARY KEY, seen_at TEXT NOT NULL)",
-  );
-  const checkInbox = () => {
-    const items = inbox();
-    const seen = new Set(
-      options.sql
-        .all("SELECT id FROM kim_inbox_seen")
-        .map((row) => String(row.id)),
-    );
-    // The first check ever only records what is already there.
-    const seeding = !seen.has(SEEDED);
-    const fresh = items.filter((item) => !seen.has(item.id));
-    const time = new Date().toISOString();
-    options.sql.transaction(() => {
-      for (const id of seeding ? [SEEDED] : [])
-        options.sql.all(
-          "INSERT INTO kim_inbox_seen (id, seen_at) VALUES (?, ?)",
-          id,
-          time,
-        );
-      for (const item of fresh)
-        options.sql.all(
-          "INSERT INTO kim_inbox_seen (id, seen_at) VALUES (?, ?)",
-          item.id,
-          time,
-        );
-      // Forget items that went away, so one that comes back pushes again.
-      const current = new Set([SEEDED, ...items.map((item) => item.id)]);
-      for (const id of seen)
-        if (!current.has(id))
-          options.sql.all("DELETE FROM kim_inbox_seen WHERE id = ?", id);
-    });
-    if (!seeding && fresh.some((item) => item.kind !== "request"))
-      void notify();
-  };
-  let inboxCheck: ReturnType<typeof setTimeout> | null = null;
-  const scheduleInboxCheck = () => {
-    inboxCheck ??= setTimeout(() => {
-      inboxCheck = null;
-      try {
-        checkInbox();
-      } catch (error) {
-        console.error("inbox check", error);
-      }
-    }, PUSH_SETTLE_MS);
-  };
-  /** Runs each feature's timer work; the Durable Object alarm calls it. */
-  const tick = async (now = Date.now()) => {
-    for (const feature of features)
-      try {
-        await feature.tick?.(now);
-      } catch (error) {
-        console.error(`tick ${feature.name}`, error);
-      }
-    try {
-      checkInbox();
-    } catch (error) {
-      console.error("inbox check", error);
-    }
-  };
-
   store.subscribe((event) => {
     if (event.type === "question.added") {
       if (!added.has(event.sessionId))
@@ -277,10 +182,7 @@ export function createHub(options: HubOptions) {
       const watcher = watchers.get(event.sessionId);
       if (watcher?.write(event)) store.markDelivered(event.sessionId, event.id);
       broadcast(event.sessionId);
-      if (OVERVIEW_EVENTS.test(event.type)) {
-        pingOverview();
-        scheduleInboxCheck();
-      }
+      if (OVERVIEW_EVENTS.test(event.type)) pingOverview();
     });
   });
 
@@ -317,7 +219,7 @@ export function createHub(options: HubOptions) {
   app.get("/health", (c) => c.json({ ok: true }));
 
   // An assignee reaches one interview, by its token, and nothing else in
-  // the workspace: not the list, the inbox, projects, keys or devices.
+  // the workspace: not the list, keys or devices.
   app.use("*", async (c, next) => {
     const respondent = c.req.header(RESPONDENT_HEADER);
     if (respondent === undefined) return next();
@@ -336,7 +238,7 @@ export function createHub(options: HubOptions) {
   });
 
   // An agent key lives in a cloud environment others may read, so it can
-  // report and work but not delete, reconfigure, or manage keys.
+  // work on interviews but not answer, delete, or manage keys.
   app.use("/api/sessions/*", async (c, next) => {
     if (c.req.header(VIA_KEY_HEADER) && !keyMayCall(c.req.method, c.req.path))
       return c.json(
@@ -346,52 +248,13 @@ export function createHub(options: HubOptions) {
     await next();
   });
 
-  // Keep it moving: feature routes, mounted before the :id and :token routes.
-  const kimAgent = new Hono();
-  const kimBrowser = new Hono();
-  const internal = new Hono();
-  kimAgent.get("/inbox", (c) => c.json({ items: inbox() }));
-  kimBrowser.get("/inbox", (c) => c.json({ items: inbox() }));
-  // Every project with the rail's numbers, merged from each feature.
-  kimBrowser.get("/projects", (c) => {
-    const stats = new Map<string, ProjectStats>();
-    for (const feature of features)
-      for (const [id, part] of Object.entries(feature.projectStats?.() ?? {}))
-        stats.set(id, { ...stats.get(id), ...part });
-    const needs = new Map<string, number>();
-    for (const item of inbox())
-      if (item.projectId)
-        needs.set(item.projectId, (needs.get(item.projectId) ?? 0) + 1);
-    return c.json({
-      projects: store.listProjects().map((project) => ({
-        ...project,
-        stats: {
-          ...stats.get(project.id),
-          needsYou: needs.get(project.id) ?? 0,
-        },
-      })),
-    });
-  });
-  for (const feature of features) {
-    feature.agentRoutes?.(kimAgent);
-    feature.browserRoutes?.(kimBrowser);
-    feature.internalRoutes?.(internal);
-  }
-  app.route("/api/sessions/kim", kimAgent);
-  app.route("/api/browser/kim", kimBrowser);
-  app.route("/internal", internal);
+  // Agent keys, mounted before the :id routes.
+  const keys = agentKeys(options.sql);
+  app.route("/api/sessions/kim", keys.agentRoutes);
+  app.route("/internal", keys.internalRoutes);
 
   // Agent routes. Fixed paths go before /api/sessions/:id.
   app.get("/api/sessions/projects", (c) => c.json(store.listProjects()));
-  app.post("/api/sessions/projects/update", async (c) => {
-    const input = await body(c);
-    const project = store.updateProject(String(input.project ?? ""), {
-      name: input.name === undefined ? undefined : String(input.name),
-      color: input.color === undefined ? undefined : String(input.color),
-    });
-    pingOverview();
-    return c.json(project);
-  });
   app.post("/api/sessions", async (c) =>
     c.json(forAgent(store.createSession(baseUrl, await body(c)))),
   );
@@ -412,10 +275,13 @@ export function createHub(options: HubOptions) {
     return c.json({ ok: true });
   });
   app.delete("/api/sessions/:id", (c) => {
-    const { token, assignee } = store.getSession(c.req.param("id"), baseUrl);
-    store.deleteSession(c.req.param("id"));
+    const { id, title, token, assignee } = store.getSession(
+      c.req.param("id"),
+      baseUrl,
+    );
+    store.deleteSession(id);
     // The Worker forgets the share when there was one.
-    return c.json({ ok: true, token, assignee });
+    return c.json({ ok: true, id, title, token, assignee });
   });
   app.post("/api/sessions/:id/assign", async (c) =>
     c.json(assign(c, c.req.param("id"), await body(c))),
@@ -698,8 +564,6 @@ export function createHub(options: HubOptions) {
     stateMessage,
     tokenSession,
     respondentMayUse,
-    tick,
-    inbox,
   };
 }
 
@@ -709,10 +573,8 @@ const OVERVIEW_PING_MS = 300;
 const PUSH_SETTLE_MS = 1_500;
 /** How long an agent between chained `wait` requests still counts as watching. */
 const WATCH_GRACE_MS = 5_000;
-/** Marks kim_inbox_seen as seeded; never an inbox item id. */
-const SEEDED = "*seeded*";
-/** Events that change an interview's place in the switcher. */
-const OVERVIEW_EVENTS = /^(session|question\.(added|deleted)|answer)\./;
+/** Events that change an interview's row in the list or the switcher. */
+const OVERVIEW_EVENTS = /^(session|question\.(added|deleted)|answer|chat)\./;
 
 /**
  * Whether a request came from this site's own pages. Browsers send
@@ -963,11 +825,9 @@ const ID = "[^/]+";
 
 /**
  * The routes an agent key may call; anything else, including routes added
- * later, is refused. A key reports, raises and edits requests, waits on
- * them, replies in their chat, assigns them to someone, beats, syncs and reads the backlog, and reads
- * a project's context and writes its summary. Answering, deleting
- * interviews, reconfiguring projects and backlogs, and keys stay with a
- * signed-in CLI.
+ * later, is refused. A key creates and edits interviews, waits on them,
+ * replies in their chat and assigns them to someone. Answering, deleting
+ * interviews and managing keys stay with a signed-in CLI.
  */
 const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
   ["GET", /^\/api\/sessions(\/projects)?$/],
@@ -984,29 +844,14 @@ const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
   ],
   ["PATCH", new RegExp(`^/api/sessions/${ID}/(questions|artifacts)/${ID}$`)],
   ["DELETE", new RegExp(`^/api/sessions/${ID}/(questions|artifacts)/${ID}$`)],
-  [
-    "GET",
-    new RegExp(
-      `^/api/sessions/kim/(inbox|automations|machines|prs|backlog|projects/context|sessions/${ID})$`,
-    ),
-  ],
-  [
-    "POST",
-    /^\/api\/sessions\/kim\/(report|machines\/beat|heartbeat|followups|projects\/summary|backlog\/(sync|items|error))$/,
-  ],
 ];
 
 /** Whether a request authenticated by an agent key may go through. */
 export function keyMayCall(method: string, path: string): boolean {
+  // The kim routes are fixed paths a key may not use: never let them fall
+  // through to /:id.
+  if (/^\/api\/sessions\/kim(\/|$)/.test(path)) return false;
   const upper = method.toUpperCase();
-  // The kim routes are fixed paths: never let them fall through to /:id.
-  if (/^\/api\/sessions\/kim(\/|$)/.test(path))
-    return KEY_ALLOWED.some(
-      ([allowed, pattern]) =>
-        allowed === upper &&
-        pattern.source.includes("kim") &&
-        pattern.test(path),
-    );
   return KEY_ALLOWED.some(
     ([allowed, pattern]) => allowed === upper && pattern.test(path),
   );

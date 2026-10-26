@@ -1,5 +1,5 @@
 // Desktop glue for the hosted site: native notifications and a dock badge
-// for the inbox (web push doesn't reach a webview), links that leave the
+// for interviews waiting on you (web push doesn't reach a webview), links that leave the
 // site open in the default browser, and Cmd+R to reload.
 (() => {
   if (location.origin !== window.__KIM_ORIGIN__ || window.top !== window)
@@ -13,27 +13,32 @@
   const notification = tauri.notification;
   let seen = null;
 
-  async function notify(item) {
+  async function notify(session) {
     if (document.hasFocus()) return;
     let granted = await notification.isPermissionGranted();
     if (!granted)
       granted = (await notification.requestPermission()) === "granted";
     if (granted)
-      notification.sendNotification({ title: item.title, body: item.brief });
+      notification.sendNotification({
+        title: session.title,
+        body: `${session.open} question${session.open === 1 ? "" : "s"} waiting`,
+      });
   }
 
   async function poll() {
     try {
-      const response = await fetch("/api/browser/inbox", {
+      const response = await fetch("/api/browser/overview", {
         credentials: "same-origin",
       });
       if (!response.ok) return;
-      const { items } = await response.json();
-      await getCurrentWindow().setBadgeCount(items.length || undefined);
+      const { sessions } = await response.json();
+      const waiting = sessions.filter((session) => session.open > 0);
+      await getCurrentWindow().setBadgeCount(waiting.length || undefined);
       // The first load only learns what's there; later ones announce what's new.
       if (seen)
-        for (const item of items) if (!seen.has(item.id)) await notify(item);
-      seen = new Set(items.map((item) => item.id));
+        for (const session of waiting)
+          if (!seen.has(session.id)) await notify(session);
+      seen = new Set(waiting.map((session) => session.id));
     } catch {
       // Offline or signed out; try again next time.
     }

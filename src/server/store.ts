@@ -30,7 +30,7 @@ const optional = (value: unknown) => (value === null ? null : String(value));
  * Project colours: dark enough for white text, and different in lightness as
  * well as hue so they stay distinguishable without colour vision.
  */
-export const PROJECT_COLORS = [
+const PROJECT_COLORS = [
   "#0f6b62",
   "#7a2e8f",
   "#2550b8",
@@ -57,7 +57,6 @@ const ORIGIN_COLUMNS = [
   "worktree",
   "agent",
   "agent_session",
-  "agent_session_id",
   "location",
 ] as const;
 
@@ -159,8 +158,8 @@ export class InterviewStore {
     const projectId = this.resolveProject(origin);
     this.sql.all(
       `INSERT INTO sessions (id, title, token, stage_visible, stage_visibility_source, created_at, updated_at,
-        project_id, branch, worktree, agent, agent_session, agent_session_id, location)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        project_id, branch, worktree, agent, agent_session, location)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       title,
       sessionToken(),
@@ -173,7 +172,6 @@ export class InterviewStore {
       origin.worktree ?? null,
       origin.agent ?? null,
       origin.agentSession ?? null,
-      origin.agentSessionId ?? null,
       origin.location ?? null,
     );
     this.emit(id, "session.created", { id });
@@ -239,47 +237,10 @@ export class InterviewStore {
     return id;
   }
 
-  /**
-   * The project for a normalised remote key (github.com/o/r), created when
-   * new; a value without a slash is matched as an existing name first.
-   */
-  projectForKey(key: string): ProjectView {
-    const id = this.resolveProject(
-      key.includes("/") ? { projectKey: key } : { project: key },
-    );
-    return this.projectFor(id)!;
-  }
-
   listProjects(): ProjectView[] {
     return this.sql
       .all("SELECT * FROM projects ORDER BY lower(name)")
       .map(mapProject);
-  }
-
-  /** Renames or recolours a project, found by its name or key. */
-  updateProject(
-    project: string,
-    patch: { name?: string | undefined; color?: string | undefined },
-  ): ProjectView {
-    const row = first(
-      this.sql,
-      "SELECT * FROM projects WHERE lower(name) = lower(?) OR key = ? OR id = ?",
-      project,
-      project,
-      project,
-    );
-    if (!row) throw new Error("Project not found");
-    const name = patch.name?.trim() || String(row.name);
-    const color = patch.color ?? String(row.color);
-    if (!/^#[0-9a-f]{6}$/i.test(color))
-      throw new Error("A project colour is a hex value like #2550b8");
-    this.sql.all(
-      "UPDATE projects SET name = ?, color = ? WHERE id = ?",
-      name,
-      color,
-      String(row.id),
-    );
-    return { ...mapProject(row), name, color };
   }
 
   /** Every interview, most recently active first, for the switcher and home page. */
@@ -292,7 +253,9 @@ export class InterviewStore {
             WHERE q.session_id = s.id AND q.deleted = 0) answered,
           (SELECT MAX(created_at) FROM events e WHERE e.session_id = s.id) last_event,
           (SELECT json_object('text', text, 'at', created_at) FROM chat_messages c
-            WHERE c.session_id = s.id AND c.author = 'agent' ORDER BY created_at DESC, rowid DESC LIMIT 1) last_reply
+            WHERE c.session_id = s.id AND c.author = 'agent' ORDER BY created_at DESC, rowid DESC LIMIT 1) last_reply,
+          (SELECT author FROM chat_messages c
+            WHERE c.session_id = s.id ORDER BY created_at DESC, rowid DESC LIMIT 1) last_author
         FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
         ORDER BY COALESCE(last_event, s.updated_at) DESC LIMIT 200`,
       )
@@ -323,6 +286,7 @@ export class InterviewStore {
           lastReply: row.last_reply
             ? json<{ text: string; at: string }>(row.last_reply)
             : null,
+          awaitingReply: row.last_author === "user",
         };
       });
   }

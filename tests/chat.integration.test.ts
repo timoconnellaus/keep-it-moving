@@ -181,19 +181,19 @@ describe("interview chat", () => {
     expect((await browser()).agentWatching).toBe(false);
   });
 
-  it("never puts the user's own message in their inbox", async () => {
+  it("counts the user's own message as waiting on the agent, not on them", async () => {
     const { app, store, session, questions, ask } = await interview();
     for (const question of questions)
       store.answerQuestion(session.id, question.id, { answer: "Fast" });
     await ask({ text: "One more thing about pricing." });
-    const inbox = (
-      await app.inject({ method: "GET", url: "/api/browser/kim/inbox" })
-    ).json().items;
-    expect(inbox).toEqual([]);
     const overview = (
       await app.inject({ method: "GET", url: "/api/browser/overview" })
     ).json().sessions;
-    expect(overview[0]).toMatchObject({ open: 0, lastReply: null });
+    expect(overview[0]).toMatchObject({
+      open: 0,
+      lastReply: null,
+      awaitingReply: true,
+    });
   });
 
   it("lets agent keys read and reply in the chat", () => {

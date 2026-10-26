@@ -28,29 +28,25 @@ Use the `interviewer` CLI to run an adaptive interview in the user's browser.
 
 When the user wants another person to fill in an interview (a client, a colleague), assign it to that person's email: `kim session create … --assign <email>`, or `kim session assign <session-id> <email>` for an existing one (`--clear` takes it back; one assignee at a time). Give the user the returned `url` to send them; nothing is emailed. That person signs in with Google as exactly that email and sees only this interview: its questions, the workspace items you show, and the chat. Write the questions for them, not the user.
 
-Then wait as usual. Their answers and chat messages come back in `wait` batches with `answeredBy` (on answers) and `from` (on messages) set to their email; reply in the chat as you would to the user. They may take hours or days, so keep the background `kim wait` loop going while your session lasts, and before you stop, tell the user the session ID and that `kim wait <session-id>` picks up their answers later. The user's inbox counts the interview as waiting on the assignee, and their phone is notified when answers arrive.
+Then wait as usual. Their answers and chat messages come back in `wait` batches with `answeredBy` (on answers) and `from` (on messages) set to their email; reply in the chat as you would to the user. They may take hours or days, so keep the background `kim wait` loop going while your session lasts, and before you stop, tell the user the session ID and that `kim wait <session-id>` picks up their answers later. The user's home page shows the interview as waiting on the assignee, and their phone is notified when answers arrive.
 
 Question types are `text`, `single-choice`, `multiple-choice`, `yes-no`, and `number`. Every widget accepts a free-text answer; for choice questions a typed note arrives appended as `Option — note`.
 
 For genuine decisions, set `default` to the answer you recommend, and use `recommendation` (Markdown) for the short reasoning. The browser pre-selects the default and offers one-click and bulk acceptance, so a good default saves the user time. A default is exactly one option for `single-choice`, one or more options for `multiple-choice`, `"Yes"`/`"No"` for `yes-no`, a number for `number`, or suggested text for `text`. Omit both when asking for facts only the user knows. An answer equal to the default means the user accepted it.
 
-## A quick request instead
+## A quick question instead
 
-When you're blocked on a decision or something only the user can do, and a full interview is more than you need, raise a request with one command. It creates an interview linked to your Claude Code session (so it shows in the user's Keep it moving inbox with your brief), marks your session as needing them, and waits for the answers:
+When you're blocked on a decision or something only the user can do, and a full interview is more than you need, ask with one command. It creates an interview with your questions and waits for the answers:
 
 ```sh
-kim ask --title "Run the migration against prod D1?" \
-  --brief "The migration is written and tested locally. Prod has no backup from today." \
-  --json - <<'JSON'
-{"questions":[{"type":"single-choice","prompt":"Run it now?","options":["Back up first, then run","Run without a backup","Stop, I'll look myself"],"default":"Back up first, then run"}]}
+kim ask --title "Run the migration against prod D1?" --json - <<'JSON'
+{"questions":[{"type":"single-choice","prompt":"Run it now?","options":["Back up first, then run","Run without a backup","Stop, I'll look myself"],"default":"Back up first, then run","recommendation":"The migration is tested locally, but prod has no backup from today."}]}
 JSON
 ```
 
-The brief says what you were doing, what's blocked and what you need, in two or three sentences. The URL goes to stderr; stdout gets one batch like `wait`'s, plus `interviewId`. If it times out before the user answers, run `kim wait <interviewId>` (in the background if you can). Everything else in this skill (adding questions, the plan, `session stop`) works on the request too.
+Put what you were doing and what's blocked in the question's `recommendation` or prompt. The URL goes to stderr; stdout gets one batch like `wait`'s, plus `interviewId`. If it times out before the user answers, run `kim wait <interviewId>` (in the background if you can). Everything else in this skill (adding questions, the plan, `session stop`) works on it too.
 
-`kim report --status … --brief … --pr <url> --follow-up "…"` reports progress explicitly; the hooks from `kim hooks install` already report the routine changes.
-
-In a claude.ai cloud session, `report` and `ask` work the same: they find your session from `CLAUDE_CODE_REMOTE_SESSION_ID`, and authenticate with the environment's `KEEP_IT_MOVING_TOKEN`. If `interviewer` isn't installed or the host is unreachable there, the environment isn't set up: tell the user to run `kim cloud setup` from the repo on their own machine, rather than trying to install or sign in yourself. Never print or commit `KEEP_IT_MOVING_TOKEN`. `kim hooks install --project` writes guarded hooks into the repo's `.claude/settings.json`, but only run it, and commit that file, when the user asks.
+In a claude.ai cloud session, the CLI authenticates with the environment's `KEEP_IT_MOVING_TOKEN`. If `interviewer` isn't installed or the host is unreachable there, the environment isn't set up: tell the user to run `kim cloud setup` from the repo on their own machine, rather than trying to install or sign in yourself. Never print or commit `KEEP_IT_MOVING_TOKEN`.
 
 ## Workspace: plan, diagrams, mockups
 
@@ -114,10 +110,6 @@ kim question focus <session-id> <question-id>
 kim question delete <session-id> <question-id>
 ```
 
-## Running a loop
-
-If you are running a recurring loop for a project (a `/loop`, such as `/loop /babysitter`), call `kim heartbeat <name> --every <interval> --quiet` once per iteration, with the loop's interval (for example `kim heartbeat babysitter --every 5m --command "/loop /babysitter" --status "merged #15; 2 queued" --quiet`). It registers the loop under the current repo's project and tells Tim's inbox it is still alive; if two check-ins are missed, he's told it stopped. `--status` is a one-line summary of what the iteration did. With `--quiet` it never fails or prints, so it can't break the loop.
-
 ## Finish
 
 Stop the interview when its decision frontier is empty:
@@ -127,11 +119,3 @@ kim session stop <session-id>
 ```
 
 A stopped interview is review-only. Use `kim session resume <session-id>` before adding questions or collecting more answers. Cancelling `attach` only releases the watcher; it does not stop the interview.
-
-## Backlog
-
-Before you pick up work in a project, run `kim backlog next` inside the repo. It syncs the backlog, then prints the current milestone and the top open items as JSON, in progress first; take the first one that fits your task. A `syncError` in the output means the list may be stale. A github.com project syncs its GitHub Issues on the server with nothing to set up. For any other backlog (Linear, Slack, a file), an agent writes the project's sync script once at setup: a Node `.mjs` script that reads the tool's API with credentials from the environment and prints `{"items": [{"sourceId", "title", "status": "todo|in_progress|done|cancelled", "url"?, "milestone"?, "priority"?, "order"?, "assignee"?, "labels"?, "body"?}], "milestones"?: [{"sourceId", "name", "due"?, "url"?}]}` on stdout (the README has an example). Test it with `node sync.mjs`, save it with `kim backlog script set --file sync.mjs` (which also switches the project to the script source), then check it end to end with `kim backlog sync`. The script runs on the machine that syncs, from the current directory, with a 60-second limit. A machine runs only scripts it approved: if sync says it "hasn't approved" the script, tell the user and let them review it (`backlog show`) and run `backlog sync --trust`; never pass `--trust` yourself.
-
-## Where it's up to
-
-The project page shows "where it's up to": a short summary an agent writes, not the server. When you finish a meaningful chunk of work in a project, or when asked, run `kim project context` inside the repo. It prints one JSON object: the milestone with its progress, what's in progress and up next, open follow-ups, the last week's agent sessions with their briefs, open PRs with CI and readiness, automations' health, and the previous summary. Read it, then write 2–5 plain sentences on where the project is up to against its milestone: what's done, what's in flight, what's blocked or waiting on Tim, and what's next. Synthesise; don't restate the backlog or list every item. Save it with `kim project summary --text "…"` (or `--file <path|->`); it records your session as the writer. A scheduled routine (for example a daily cloud agent per project) can run the same two commands to keep it fresh.

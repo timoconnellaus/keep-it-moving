@@ -1,29 +1,22 @@
 #!/usr/bin/env node
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
-  closeSync,
   existsSync,
-  fstatSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
-  readdirSync,
-  readSync,
   readFileSync,
   renameSync,
   rmSync,
   statSync,
-  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { homedir, hostname, tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import envPaths from "env-paths";
-import { parseDuration } from "./shared/automations.js";
 import { normalizeRemote, projectName } from "./shared/remote.js";
 
 /**
@@ -49,15 +42,13 @@ async function main(args: string[]): Promise<void> {
   if (group === "artifact") return artifactCommand(action, rest);
   if (group === "stage") return stageCommand(action, rest);
   if (group === "chat") return chatCommand(action, rest);
-  if (group === "project") return projectCommand(action, rest);
-  if (group === "heartbeat" || group === "automation")
-    return automationsCommand(group, action, rest);
-  if (group === "pr") return prCommand(action, rest);
-  if (group === "backlog") return backlogCommand(action, rest);
+  if (group === "project") return projectCommand(action);
   if (group === "key") return keyCommand(action, rest);
   if (group === "cloud") return cloudCommand(action, rest);
-  if (["hook", "hooks", "report", "ask"].includes(group!))
-    return agentSessionCommand(group!, action, rest);
+  if (group === "ask")
+    return ask(
+      [action, ...rest].filter((value): value is string => Boolean(value)),
+    );
   if (group === "plan")
     return planCommand(
       [action, ...rest].filter((value): value is string => Boolean(value)),
@@ -96,6 +87,7 @@ async function sessionCommand(action: string | undefined, args: string[]) {
     return output(
       await api(`/api/sessions${args.includes("--all") ? "?all=true" : ""}`),
     );
+  if (action === "delete") return deleteSessions(args);
   const id = positional(args, 0);
   if (action === "show") return output(await api(`/api/sessions/${id}`));
   if (action === "stop" || action === "resume") {
@@ -104,13 +96,49 @@ async function sessionCommand(action: string | undefined, args: string[]) {
     });
     return output(result);
   }
-  if (action === "delete")
-    return output(await api(`/api/sessions/${id}`, { method: "DELETE" }));
   if (action === "assign") {
     const email = args.includes("--clear") ? null : positional(args, 1);
     return output(await assign(id, email));
   }
   throw new Error(`Unknown session action: ${action ?? ""}`);
+}
+
+/**
+ * Deletes each interview named, or with --stopped every stopped one, and
+ * prints what went. One that fails doesn't stop the rest; it is listed
+ * under `failed` and the command exits 1.
+ */
+async function deleteSessions(args: string[]) {
+  const ids = args.includes("--stopped")
+    ? (
+        (await api("/api/sessions?all=true")) as Array<{
+          id: string;
+          status: string;
+        }>
+      )
+        .filter((session) => session.status === "stopped")
+        .map((session) => session.id)
+    : args.length
+      ? args
+      : [positional(args, 0)];
+  const deleted: Array<{ id: string; title: string; assignee: string | null }> =
+    [];
+  const failed: Array<{ id: string; error: string }> = [];
+  for (const id of ids)
+    try {
+      // The Worker forgets an assigned interview's share as it goes.
+      const { title, assignee } = (await api(`/api/sessions/${id}`, {
+        method: "DELETE",
+      })) as { title: string; assignee: string | null };
+      deleted.push({ id, title, assignee });
+    } catch (error) {
+      failed.push({
+        id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  output(failed.length ? { deleted, failed } : { deleted });
+  if (failed.length) process.exitCode = 1;
 }
 
 /**
@@ -469,7 +497,6 @@ function detectOrigin(args: string[]): Record<string, string> {
   set("worktree", repo.worktree);
   set("agent", flag(args, "--agent") ?? agentName());
   set("agentSession", flag(args, "--agent-session"));
-  set("agentSessionId", process.env.CLAUDE_CODE_SESSION_ID);
   const location =
     flag(args, "--location") ??
     (process.env.CLAUDE_CODE_REMOTE === "true" ? "cloud" : undefined);
@@ -477,262 +504,11 @@ function detectOrigin(args: string[]): Record<string, string> {
   return origin;
 }
 
-async function projectCommand(action: string | undefined, args: string[]) {
+async function projectCommand(action: string | undefined) {
   if (action === "list") return output(await api("/api/sessions/projects"));
-  if (action === "rename" || action === "color") {
-    const value = flag(args, action === "rename" ? "--name" : "--color");
-    if (!value)
-      throw new Error(
-        action === "rename" ? "--name is required" : "--color is required",
-      );
-    return output(
-      await api("/api/sessions/projects/update", {
-        method: "POST",
-        body: JSON.stringify({
-          project: positional(args, 0),
-          [action === "rename" ? "name" : "color"]: value,
-        }),
-      }),
-    );
-  }
-  if (action === "context")
-    return output(
-      await api(
-        `/api/sessions/kim/projects/context?project=${encodeURIComponent(backlogProject(args))}`,
-      ),
-    );
-  if (action === "summary") return output(await saveSummary(args));
   throw new Error(`Unknown project action: ${action ?? ""}`);
 }
 
-/**
- * `project summary --text "…" | --file <path|->`: saves where the project
- * is up to, written by this agent session when there is one.
- */
-async function saveSummary(args: string[]): Promise<unknown> {
-  const file = flag(args, "--file");
-  let text = flag(args, "--text");
-  if (file === "-") {
-    text = "";
-    for await (const chunk of process.stdin) text += chunk;
-  } else if (file) text = readFileSync(file, "utf8");
-  if (!text?.trim())
-    throw new Error('--text "…" or --file <path|-> is required');
-  const { id, remoteId } = sessionKey(args);
-  return api("/api/sessions/kim/projects/summary", {
-    method: "POST",
-    body: JSON.stringify({
-      project: backlogProject(args),
-      text,
-      ...(id || remoteId ? { agentSessionId: id ?? remoteId } : {}),
-      ...(remoteId ? { remoteId } : {}),
-    }),
-  });
-}
-
-/**
- * Pull requests the server synced from GitHub. The project defaults to this
- * repo's normalised remote, as `session create` detects it.
- */
-async function prCommand(action: string | undefined, args: string[]) {
-  if (action !== "list") throw new Error(`Unknown pr action: ${action ?? ""}`);
-  const project = flag(args, "--project") ?? detectOrigin([]).projectKey;
-  if (!project)
-    throw new Error("No git remote here; pass --project <key or name>");
-  return output(
-    await api(`/api/sessions/kim/prs?project=${encodeURIComponent(project)}`),
-  );
-}
-
-// Backlog, milestones and follow-ups ---------------------------------------
-
-/** --project, else this repo's project key, normalised as detectOrigin does. */
-function backlogProject(args: string[]): string {
-  const project = flag(args, "--project") ?? repoOrigin().projectKey;
-  if (project) return project;
-  throw new Error("Not in a git repository; pass --project <key>");
-}
-
-/** A sync script gets this long to print the backlog. */
-const SYNC_SCRIPT_TIMEOUT_MS = 60_000;
-
-async function backlogCommand(action: string | undefined, args: string[]) {
-  const project = backlogProject(args);
-  const settings = (patch: Record<string, unknown>) =>
-    api("/api/sessions/kim/backlog/settings", {
-      method: "POST",
-      body: JSON.stringify({ project, ...patch }),
-    });
-  if (action === "show")
-    return output(
-      await api(
-        `/api/sessions/kim/backlog?project=${encodeURIComponent(project)}`,
-      ),
-    );
-  if (action === "sync")
-    return output(await backlogSync(project, args.includes("--trust")));
-  if (action === "next") return output(await backlogNext(project, args));
-  if (action === "source") {
-    const source = positional(args, 0);
-    if (!["github", "script", "none"].includes(source))
-      throw new Error("backlog source takes github, script or none");
-    return output(await settings({ source }));
-  }
-  if (action === "script" && positional(args, 0) === "set") {
-    const script = await artifactContent(args);
-    if (!script) throw new Error("--file <path|-> is required");
-    // Saved from here, so this machine already trusts it.
-    trustScript(script);
-    return output(await settings({ script, source: "script" }));
-  }
-  if (action === "milestone" && positional(args, 0) === "set") {
-    const milestone = positional(args, 1);
-    return output(
-      await settings({ milestone: milestone === "auto" ? null : milestone }),
-    );
-  }
-  if (action === "milestone" && positional(args, 0) === "add")
-    return output(
-      await api("/api/sessions/kim/backlog/milestones", {
-        method: "POST",
-        body: JSON.stringify({
-          project,
-          name: positional(args, 1),
-          due: flag(args, "--due"),
-        }),
-      }),
-    );
-  if (action === "auto-write") {
-    const value = positional(args, 0);
-    if (value !== "on" && value !== "off")
-      throw new Error("backlog auto-write takes on or off");
-    return output(await settings({ autoWrite: value === "on" }));
-  }
-  throw new Error(`Unknown backlog action: ${action ?? ""}`);
-}
-
-/**
- * Syncs the project's backlog. GitHub syncs on the server; a script source
- * comes back as the script, which runs here (with this machine's
- * environment and credentials) and its JSON goes up to the server.
- */
-async function backlogSync(project: string, trust = false): Promise<unknown> {
-  const result = (await api("/api/sessions/kim/backlog/sync", {
-    method: "POST",
-    body: JSON.stringify({ project }),
-  })) as { script?: string };
-  if (typeof result.script !== "string") return result;
-  // The script comes from the server: run only one this machine approved, so
-  // a stolen CLI token can't run code everywhere an agent syncs.
-  if (!isTrustedScript(result.script)) {
-    if (!trust)
-      throw new Error(
-        `This machine hasn't approved ${project}'s sync script (sha256 ${scriptHash(result.script).slice(0, 12)}). ` +
-          `Read it with \`kim backlog show --project ${project}\`, then run \`kim backlog sync --project ${project} --trust\`.`,
-      );
-    trustScript(result.script);
-  }
-  const fail = async (message: string) => {
-    await api("/api/sessions/kim/backlog/error", {
-      method: "POST",
-      body: JSON.stringify({ project, error: message }),
-    }).catch(() => undefined);
-    throw new Error(message);
-  };
-  const dir = mkdtempSync(join(tmpdir(), "kim-sync-"));
-  const file = join(dir, "sync.mjs");
-  writeFileSync(file, result.script);
-  let run;
-  try {
-    run = spawnSync(process.execPath, [file], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      timeout: SYNC_SCRIPT_TIMEOUT_MS,
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-  const stderr = run.stderr?.trim().slice(-4000) ?? "";
-  if (run.error || run.status !== 0) {
-    const why =
-      run.signal === "SIGTERM"
-        ? `timed out after ${SYNC_SCRIPT_TIMEOUT_MS / 1000}s`
-        : run.error
-          ? `failed to run: ${run.error.message}`
-          : `exited with ${run.status}`;
-    return fail(`The sync script ${why}${stderr ? `:\n${stderr}` : ""}`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(run.stdout);
-  } catch {
-    return fail(
-      `The sync script's output isn't JSON: ${run.stdout.trim().slice(0, 200)}${stderr ? `\n${stderr}` : ""}`,
-    );
-  }
-  return api("/api/sessions/kim/backlog/items", {
-    method: "POST",
-    body: JSON.stringify({ project, output: parsed }),
-  });
-}
-
-/** Before an agent picks up work: sync, then the top open items in order. */
-/** Sync scripts this machine approved, by SHA-256 of their text. */
-const trustedScriptsFile = () => configFile("trusted-sync-scripts.json");
-
-const scriptHash = (script: string) =>
-  createHash("sha256").update(script).digest("hex");
-
-function trustedScripts(): string[] {
-  try {
-    const hashes: unknown = JSON.parse(
-      readFileSync(trustedScriptsFile(), "utf8"),
-    );
-    return Array.isArray(hashes) ? hashes.map(String) : [];
-  } catch {
-    return [];
-  }
-}
-
-const isTrustedScript = (script: string) =>
-  trustedScripts().includes(scriptHash(script));
-
-function trustScript(script: string): void {
-  const hashes = new Set(trustedScripts()).add(scriptHash(script));
-  const file = trustedScriptsFile();
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, JSON.stringify([...hashes], null, 2), { mode: 0o600 });
-}
-
-async function backlogNext(project: string, args: string[]) {
-  let syncError: string | undefined;
-  try {
-    await backlogSync(project, args.includes("--trust"));
-  } catch (error) {
-    // The last good sync is still worth showing.
-    syncError = error instanceof Error ? error.message : String(error);
-  }
-  const backlog = (await api(
-    `/api/sessions/kim/backlog?project=${encodeURIComponent(project)}`,
-  )) as {
-    milestone: unknown;
-    settings: { syncedAt: string | null };
-    items: { status: string }[];
-  };
-  return {
-    project,
-    milestone: backlog.milestone,
-    syncedAt: backlog.settings.syncedAt,
-    ...(syncError ? { syncError } : {}),
-    items: backlog.items
-      .filter((item) => item.status === "in_progress" || item.status === "todo")
-      .slice(0, Number(flag(args, "--limit") ?? 5)),
-  };
-}
-
-/** Opens or closes the workspace column beside the questions. */
 async function stageCommand(action: string | undefined, args: string[]) {
   if (action !== "open" && action !== "close")
     throw new Error(`Unknown stage action: ${action ?? ""}`);
@@ -825,199 +601,9 @@ async function nextBatch(id: string, args: string[]): Promise<unknown> {
   }
 }
 
-/** This repo's project key, normalised the same way as detectOrigin's. */
-const currentProjectKey = (): string | undefined => repoOrigin().projectKey;
-
-/** A heartbeat gives up rather than hold up the loop that sends it. */
-const HEARTBEAT_TIMEOUT_MS = 10_000;
-
 /**
- * `heartbeat <name>` registers an automation and checks in, and beats this
- * machine too; a loop runs it once per iteration. With --quiet it never
- * fails the caller: no output, exit 0. `automation list|remove` manage them.
- */
-async function automationsCommand(
-  group: string,
-  action: string | undefined,
-  rest: string[],
-) {
-  if (group === "heartbeat") {
-    const args = [action, ...rest].filter(
-      (value): value is string => value !== undefined && value !== "--quiet",
-    );
-    const quiet = rest.includes("--quiet") || action === "--quiet";
-    try {
-      const project = flag(args, "--project") ?? currentProjectKey();
-      if (!project)
-        throw new Error("Not in a git repo; pass --project <key> to heartbeat");
-      const result = await api("/api/sessions/kim/heartbeat", {
-        method: "POST",
-        signal: AbortSignal.timeout(HEARTBEAT_TIMEOUT_MS),
-        body: JSON.stringify({
-          project,
-          name: positional(args, 0),
-          every: parseDuration(flag(args, "--every") ?? "5m"),
-          command: flag(args, "--command"),
-          status: flag(args, "--status"),
-          machine: hostname(),
-          platform: process.platform,
-        }),
-      });
-      if (!quiet) output(result);
-    } catch (error) {
-      if (!quiet) throw error;
-    }
-    return;
-  }
-  if (action === "list") {
-    // --project, else this repo's project unless --all.
-    const project =
-      flag(rest, "--project") ??
-      (rest.includes("--all") ? undefined : currentProjectKey());
-    return output(
-      await api(
-        `/api/sessions/kim/automations${project ? `?project=${encodeURIComponent(project)}` : ""}`,
-      ),
-    );
-  }
-  if (action === "remove")
-    return output(
-      await api(
-        `/api/sessions/kim/automations/${encodeURIComponent(positional(rest, 0))}`,
-        { method: "DELETE" },
-      ),
-    );
-  throw new Error(`Unknown automation action: ${action ?? ""}`);
-}
-
-// Keep it moving: agent sessions report what they're doing, and raise requests.
-
-async function agentSessionCommand(
-  group: string,
-  action: string | undefined,
-  args: string[],
-): Promise<void> {
-  if (group === "hook") return hook(action);
-  if (group === "hooks") {
-    if (action !== "install" && action !== "uninstall")
-      throw new Error(`Unknown hooks action: ${action ?? ""}`);
-    if (args.includes("--project")) return projectHooks(action);
-    const file =
-      flag(args, "--settings") ?? join(homedir(), ".claude", "settings.json");
-    return output(editHooks(file, action));
-  }
-  const all = [action, ...args].filter((value): value is string =>
-    Boolean(value),
-  );
-  if (group === "report") return reportCommand(all);
-  return ask(all);
-}
-
-/** The agent session this process belongs to: --session, or Claude Code's own. */
-function agentSessionId(args: string[]): string | undefined {
-  return flag(args, "--session") ?? process.env.CLAUDE_CODE_SESSION_ID;
-}
-
-/**
- * A cloud session's id on claude.ai (cse_…). Its hooks report it beside
- * their own session id, so `report` and `ask` can find the session by it
- * when Claude Code's session id isn't in the environment.
- */
-function remoteSessionId(): string | undefined {
-  return process.env.CLAUDE_CODE_REMOTE === "true"
-    ? process.env.CLAUDE_CODE_REMOTE_SESSION_ID || undefined
-    : undefined;
-}
-
-/** The session fields a report sends: the id, the remote id, or both. */
-function sessionKey(args: string[]): { id?: string; remoteId?: string } {
-  const id = agentSessionId(args);
-  const remoteId = remoteSessionId();
-  return { ...(id ? { id } : {}), ...(remoteId ? { remoteId } : {}) };
-}
-
-const NO_SESSION =
-  "No agent session: run inside Claude Code (CLAUDE_CODE_SESSION_ID, or CLAUDE_CODE_REMOTE_SESSION_ID in a cloud session) or pass --session <id>";
-
-/** Where an agent session runs, for its report. */
-function sessionContext(cwd?: string): Record<string, string> {
-  const repo = repoOrigin(cwd);
-  const context: Record<string, string> = {
-    ...repo,
-    machine: hostname(),
-    location: process.env.CLAUDE_CODE_REMOTE === "true" ? "cloud" : "local",
-    cwd: cwd ?? process.cwd(),
-  };
-  const agent = agentName();
-  if (agent) context.agent = agent;
-  return context;
-}
-
-async function report(
-  body: Record<string, unknown>,
-  init?: RequestInit,
-): Promise<unknown> {
-  return api("/api/sessions/kim/report", {
-    ...init,
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-/**
- * Tells the automations feature this machine is alive. Fire and forget: a
- * deployment without the route, or a slow network, changes nothing.
- */
-async function beat(signal: AbortSignal): Promise<void> {
-  await authorizedFetch("/api/sessions/kim/machines/beat", {
-    method: "POST",
-    body: JSON.stringify({ machine: hostname(), platform: process.platform }),
-    signal,
-  }).catch(() => undefined);
-}
-
-/** `report --status … --brief … --pr <url> --follow-up "…"` from an agent. */
-async function reportCommand(args: string[]) {
-  const key = sessionKey(args);
-  if (!key.id && !key.remoteId) throw new Error(NO_SESSION);
-  const body: Record<string, unknown> = { ...key, ...sessionContext() };
-  for (const [name, field] of [
-    ["--status", "status"],
-    ["--title", "title"],
-    ["--brief", "brief"],
-    ["--message", "message"],
-    ["--pr", "prUrl"],
-  ] as const) {
-    const value = flag(args, name);
-    if (value !== undefined) body[field] = value;
-  }
-  const [result] = (await Promise.all([
-    report(body),
-    beat(AbortSignal.timeout(HOOK_TIMEOUT_MS)),
-  ])) as [{ id: string }, void];
-  // The server resolved a remote id to the session the hooks reported.
-  const id = result.id;
-  const items = flags(args, "--follow-up");
-  // The backlog feature owns follow-ups; a deployment without it says 404.
-  if (items.length) {
-    const response = await authorizedFetch("/api/sessions/kim/followups", {
-      method: "POST",
-      body: JSON.stringify({
-        projectKey: body.projectKey,
-        agentSessionId: id,
-        items,
-      }),
-    });
-    if (!response.ok && response.status !== 404)
-      throw new Error(await errorMessage(response));
-  }
-  output(result);
-}
-
-/**
- * Raises a request: an interview linked to this agent session, its
- * questions, and the session marked as needing Tim. Then waits for answers
- * like `wait`, and prints the batch.
+ * `ask`: `session create`, `question add` and `wait` in one command, for a
+ * quick question. Prints the batch with the interview's id and URL.
  */
 async function ask(args: string[]) {
   const questions =
@@ -1025,303 +611,20 @@ async function ask(args: string[]) {
     (flag(args, "--prompt") ? questionFromFlags(args) : null);
   if (!questions)
     throw new Error("--json <questions|-> or --prompt is required");
-  const key = sessionKey(args);
-  // A cloud session known only by its remote id: the server finds the
-  // session its hooks reported (or files one under the remote id).
-  const id =
-    key.id ??
-    (key.remoteId
-      ? ((await report({ ...key, ...sessionContext() })) as { id: string }).id
-      : undefined);
-  const origin = detectOrigin(args);
-  if (id) origin.agentSessionId = id;
   const session = (await api("/api/sessions", {
     method: "POST",
-    body: JSON.stringify({ title: flag(args, "--title") ?? "Request", origin }),
+    body: JSON.stringify({
+      title: flag(args, "--title") ?? "Request",
+      origin: detectOrigin(args),
+    }),
   })) as { id: string; url: string };
   await api(`/api/sessions/${session.id}/questions`, {
     method: "POST",
     body: JSON.stringify(questions),
   });
-  const brief = flag(args, "--brief");
-  if (id)
-    await report({
-      ...key,
-      id,
-      ...sessionContext(),
-      status: "needs_you",
-      ...(brief ? { brief } : {}),
-    });
   process.stderr.write(`${session.url}\n`);
-  const batch = (await nextBatch(session.id, args)) as {
-    answers?: unknown[];
-  };
-  if (id && batch.answers?.length)
-    await report({ id, status: "running" }).catch(() => undefined);
+  const batch = (await nextBatch(session.id, args)) as object;
   output({ interviewId: session.id, url: session.url, ...batch });
-}
-
-/** A hook gives up after this, so it never holds Claude Code up. */
-const HOOK_TIMEOUT_MS = 3_000;
-const BRIEF_MAX = 600;
-const TITLE_MAX = 80;
-
-/** The hook events `hooks install` adds, and the status each reports. */
-const HOOK_EVENTS = {
-  SessionStart: "running",
-  UserPromptSubmit: "running",
-  Notification: "needs_you",
-  Stop: "idle",
-  SessionEnd: "done",
-} as const;
-
-interface HookInput {
-  session_id?: string;
-  transcript_path?: string;
-  cwd?: string;
-  hook_event_name?: string;
-  message?: string;
-  prompt?: string;
-}
-
-/**
- * `kim hook <event>`: reports a Claude Code hook. It must never
- * block or fail the hook, so it prints nothing, swallows every error, exits
- * 0, and gives up after a few seconds.
- */
-async function hook(event: string | undefined): Promise<void> {
-  setTimeout(() => process.exit(0), HOOK_TIMEOUT_MS).unref();
-  try {
-    const name = event ?? "";
-    if (!(name in HOOK_EVENTS)) return;
-    const raw = process.stdin.isTTY ? "{}" : await readStdin();
-    const input = JSON.parse(raw) as HookInput;
-    if (!input.session_id) return;
-    // Installed at both user and project level, the hook fires twice.
-    if (!firstToHandle(name, raw)) return;
-    const remoteId = remoteSessionId();
-    const body: Record<string, unknown> = {
-      id: input.session_id,
-      ...(remoteId ? { remoteId } : {}),
-      ...sessionContext(input.cwd),
-      agent: agentName() ?? "Claude Code",
-      status: HOOK_EVENTS[name as keyof typeof HOOK_EVENTS],
-    };
-    if (name === "UserPromptSubmit" && input.prompt?.trim())
-      body.defaultTitle = clip(input.prompt.replace(/\s+/g, " "), TITLE_MAX);
-    if (name === "Notification" && input.message?.trim())
-      body.message = clip(input.message, 2_000);
-    if (name === "Stop" && input.transcript_path) {
-      const brief = lastAssistantText(input.transcript_path);
-      if (brief) body.brief = clip(brief, BRIEF_MAX);
-    }
-    const signal = AbortSignal.timeout(HOOK_TIMEOUT_MS);
-    await Promise.allSettled([report(body, { signal }), beat(signal)]);
-  } catch {
-    /* a hook never fails */
-  } finally {
-    process.exitCode = 0;
-  }
-}
-
-/** Two copies of one hook firing arrive within this long of each other. */
-const HOOK_DEDUPE_MS = 10_000;
-
-/**
- * Whether this process is the first to handle a hook firing. Claude Code
- * runs every matching hook, so one installed in ~/.claude/settings.json and
- * in the repo's .claude/settings.json runs twice, in parallel, with the same
- * input. The first to create a marker named after that input reports; the
- * other sees it and stays quiet. Markers older than a minute are cleared.
- */
-function firstToHandle(event: string, input: string): boolean {
-  try {
-    const dir = join(tmpdir(), "kim-hooks");
-    mkdirSync(dir, { recursive: true });
-    const marker = join(
-      dir,
-      createHash("sha256")
-        .update(`${event}\0${input}`)
-        .digest("hex")
-        .slice(0, 32),
-    );
-    try {
-      writeFileSync(marker, "", { flag: "wx" });
-    } catch {
-      if (Date.now() - statSync(marker).mtimeMs < HOOK_DEDUPE_MS) return false;
-      // The same input again, later: a new firing.
-      utimesSync(marker, new Date(), new Date());
-    }
-    for (const name of readdirSync(dir)) {
-      const path = join(dir, name);
-      if (Date.now() - statSync(path).mtimeMs > 60_000)
-        rmSync(path, { force: true });
-    }
-  } catch {
-    /* without markers, report anyway */
-  }
-  return true;
-}
-
-async function readStdin(): Promise<string> {
-  let text = "";
-  for await (const chunk of process.stdin) text += chunk;
-  return text;
-}
-
-function clip(value: string, max: number): string {
-  const trimmed = value.trim();
-  return trimmed.length > max
-    ? `${trimmed.slice(0, max - 1).trimEnd()}…`
-    : trimmed;
-}
-
-/** Transcripts grow large; the last message is near the end. */
-const TRANSCRIPT_TAIL_BYTES = 2_000_000;
-
-/** The text of the last assistant message in a Claude Code transcript (JSONL). */
-function lastAssistantText(path: string): string | null {
-  const fd = openSync(path, "r");
-  let tail: string;
-  try {
-    const size = fstatSync(fd).size;
-    const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
-    const buffer = Buffer.alloc(size - start);
-    readSync(fd, buffer, 0, buffer.length, start);
-    tail = buffer.toString("utf8");
-  } finally {
-    closeSync(fd);
-  }
-  const lines = tail.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    let entry: {
-      type?: string;
-      message?: { content?: string | Array<{ type?: string; text?: string }> };
-    };
-    try {
-      entry = JSON.parse(lines[i]!) as typeof entry;
-    } catch {
-      continue;
-    }
-    if (entry.type !== "assistant") continue;
-    const content = entry.message?.content;
-    const text =
-      typeof content === "string"
-        ? content
-        : (content ?? [])
-            .filter((part) => part.type === "text" && part.text)
-            .map((part) => part.text)
-            .join("\n");
-    if (text.trim()) return text.trim();
-  }
-  return null;
-}
-
-/** Recognises this CLI's own hook entries, whichever name ran it. */
-const OWN_HOOK = /\b(interviewer|kim) hook\b/;
-
-interface HookHandler {
-  type?: string;
-  command?: string;
-  [key: string]: unknown;
-}
-interface HookGroup {
-  matcher?: string;
-  hooks?: HookHandler[];
-  [key: string]: unknown;
-}
-
-/**
- * Adds (or removes) this CLI's hook for each event in a Claude Code
- * settings file, next to whatever hooks are there. Other entries are never
- * removed or reordered, and running it twice changes nothing.
- */
-function editHooks(
-  file: string,
-  action: "install" | "uninstall",
-  commandFor: (event: string) => string = (event) => `kim hook ${event}`,
-): { settings: string; changed: string[] } {
-  const settings = existsSync(file)
-    ? (JSON.parse(readFileSync(file, "utf8") || "{}") as Record<
-        string,
-        unknown
-      >)
-    : {};
-  const hooks = (settings.hooks ?? {}) as Record<string, HookGroup[]>;
-  const changed: string[] = [];
-  for (const event of Object.keys(HOOK_EVENTS)) {
-    const command = commandFor(event);
-    const groups = hooks[event] ?? [];
-    const own = groups
-      .flatMap((group) => group.hooks ?? [])
-      .filter((handler) => OWN_HOOK.test(handler.command ?? ""));
-    if (action === "install") {
-      if (own.some((handler) => handler.command === command)) continue;
-      // An older spelling of ours is updated in place.
-      if (own[0]) own[0].command = command;
-      else
-        groups.push({
-          hooks: [{ type: "command", command, timeout: 10 }],
-        });
-      hooks[event] = groups;
-      changed.push(event);
-    } else {
-      if (!own.length) continue;
-      const kept = groups
-        .map((group) => ({
-          ...group,
-          hooks: (group.hooks ?? []).filter(
-            (handler) => !OWN_HOOK.test(handler.command ?? ""),
-          ),
-        }))
-        .filter((group) => group.hooks.length);
-      if (kept.length) hooks[event] = kept;
-      else delete hooks[event];
-      changed.push(event);
-    }
-  }
-  if (!changed.length) return { settings: file, changed };
-  if (Object.keys(hooks).length) settings.hooks = hooks;
-  else delete settings.hooks;
-  // Write a sibling file and rename it, so a crash never leaves half a file.
-  mkdirSync(dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`);
-  renameSync(temporary, file);
-  return { settings: file, changed };
-}
-
-/**
- * A repo's hook command: it runs only where KEEP_IT_MOVING_TOKEN is set (a
- * cloud environment), so teammates without a token, and Tim's machine,
- * which reports through its user-level hooks, are unaffected. POSIX sh, and
- * it always exits 0.
- */
-const projectHookCommand = (event: string) =>
-  `[ -n "$KEEP_IT_MOVING_TOKEN$INTERVIEWER_TOKEN" ] && kim hook ${event} || true`;
-
-/**
- * `hooks install|uninstall --project`: the hooks in this repo's committed
- * .claude/settings.json, for cloud sessions, which read only that. It
- * never commits; it prints the git command that would.
- */
-function projectHooks(action: "install" | "uninstall") {
-  const top = git(undefined, "rev-parse", "--show-toplevel");
-  if (!top) throw new Error("Not in a git repository; run it from the repo");
-  const relative = join(".claude", "settings.json");
-  const result = editHooks(join(top, relative), action, projectHookCommand);
-  const message =
-    action === "install"
-      ? "Report cloud sessions to Keep it moving"
-      : "Stop reporting cloud sessions to Keep it moving";
-  const commit = result.changed.length
-    ? `git -C ${shellQuote(top)} add ${relative} && git -C ${shellQuote(top)} commit -m ${shellQuote(message)}`
-    : null;
-  output({ ...result, commit });
-  if (commit)
-    process.stderr.write(
-      `\nNothing is committed. Review the file, then run:\n  ${commit}\n`,
-    );
 }
 
 /** A value as one POSIX shell word. */
@@ -1502,9 +805,6 @@ async function cloudCommand(action: string | undefined, args: string[]) {
     "# Keep it moving. Nothing here can stop the session from starting.",
     "# The key is the environment's KEEP_IT_MOVING_TOKEN variable.",
     `curl -fsS -H "Authorization: Bearer \${KEEP_IT_MOVING_TOKEN:-$INTERVIEWER_TOKEN}" -o /tmp/kim-cli.tgz ${cliPackageUrl()} && npm install -g /tmp/kim-cli.tgz || true`,
-    "# Experimental: user-level hooks in the VM (/root/.claude/settings.json).",
-    "# Cloud sessions may not read them; see the per-repo fallback.",
-    "kim hooks install || true",
     "exit 0",
   ].join("\n");
   if (args.includes("--json"))
@@ -1514,7 +814,6 @@ async function cloudCommand(action: string | undefined, args: string[]) {
       network: { level: "Custom", allow: [host], keepDefaultPackages: true },
       environment,
       setupScript,
-      fallback: "kim hooks install --project",
     });
   process.stdout.write(
     `Cloud environment for ${project.name} (${project.key})
@@ -1533,15 +832,6 @@ ${environment}
 
 ${setupScript}
 
-The setup script's hooks are experimental: the docs don't say whether cloud
-sessions read /root/.claude/settings.json. If a cloud session doesn't show up
-in Keep it moving, commit the hooks to the repo instead. From a checkout:
-
-  kim hooks install --project
-
-Those hooks do nothing unless KEEP_IT_MOVING_TOKEN is set, so teammates and local
-sessions are unaffected. Hooks run only in single-repo cloud sessions.
-
 The key "${keyName}" is shown only here. Revoke it with:
   kim key revoke ${shellQuote(keyName)}
 `,
@@ -1550,7 +840,7 @@ The key "${keyName}" is shown only here. Revoke it with:
 
 /**
  * The stored access token, refreshed when it is about to expire or the
- * server refused it (`rejected`). Hooks run several CLI processes at once,
+ * server refused it (`rejected`). Agents run several CLI processes at once,
  * and each refresh rotates the refresh token, so refreshes take a lock and
  * reuse a token another process has just fetched; otherwise a process could
  * save a refresh token the server had already replaced, signing the CLI out.
@@ -1840,7 +1130,7 @@ function output(value: unknown): void {
 }
 function printHelp(): void {
   process.stdout.write(
-    `kim — Keep it moving: agent sessions, requests and interviews (${defaultBase})
+    `kim — Keep it moving: interviews with your agents (${defaultBase})
 (\`interviewer\` is the same command.)
 
 Commands:
@@ -1849,15 +1139,15 @@ Commands:
     the workspace column starts closed unless --open-stage; the project comes from the git remote
   session assign <session> <email> | --clear
     someone else answers it: they sign in with Google as that email at the url; answers come back to you
-  project list | rename <project> --name <name> | color <project> --color <#hex>
-  project context [--project <key>]   what an agent reads to write where the project is up to
-  project summary --text "…" | --file <path|-> [--project <key>]   save where it's up to (2–5 sentences)
-  pr list [--project <key>]   open PRs with CI and readiness; defaults to this repo's remote
-  session list [--all]|show <id>|stop <id>|resume <id>|delete <id>
+  session list [--all]|show <id>|stop <id>|resume <id>
+  session delete <id> [<id>...] | --stopped   delete interviews, or every stopped one; prints what went
+  project list   the projects interviews are labelled with
   question add <session> --prompt <text> [--type <type>] [--option <text>] [--default <text>] [--recommendation <text>] [--artifact <id>]
   types: text, single-choice, multiple-choice, yes-no, number; repeat --option/--default
   question add|update <session> [question] --json '<object>'  (use --json - for stdin)
   question delete|focus|reorder <session> <question> [--position N]
+  ask --title <text> --json <questions|-> | --prompt <text> … [--idle MS] [--timeout MS]
+    a quick question: session create, question add and wait in one; prints the batch with its interviewId
   wait <session> [--idle MS] [--timeout MS]   one batch of answers once the user pauses
     the user's chat messages wake it too and arrive in \`messages\`
   chat list <session>   the interview's chat with the user
@@ -1872,31 +1162,8 @@ Commands:
   artifact delete <session> <artifact>
   stage open|close <session>   show or hide the workspace column
 
-Keep it moving:
-  heartbeat <name> [--every 5m] [--project <key>] [--command "/loop /babysitter"] [--status <text>] [--quiet]
-    register an automation and check in (run once per loop iteration); it's down after 2 missed
-    check-ins. The project defaults to this repo; --quiet never fails the caller
-  automation list [--project <key>] [--all]   this repo's automations by default
-  automation remove <id>
-Backlog (the project defaults to this repo's; --project <key> picks another):
-  key create <name> | list | revoke <id|name>   agent keys for cloud environments (KEEP_IT_MOVING_TOKEN)
-  backlog show | sync | next [--limit 5]   next syncs first, then prints the top open items
-  backlog source github|script|none
-  backlog script set --file <path|->   save the project's sync script; it runs here on sync
-  backlog milestone set <name|sourceId|auto> | milestone add <name> [--due YYYY-MM-DD]
-  backlog auto-write on|off   accept follow-ups into the source as they arrive
-Keep it moving (agent sessions; \`kim\` is the same binary):
-  ask --title <text> --json <questions|-> [--brief <text>] [--idle MS] [--timeout MS]
-    raise a request linked to this agent session, then wait like \`wait\` and print the batch
-  report [--status running|needs_you|idle|done] [--title T] [--brief B] [--pr <url>] [--follow-up <text>]...
-    the session comes from CLAUDE_CODE_SESSION_ID, or --session <id>; in a cloud
-    session, CLAUDE_CODE_REMOTE_SESSION_ID finds the one its hooks reported
-  hook <SessionStart|UserPromptSubmit|Notification|Stop|SessionEnd>
-    reads Claude Code hook JSON on stdin and reports it; never fails, prints nothing
-  hooks install|uninstall [--settings <path>]   add or remove those hooks (default ~/.claude/settings.json)
-  hooks install|uninstall --project   the same in this repo's .claude/settings.json, for cloud
-    sessions; each runs only when KEEP_IT_MOVING_TOKEN is set. Commits nothing
 Cloud sessions (claude.ai/code):
+  key create <name> | list | revoke <id|name>   agent keys for cloud environments (KEEP_IT_MOVING_TOKEN)
   cloud setup [--project <key>] [--key-name <name>] [--json]
     creates the project's agent key and prints its cloud environment's network
     access, environment variables and setup script, ready to paste

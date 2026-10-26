@@ -11,7 +11,6 @@ import {
 } from "vitest";
 import { GOOGLE_JWKS, GOOGLE_TOKEN } from "../src/worker/auth.js";
 import type { Env } from "../src/worker/env.js";
-import { isOwnerHub } from "../src/worker/hubs.js";
 import worker from "../src/worker/index.js";
 import { hubHarness } from "./helpers/harness.js";
 
@@ -230,14 +229,14 @@ const cookiesOf = (response: Response) =>
 describe("Google sign-in", () => {
   it("sends a signed-out page to sign in, and API calls get a 401", async () => {
     const { call } = setup();
-    const home = await call("/p/abc?tab=prs");
+    const home = await call("/s/abc?view=plan");
     expect(home.status).toBe(302);
     expect(home.headers.get("location")).toBe(
-      `${ORIGIN}/signin?next=%2Fp%2Fabc%3Ftab%3Dprs`,
+      `${ORIGIN}/signin?next=%2Fs%2Fabc%3Fview%3Dplan`,
     );
-    const signin = await call("/signin?next=%2Fp%2Fabc");
+    const signin = await call("/signin?next=%2Fs%2Fabc");
     expect(await signin.text()).toContain(
-      'href="/auth/google/start?next=%2Fp%2Fabc"',
+      'href="/auth/google/start?next=%2Fs%2Fabc"',
     );
     expect((await call("/api/browser/overview")).status).toBe(401);
     expect((await call("/ws/overview")).status).toBe(401);
@@ -337,7 +336,7 @@ describe("Google sign-in", () => {
 
 describe("one workspace per user", () => {
   it("keeps the owner on the original hub and everyone else on their own", async () => {
-    const { env, hubs, call, signIn } = setup();
+    const { hubs, call, signIn } = setup();
     const owner = await signIn("Owner@Example.com");
     const ann = await signIn("ann@example.com");
     await call("/api/browser/overview", { cookie: owner });
@@ -346,10 +345,6 @@ describe("one workspace per user", () => {
       "interviews",
       "user:ann@example.com",
     ]);
-    expect(isOwnerHub(env, env.HUB.idFromName("interviews"))).toBe(true);
-    expect(isOwnerHub(env, env.HUB.idFromName("user:ann@example.com"))).toBe(
-      false,
-    );
   });
 
   it("doesn't show one user's interviews to another", async () => {
@@ -643,14 +638,7 @@ describe("assigning an interview to someone else", () => {
   });
 
   it("doesn't count its open questions as needing the owner", async () => {
-    const { agent, ann, call, session } = await assigned();
-    const inbox = await (await agent("/api/sessions/kim/inbox")).json();
-    expect(
-      inbox.items.filter(
-        (item: { data?: { interviewId?: string } }) =>
-          item.data?.interviewId === session.id,
-      ),
-    ).toEqual([]);
+    const { ann, call } = await assigned();
     const overview = await (
       await call("/api/browser/overview", { cookie: ann })
     ).json();

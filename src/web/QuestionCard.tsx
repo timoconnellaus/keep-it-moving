@@ -65,7 +65,7 @@ function numberHint(question: QuestionView): string {
   return "";
 }
 
-/** One question and its answer widgets; the interview page and the inbox share it. */
+/** One question and its answer widgets. */
 export function QuestionCard({
   token,
   question,
@@ -89,7 +89,7 @@ export function QuestionCard({
   artifacts: ArtifactView[];
   shownArtifactId: string | null;
   onShowArtifact(artifactId: string): void;
-  /** Opens the chat with this question attached; the interview page only. */
+  /** Opens the chat with this question attached; absent once stopped. */
   onAsk?: (() => void) | undefined;
 }) {
   const artifactFor = (id: string | null | undefined) =>

@@ -30,7 +30,6 @@ export const SessionInputSchema = z.object({
       worktree: z.string().trim().min(1).max(300).optional(),
       agent: z.string().trim().min(1).max(100).optional(),
       agentSession: z.string().trim().min(1).max(200).optional(),
-      agentSessionId: z.string().trim().min(1).max(200).optional(),
       location: z.enum(["local", "cloud"]).optional(),
     })
     .default({}),
@@ -219,6 +218,8 @@ export interface SessionSummary {
   lastActivity: string;
   /** The agent's latest chat message, for the reply notification. */
   lastReply: { text: string; at: string } | null;
+  /** The latest chat message is the user's (or assignee's): the agent owes a reply. */
+  awaitingReply: boolean;
 }
 export interface SessionView {
   id: string;
