@@ -10,9 +10,21 @@ import {
   type User,
 } from "./auth.js";
 import { KEY_PREFIX, sha256, VIA_KEY_HEADER } from "../server/features/keys.js";
+import { ASSIGNED_BY_HEADER, RESPONDENT_HEADER } from "../server/hub.js";
 import type { Env } from "./env.js";
 import { hubFor } from "./hubs.js";
-import { page, signInPage } from "./pages.js";
+import { escapeHtml, page, signInPage } from "./pages.js";
+import {
+  forgetShare,
+  interviewToken,
+  maskEmail,
+  profileName,
+  recordAssignment,
+  shareFor,
+  sharedWith,
+  type Assignment,
+  type Share,
+} from "./shares.js";
 
 export { InterviewHub } from "./hub.js";
 
@@ -24,6 +36,56 @@ const CLI_PACKAGE_PATH = "/api/sessions/kim/cli.tgz";
 
 /** Which user an agent key belongs to, by the key's hash. */
 const keyOwner = (hash: string) => `agent-key:${hash}`;
+
+const AGENT_ASSIGN = /^\/api\/sessions\/[^/]+\/assign$/;
+const AGENT_DELETE = /^\/api\/sessions\/(?!kim(?:\/|$))[^/]+$/;
+const BROWSER_ASSIGN = /^\/api\/browser\/[^/]+\/assign$/;
+
+/** Headers only the Worker may set; whatever a client sent is dropped. */
+function forwardable(request: Request): Request {
+  const forwarded = new Request(request);
+  for (const header of [VIA_KEY_HEADER, RESPONDENT_HEADER, ASSIGNED_BY_HEADER])
+    forwarded.headers.delete(header);
+  return forwarded;
+}
+
+/** An owner can't assign an interview to themselves. */
+async function assignsToSelf(request: Request, email: string) {
+  const input = (await request
+    .clone()
+    .json()
+    .catch(() => ({}))) as { email?: unknown };
+  return (
+    typeof input.email === "string" &&
+    input.email.trim().toLowerCase() === email.toLowerCase()
+  );
+}
+
+/**
+ * Sends an assign to the owner's hub, naming who assigns it, and keeps the
+ * share directory in step with the reply.
+ */
+async function assign(
+  env: Env,
+  owner: string,
+  name: string,
+  forwarded: Request,
+): Promise<Response> {
+  if (await assignsToSelf(forwarded, owner))
+    return Response.json(
+      { error: "That's your own email; assign it to someone else" },
+      { status: 400 },
+    );
+  forwarded.headers.set(ASSIGNED_BY_HEADER, encodeURIComponent(name));
+  const response = await hubFor(env, owner).fetch(forwarded);
+  if (response.ok)
+    await recordAssignment(
+      env,
+      owner,
+      (await response.clone().json()) as Assignment,
+    );
+  return response;
+}
 
 /** The agent API: OAuth access tokens issued to the CLI, each routed to its user's workspace. */
 const agentApi: ExportedHandler<Env> = {
@@ -39,10 +101,23 @@ const agentApi: ExportedHandler<Env> = {
     if (path === CLI_PACKAGE_PATH)
       return env.ASSETS.fetch(new Request(new URL("/cli.tgz", request.url)));
     // Tell the hub which requests a key made; a client can't claim either way.
-    const forwarded = new Request(request);
-    forwarded.headers.delete(VIA_KEY_HEADER);
+    const forwarded = forwardable(request);
     if (props.via === "key") forwarded.headers.set(VIA_KEY_HEADER, "1");
+    if (request.method === "POST" && AGENT_ASSIGN.test(path))
+      return assign(
+        env,
+        email,
+        (await profileName(env, email)) ?? email,
+        forwarded,
+      );
     const response = await hubFor(env, email).fetch(forwarded);
+    if (request.method === "DELETE" && AGENT_DELETE.test(path) && response.ok) {
+      const { token, assignee } = (await response.clone().json()) as {
+        token?: string;
+        assignee?: string | null;
+      };
+      if (token && assignee) await forgetShare(env, token, assignee);
+    }
     // A new key remembers whose it is, so it reaches the same workspace.
     if (
       request.method === "POST" &&
@@ -91,11 +166,25 @@ const site: ExportedHandler<Env> = {
     }
     if (url.pathname === "/authorize") return authorize(request, env, user);
     if (url.pathname === "/api/browser/me") return Response.json(user);
+    if (url.pathname === "/api/browser/shared")
+      return Response.json({ interviews: await sharedWith(env, user.email) });
+    // An interview someone else assigned to this user lives in their hub.
+    const token = interviewToken(url.pathname);
+    const share = token ? await shareFor(env, token) : null;
+    if (share && share.owner !== user.email.toLowerCase())
+      return respond(request, env, user, share);
+    if (request.method === "POST" && BROWSER_ASSIGN.test(url.pathname))
+      return assign(
+        env,
+        user.email,
+        user.name ?? user.email,
+        forwardable(request),
+      );
     if (
       url.pathname.startsWith("/api/browser/") ||
       url.pathname.startsWith("/ws/")
     )
-      return hubFor(env, user.email).fetch(request);
+      return hubFor(env, user.email).fetch(forwardable(request));
     // The inbox, each project page and each interview are the same app.
     if (
       url.pathname === "/" ||
@@ -106,6 +195,27 @@ const site: ExportedHandler<Env> = {
     return env.ASSETS.fetch(request);
   },
 };
+
+/**
+ * A request for an interview assigned to someone. Its assignee reaches it in
+ * the owner's hub, marked as the respondent so the hub lets them see that
+ * one interview and nothing else; anyone else is told whose it is.
+ */
+function respond(request: Request, env: Env, user: User, share: Share) {
+  const url = new URL(request.url);
+  const isPage = url.pathname.startsWith("/s/");
+  if (share.assignee !== user.email.toLowerCase())
+    return isPage
+      ? page(
+          403,
+          `This interview was shared with ${escapeHtml(maskEmail(share.assignee))}, and you're signed in as ${escapeHtml(user.email)}. <a href="${signInUrl(url, true)}">Switch account</a>.`,
+        )
+      : Response.json({ error: "Not shared with you" }, { status: 403 });
+  if (isPage) return env.ASSETS.fetch(new Request(new URL("/index.html", url)));
+  const forwarded = forwardable(request);
+  forwarded.headers.set(RESPONDENT_HEADER, user.email.toLowerCase());
+  return hubFor(env, share.owner).fetch(forwarded);
+}
 
 /**
  * Google has already signed the user in, so authorization completes without

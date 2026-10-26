@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { defaultAnswerText } from "../shared/answers.js";
 import type { SessionView } from "../shared/schema.js";
 import { shownArtifact } from "../shared/workspace.js";
+import { Assign } from "./Assign.js";
 import { Chat, useChat } from "./Chat.js";
 import { useOverview } from "./overview.js";
 import { QuestionCard } from "./QuestionCard.js";
@@ -18,7 +19,10 @@ export function App() {
   const [acceptingAll, setAcceptingAll] = useState(false);
   const [stageExpanded, setStageExpanded] = useState(false);
   const [overviewVersion, setOverviewVersion] = useState(0);
-  const sessions = useOverview(overviewVersion);
+  // An assignee sees this interview only, never the owner's list.
+  const sessions = useOverview(
+    session && !session.respondent ? overviewVersion : null,
+  );
   const questionsRef = useRef<HTMLElement>(null);
   const chat = useChat();
   const showArtifact = useCallback(async (artifactId: string) => {
@@ -196,7 +200,14 @@ export function App() {
   return (
     <main className={`shell ${workspaceOpen ? "with-workspace" : ""}`}>
       <header className="topbar">
-        <Switcher session={session} sessions={sessions} />
+        {session.respondent ? (
+          <div className="respondent-title">
+            <h1>{session.title}</h1>
+            {session.assignedBy && <span>From {session.assignedBy}</span>}
+          </div>
+        ) : (
+          <Switcher session={session} sessions={sessions} />
+        )}
         <QuestionProgress questions={session.questions} />
         {active && acceptable.length > 0 && (
           <button
@@ -226,6 +237,9 @@ export function App() {
             Workspace
             <span className="count">{session.artifacts.length}</span>
           </button>
+        )}
+        {!session.respondent && (
+          <Assign token={token} session={session} onChanged={refresh} />
         )}
       </header>
       {error && (

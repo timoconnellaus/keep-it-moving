@@ -4,6 +4,7 @@ import { inboxDetails } from "../registry.js";
 import { Icon, type IconName } from "./icons.js";
 import { age } from "./live.js";
 import type { RailProject } from "./ProjectRail.js";
+import { SharedWithYou } from "./Shared.js";
 
 const KINDS: Record<InboxKind, { label: string; icon: IconName }> = {
   request: { label: "Request", icon: "alert" },
@@ -109,6 +110,7 @@ export function Inbox({
             </button>
           );
         })}
+        <SharedWithYou />
       </section>
       <section
         ref={detail}

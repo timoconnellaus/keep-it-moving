@@ -2999,3 +2999,102 @@ a.kim-backlog-milestone-name:hover {
     max-height: calc(100dvh - 80px);
   }
 }
+
+/* Assigning an interview to someone else, and what they see */
+.chat-by {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  opacity: 0.8;
+}
+.respondent-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.respondent-title h1 {
+  margin: 0;
+  font-size: 18px;
+}
+.respondent-title span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.assign {
+  position: relative;
+}
+.assign-button {
+  max-width: 220px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  padding: 6px 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.assign-button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.assign-menu {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(320px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(24, 32, 28, 0.16);
+  font-size: 13px;
+}
+.assign-menu form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.assign-menu label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+}
+.assign-menu input {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #18201c;
+}
+.assign-menu button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.assign-menu p {
+  margin: 0;
+  color: var(--muted);
+}
+.assign-actions {
+  display: flex;
+  gap: 8px;
+}
+.assign-menu .assign-error {
+  color: #b42318;
+}
+.kim-shared {
+  margin-top: 16px;
+}
+.kim-shared .kim-shell-inbox-row {
+  color: inherit;
+  text-decoration: none;
+}

@@ -61,6 +61,7 @@ afterEach(() => {
 /** KV in memory, enough for sessions, key owners and the OAuth provider. */
 function memoryKv() {
   const data = new Map<string, string>();
+  const metadata = new Map<string, unknown>();
   return {
     data,
     async get(key: string, type?: string | { type?: string }) {
@@ -68,17 +69,19 @@ function memoryKv() {
       const kind = typeof type === "string" ? type : type?.type;
       return value !== null && kind === "json" ? JSON.parse(value) : value;
     },
-    async put(key: string, value: string) {
+    async put(key: string, value: string, options?: { metadata?: unknown }) {
       data.set(key, value);
+      metadata.set(key, options?.metadata);
     },
     async delete(key: string) {
       data.delete(key);
+      metadata.delete(key);
     },
     async list({ prefix = "" }: { prefix?: string } = {}) {
       return {
         keys: [...data.keys()]
           .filter((name) => name.startsWith(prefix))
-          .map((name) => ({ name })),
+          .map((name) => ({ name, metadata: metadata.get(name) })),
         list_complete: true,
       };
     },
@@ -462,5 +465,207 @@ describe("agent keys", () => {
     expect(
       (await s.call("/api/sessions", s.bearer("kim_not-a-real-key"))).status,
     ).toBe(401);
+  });
+});
+
+describe("assigning an interview to someone else", () => {
+  /** Ann's interview with two questions, assigned to Bob. */
+  async function assigned() {
+    const s = setup();
+    const ann = await s.signIn("ann@example.com");
+    const bob = await s.signIn("bob@example.com");
+    const annToken = await s.cliToken(ann);
+    const agent = (path: string, init: RequestInit = {}) =>
+      s.call(path, {
+        ...init,
+        headers: {
+          authorization: `Bearer ${annToken}`,
+          "content-type": "application/json",
+        },
+      });
+    const session = (await (
+      await agent("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ title: "Venue survey" }),
+      })
+    ).json()) as { id: string; token: string };
+    const { questions } = (await (
+      await agent(`/api/sessions/${session.id}/questions`, {
+        method: "POST",
+        body: JSON.stringify([{ prompt: "Which room?" }, { prompt: "When?" }]),
+      })
+    ).json()) as { questions: Array<{ id: string }> };
+    const assignment = await agent(`/api/sessions/${session.id}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ email: "Bob@Example.com" }),
+    });
+    expect(assignment.status).toBe(200);
+    expect(await assignment.json()).toMatchObject({
+      assignee: "bob@example.com",
+      url: expect.stringMatching(new RegExp(`/s/${session.token}$`)),
+    });
+    const asBob = (path: string, init: RequestInit = {}) =>
+      s.call(path, {
+        ...init,
+        cookie: bob,
+        headers: { "content-type": "application/json", ...init.headers },
+      });
+    return { ...s, ann, bob, agent, asBob, session, questions };
+  }
+
+  it("lets the assignee see, answer and chat on it, and nothing else", async () => {
+    const { asBob, session, questions } = await assigned();
+    const base = `/api/browser/${session.token}`;
+    expect((await asBob(`/s/${session.token}`)).status).toBe(200);
+    const view = await (await asBob(`${base}/session`)).json();
+    expect(view).toMatchObject({
+      title: "Venue survey",
+      respondent: true,
+      project: null,
+      assignee: "bob@example.com",
+      assignedBy: "ann@example.com",
+    });
+    expect(
+      (
+        await asBob(`${base}/questions/${questions[0]!.id}/answer`, {
+          method: "POST",
+          body: JSON.stringify({ answer: "The big one" }),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await asBob(`${base}/chat`, {
+          method: "POST",
+          body: JSON.stringify({ text: "Is parking included?" }),
+        })
+      ).status,
+    ).toBe(200);
+    // Owner-only routes with the token, even through the Worker, are refused.
+    expect(
+      (
+        await asBob(`${base}/assign`, {
+          method: "POST",
+          body: JSON.stringify({ email: "bob2@example.com" }),
+        })
+      ).status,
+    ).toBe(403);
+  });
+
+  it("brings the assignee's answers back to the owner's agent, attributed", async () => {
+    const { asBob, agent, session, questions } = await assigned();
+    await asBob(
+      `/api/browser/${session.token}/questions/${questions[0]!.id}/answer`,
+      { method: "POST", body: JSON.stringify({ answer: "The big one" }) },
+    );
+    const batch = await (
+      await agent(`/api/sessions/${session.id}/wait?idle=0&timeout=5000`)
+    ).json();
+    expect(batch.answers).toEqual([
+      expect.objectContaining({
+        answer: "The big one",
+        answeredBy: "bob@example.com",
+      }),
+    ]);
+  });
+
+  it("refuses anyone else, naming whose it is", async () => {
+    const { call, signIn, session } = await assigned();
+    const carol = await signIn("carol@example.com");
+    const page = await call(`/s/${session.token}`, { cookie: carol });
+    expect(page.status).toBe(403);
+    const text = await page.text();
+    expect(text).toContain("b•••@example.com");
+    expect(text).toContain("Switch account");
+    expect(text).not.toContain("bob@example.com");
+    // A forged respondent header changes nothing.
+    const forged = await call(`/api/browser/${session.token}/session`, {
+      cookie: carol,
+      headers: { "x-kim-respondent": "bob@example.com" },
+    });
+    expect(forged.status).toBe(403);
+  });
+
+  it("keeps the assignee out of the rest of the owner's workspace", async () => {
+    const { asBob, session } = await assigned();
+    // Bob's own list is his own (empty) workspace, header or not.
+    for (const headers of [{}, { "x-kim-respondent": "bob@example.com" }]) {
+      const overview = await (
+        await asBob("/api/browser/overview", { headers })
+      ).json();
+      expect(overview.sessions).toEqual([]);
+    }
+    // A signed-out visitor goes through sign-in and back to the interview.
+    const { call } = setup();
+    const out = await call(`/s/${session.token}`);
+    expect(out.headers.get("location")).toBe(
+      `${ORIGIN}/signin?next=${encodeURIComponent(`/s/${session.token}`)}`,
+    );
+  });
+
+  it("locks the assignee out on unassign, even before the directory catches up", async () => {
+    const { agent, asBob, kv, session } = await assigned();
+    const share = kv.data.get(`share:${session.token}`)!;
+    await agent(`/api/sessions/${session.id}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ email: null }),
+    });
+    expect(kv.data.has(`share:${session.token}`)).toBe(false);
+    expect(kv.data.has(`assigned:bob@example.com:${session.token}`)).toBe(
+      false,
+    );
+    expect((await asBob(`/api/browser/${session.token}/session`)).status).toBe(
+      404,
+    );
+    // A stale directory entry still reaches the owner's hub, which says no.
+    kv.data.set(`share:${session.token}`, share);
+    expect((await asBob(`/api/browser/${session.token}/session`)).status).toBe(
+      403,
+    );
+  });
+
+  it("lists it under Shared with you, and forgets it when deleted", async () => {
+    const { agent, asBob, kv, session } = await assigned();
+    expect(await (await asBob("/api/browser/shared")).json()).toEqual({
+      interviews: [
+        {
+          token: session.token,
+          title: "Venue survey",
+          from: "ann@example.com",
+        },
+      ],
+    });
+    await agent(`/api/sessions/${session.id}`, { method: "DELETE" });
+    expect(kv.data.has(`share:${session.token}`)).toBe(false);
+    expect(await (await asBob("/api/browser/shared")).json()).toEqual({
+      interviews: [],
+    });
+  });
+
+  it("doesn't count its open questions as needing the owner", async () => {
+    const { agent, ann, call, session } = await assigned();
+    const inbox = await (await agent("/api/sessions/kim/inbox")).json();
+    expect(
+      inbox.items.filter(
+        (item: { data?: { interviewId?: string } }) =>
+          item.data?.interviewId === session.id,
+      ),
+    ).toEqual([]);
+    const overview = await (
+      await call("/api/browser/overview", { cookie: ann })
+    ).json();
+    expect(overview.sessions[0]).toMatchObject({
+      open: 0,
+      assignee: "bob@example.com",
+    });
+  });
+
+  it("won't assign an interview to its owner", async () => {
+    const { agent, session } = await assigned();
+    const response = await agent(`/api/sessions/${session.id}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ email: "ann@example.com" }),
+    });
+    expect(response.status).toBe(400);
   });
 });

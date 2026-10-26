@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ProjectView, SessionSummary } from "../shared/schema.js";
 
-/** Every interview, refetched whenever `version` changes (the server pings on changes). */
-export function useOverview(version: number): SessionSummary[] | null {
+/**
+ * Every interview, refetched whenever `version` changes (the server pings on
+ * changes); null skips it, for an assignee, who doesn't see the list.
+ */
+export function useOverview(version: number | null): SessionSummary[] | null {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const load = useCallback(async () => {
     const response = await fetch("/api/browser/overview").catch(() => null);
@@ -12,7 +15,7 @@ export function useOverview(version: number): SessionSummary[] | null {
     );
   }, []);
   useEffect(() => {
-    void load();
+    if (version !== null) void load();
   }, [load, version]);
   return sessions;
 }
@@ -54,6 +57,11 @@ export function groupByProject(sessions: SessionSummary[]): ProjectGroup[] {
 export function sessionState(session: SessionSummary) {
   if (session.status === "stopped")
     return { label: "Finished", className: "state-done" };
+  if (session.assignee && session.answered < session.total)
+    return {
+      label: `Assigned to ${session.assignee} · ${session.answered} of ${session.total} answered`,
+      className: "state-agent",
+    };
   if (session.open > 0) return { label: "Needs you", className: "state-you" };
   return { label: "All answered", className: "state-agent" };
 }

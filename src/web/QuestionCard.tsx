@@ -237,6 +237,9 @@ export function QuestionCard({
           {!question.answer.skipped && question.answer.text === defaultText && (
             <span className="tag">default</span>
           )}
+          {question.answer.answeredBy && (
+            <span className="tag">by {question.answer.answeredBy}</span>
+          )}
         </div>
       )}
       {open && (

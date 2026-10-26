@@ -42,6 +42,7 @@ const state: SessionView = {
         revision: 1,
         delivered: true,
         updatedAt: "",
+        answeredBy: null,
       },
     },
   ],
@@ -63,6 +64,8 @@ const state: SessionView = {
     location: "local",
   },
   chat: [],
+  assignee: null,
+  assignedBy: null,
 };
 
 const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
@@ -77,6 +80,7 @@ const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
   open: 0,
   lastActivity: new Date().toISOString(),
   lastReply: null,
+  assignee: null,
   ...overrides,
 });
 let overview: SessionSummary[] = [summary({})];
@@ -120,6 +124,63 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   FakeSocket.instances.length = 0;
+});
+
+describe("assigning an interview", () => {
+  it("shows the assignee the interview and who it's from, not the owner's list", async () => {
+    const respondent: SessionView = {
+      ...state,
+      project: null,
+      assignee: "bob@example.com",
+      assignedBy: "Ann",
+      respondent: true,
+    };
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => structuredClone(respondent),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    expect(await screen.findByText("From Ann")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Switch interview|Assign/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).endsWith("/overview")),
+    ).toBe(false);
+  });
+
+  it("lets the owner assign it and shows who answered", async () => {
+    const assigned: SessionView = {
+      ...state,
+      assignee: "bob@example.com",
+      questions: [
+        {
+          ...state.questions[0]!,
+          answer: {
+            ...state.questions[0]!.answer!,
+            answeredBy: "bob@example.com",
+          },
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/overview")
+          ? { ok: true, json: async () => ({ sessions: [] }) }
+          : { ok: true, json: async () => structuredClone(assigned) },
+      ),
+    );
+    render(<App />);
+    expect(await screen.findByText("by bob@example.com")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Assigned to bob@example.com" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Stop sharing" }),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("questionnaire UI seam", () => {

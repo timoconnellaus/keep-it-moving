@@ -66,3 +66,6 @@ Sign in with Google</a>`),
       },
     },
   );
+
+export const escapeHtml = (text: string) =>
+  text.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);

@@ -12,9 +12,22 @@ import { VIA_KEY_HEADER } from "./features/keys.js";
 import type { Sql } from "./sql.js";
 import type { InterviewStore } from "./store.js";
 
+/**
+ * The header the Worker sets, to the signed-in email, on a request from an
+ * interview's assignee rather than the workspace's owner. Like the agent key
+ * header, it is stripped from what clients send.
+ */
+export const RESPONDENT_HEADER = "x-kim-respondent";
+/** Who is assigning an interview, by name, as the assignee will see it. */
+export const ASSIGNED_BY_HEADER = "x-kim-assigned-by";
+
 /** Where browser state updates go: hibernating WebSockets in production. */
 export interface BrowserSockets {
   send(sessionId: string, data: string): void;
+  /** The assignee's pages, which see less of the workspace than the owner's. */
+  sendRespondent?(sessionId: string, data: string): void;
+  /** Unassigning shuts the old assignee's pages out at once. */
+  closeRespondents?(sessionId: string): void;
   /** Every open page, whichever interview it shows. */
   sendAll(data: string): void;
 }
@@ -89,8 +102,13 @@ export function createHub(options: HubOptions) {
     ...forBrowser(store.getSession(sessionId, baseUrl)),
     agentWatching: watching(sessionId),
   });
-  const stateMessage = (sessionId: string) =>
-    JSON.stringify({ type: "state", session: browserView(sessionId) });
+  const stateMessage = (sessionId: string, respondent = false) =>
+    JSON.stringify({
+      type: "state",
+      session: respondent
+        ? forRespondent(browserView(sessionId))
+        : browserView(sessionId),
+    });
   const broadcast = (sessionId: string) => {
     let body;
     try {
@@ -99,7 +117,12 @@ export function createHub(options: HubOptions) {
       return;
     }
     sockets.send(sessionId, body);
+    if (sockets.sendRespondent && store.getSession(sessionId, "").assignee)
+      sockets.sendRespondent(sessionId, stateMessage(sessionId, true));
   };
+  /** Whether this email may use the interview with this token as its assignee. */
+  const respondentMayUse = (token: string, email: string) =>
+    Boolean(email) && store.assigneeForToken(token) === email.toLowerCase();
   const later = (fn: () => void) => setTimeout(fn, 0);
   // Pages refetch the interview list when told, so the switcher's
   // "waiting on you" dot stays current; a burst of events sends one ping.
@@ -127,6 +150,7 @@ export function createHub(options: HubOptions) {
   };
   // The agent's chat replies notify too, once per burst.
   const replied = new Set<string>();
+  const answeredBy = new Set<string>();
   const checkWaiting = (sessionId: string) => {
     const count = added.get(sessionId) ?? 0;
     added.delete(sessionId);
@@ -230,6 +254,18 @@ export function createHub(options: HubOptions) {
         setTimeout(() => checkWaiting(event.sessionId), PUSH_SETTLE_MS);
       added.set(event.sessionId, (added.get(event.sessionId) ?? 0) + 1);
     }
+    // An assignee's answers come back to the owner: one push per burst.
+    if (
+      event.type.startsWith("answer.") &&
+      event.payload.by &&
+      !answeredBy.has(event.sessionId)
+    ) {
+      answeredBy.add(event.sessionId);
+      setTimeout(() => {
+        answeredBy.delete(event.sessionId);
+        void notify();
+      }, PUSH_SETTLE_MS);
+    }
     if (event.type === "chat.reply" && !replied.has(event.sessionId)) {
       replied.add(event.sessionId);
       setTimeout(() => {
@@ -255,8 +291,41 @@ export function createHub(options: HubOptions) {
     if (!id) throw new Error("Session not found");
     return id;
   };
+  /** Assigns or clears; the Worker updates its share directory from the reply. */
+  const assign = (c: Context, id: string, input: Record<string, unknown>) => {
+    const by = c.req.header(ASSIGNED_BY_HEADER);
+    const { assignee, previous } = store.assignSession(
+      id,
+      input.email ? String(input.email) : null,
+      by ? decodeURIComponent(by) : null,
+    );
+    if (previous && previous !== assignee) sockets.closeRespondents?.(id);
+    const session = store.getSession(id, baseUrl);
+    return {
+      id,
+      token: session.token,
+      title: session.title,
+      url: session.url,
+      assignee,
+      previous,
+      assignedBy: session.assignedBy,
+    };
+  };
+  /** The assignee's email when an assignee made this request. */
+  const respondentOf = (c: Context) => c.req.header(RESPONDENT_HEADER) ?? null;
 
   app.get("/health", (c) => c.json({ ok: true }));
+
+  // An assignee reaches one interview, by its token, and nothing else in
+  // the workspace: not the list, the inbox, projects, keys or devices.
+  app.use("*", async (c, next) => {
+    const respondent = c.req.header(RESPONDENT_HEADER);
+    if (respondent === undefined) return next();
+    const token = respondentToken(c.req.method, c.req.path);
+    if (!token || !respondentMayUse(token, respondent))
+      return c.json({ error: "Not shared with you" }, 403);
+    await next();
+  });
 
   // Browser routes ride on the session cookie, so refuse writes another site
   // could forge with it. Agent routes use bearer tokens and need no check.
@@ -343,9 +412,14 @@ export function createHub(options: HubOptions) {
     return c.json({ ok: true });
   });
   app.delete("/api/sessions/:id", (c) => {
+    const { token, assignee } = store.getSession(c.req.param("id"), baseUrl);
     store.deleteSession(c.req.param("id"));
-    return c.json({ ok: true });
+    // The Worker forgets the share when there was one.
+    return c.json({ ok: true, token, assignee });
   });
+  app.post("/api/sessions/:id/assign", async (c) =>
+    c.json(assign(c, c.req.param("id"), await body(c))),
+  );
 
   app.post("/api/sessions/:id/questions", async (c) => {
     const input = (await c.req.json()) as { questions?: unknown[] } | unknown[];
@@ -565,8 +639,12 @@ export function createHub(options: HubOptions) {
     return c.json({ ok: true, devices: store.pushSubscriptions().length });
   });
   // The rest are addressed by the session's secret token.
-  app.get("/api/browser/:token/session", (c) =>
-    c.json(browserView(tokenSession(c.req.param("token")))),
+  app.get("/api/browser/:token/session", (c) => {
+    const view = browserView(tokenSession(c.req.param("token")));
+    return c.json(respondentOf(c) ? forRespondent(view) : view);
+  });
+  app.post("/api/browser/:token/assign", async (c) =>
+    c.json(assign(c, tokenSession(c.req.param("token")), await body(c))),
   );
   app.get("/api/browser/:token/artifacts/:artifactId/view", (c) => {
     const { format, content } = store.artifactContent(
@@ -582,6 +660,7 @@ export function createHub(options: HubOptions) {
         tokenSession(c.req.param("token")),
         c.req.param("questionId"),
         await c.req.json(),
+        respondentOf(c),
       ),
     ),
   );
@@ -591,6 +670,7 @@ export function createHub(options: HubOptions) {
         tokenSession(c.req.param("token")),
         "user",
         await body(c),
+        respondentOf(c),
       ),
     ),
   );
@@ -612,7 +692,15 @@ export function createHub(options: HubOptions) {
     );
     return c.json({ ok: true });
   });
-  return { app, broadcast, stateMessage, tokenSession, tick, inbox };
+  return {
+    app,
+    broadcast,
+    stateMessage,
+    tokenSession,
+    respondentMayUse,
+    tick,
+    inbox,
+  };
 }
 
 const HEARTBEAT_MS = 25_000;
@@ -656,6 +744,43 @@ export function forAgent(session: SessionView): SessionView {
     ...session,
     artifacts: session.artifacts.map(withoutContent),
   };
+}
+
+/**
+ * What an assignee sees: the interview, but not where it runs in the
+ * owner's workspace.
+ */
+export function forRespondent(session: SessionView): SessionView {
+  return {
+    ...session,
+    project: null,
+    origin: {
+      branch: null,
+      worktree: null,
+      agent: null,
+      agentSession: null,
+      location: null,
+    },
+    respondent: true,
+  };
+}
+
+/** The routes an assignee's interview page uses, each scoped to its token. */
+const RESPONDENT_ALLOWED: Array<[method: string, path: RegExp]> = [
+  ["GET", /^\/api\/browser\/([^/]+)\/(session|artifacts\/[^/]+\/view)$/],
+  [
+    "POST",
+    /^\/api\/browser\/([^/]+)\/(questions\/[^/]+\/answer|chat|stage|stage\/visibility)$/,
+  ],
+];
+
+/** The token a respondent's request is for, or null when it may not make it. */
+function respondentToken(method: string, path: string): string | null {
+  for (const [allowed, pattern] of RESPONDENT_ALLOWED) {
+    const match = method.toUpperCase() === allowed && pattern.exec(path);
+    if (match) return match[1]!;
+  }
+  return null;
 }
 
 /**
@@ -800,6 +925,7 @@ function batchSummary(session: SessionView, events: InterviewEvent[]) {
         return {
           messageId: message.id,
           text: message.text,
+          ...(message.authorEmail ? { from: message.authorEmail } : {}),
           about: about
             ? {
                 questionId: about.question.id,
@@ -821,6 +947,9 @@ function batchSummary(session: SessionView, events: InterviewEvent[]) {
         acceptedDefault:
           !question.answer!.skipped &&
           question.answer!.text === defaultAnswerText(question),
+        ...(question.answer!.answeredBy
+          ? { answeredBy: question.answer!.answeredBy }
+          : {}),
       })),
     openQuestions: session.questions.filter((question) => !question.answer)
       .length,
@@ -835,7 +964,7 @@ const ID = "[^/]+";
 /**
  * The routes an agent key may call; anything else, including routes added
  * later, is refused. A key reports, raises and edits requests, waits on
- * them, replies in their chat, beats, syncs and reads the backlog, and reads
+ * them, replies in their chat, assigns them to someone, beats, syncs and reads the backlog, and reads
  * a project's context and writes its summary. Answering, deleting
  * interviews, reconfiguring projects and backlogs, and keys stay with a
  * signed-in CLI.
@@ -850,7 +979,7 @@ const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
   [
     "POST",
     new RegExp(
-      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat)$`,
+      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat|assign)$`,
     ),
   ],
   ["PATCH", new RegExp(`^/api/sessions/${ID}/(questions|artifacts)/${ID}$`)],

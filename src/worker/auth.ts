@@ -2,6 +2,7 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { sameSite } from "../server/hub.js";
 import type { Env } from "./env.js";
 import { page } from "./pages.js";
+import { saveProfile } from "./shares.js";
 
 /** Who is signed in to the browser, as Google told us at sign-in. */
 export interface User {
@@ -121,6 +122,7 @@ export async function googleCallback(request: Request, env: Env) {
   if (typeof claims.picture === "string") user.picture = claims.picture;
   const id = random();
   await saveSession(env, id, user);
+  if (user.name) await saveProfile(env, user.email, user.name);
   return redirect(flow.next, [
     setCookie(SESSION_COOKIE, id, SESSION_TTL),
     setCookie(FLOW_COOKIE, "", 0),

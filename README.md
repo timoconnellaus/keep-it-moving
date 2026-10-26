@@ -33,6 +33,12 @@ The browser signs in with Google; anyone with a Google account can, and each use
 
 `OWNER_EMAIL` in `wrangler.jsonc` names the deployment's owner. Their workspace is the one from before there were other users, and only theirs gets the `GITHUB_TOKEN` secret, so other users go without the PR, CI and GitHub backlog features.
 
+### Assigning an interview to someone else
+
+An interview can be assigned to someone else's email, for them to answer: `kim session create … --assign <email>`, `kim session assign <session> <email>` (or `--clear`), or **Assign** on the interview page. Send them the interview's link yourself; nothing is emailed. They sign in with Google as that email and see only that interview (its questions, the workspace items on stage, and the chat) under "From <you>"; any other account gets a page naming the masked address it was shared with and a **Switch account** link. Their answers and messages carry their email (`answeredBy` and `from` in `wait` batches, "by …" on the page), wake the waiting agent as yours do, and push to your devices once per burst. While it's assigned, its open questions wait on them, not you: the switcher says "Assigned to … · 3 of 7 answered" and the inbox leaves it out. Their own inbox lists it under **Shared with you**.
+
+The interview stays in the owner's workspace. The Worker keeps a directory in `OAUTH_KV` (`share:<token>` → owner and assignee, `assigned:<email>:<token>` for the list) to route the assignee there, marked with a header only the Worker sets; the owner's hub then allows that header on the one interview's page routes only, and only while the interview is still assigned to that email, so clearing the assignment locks them out at once, before KV catches up. Deleting the interview removes the entries.
+
 ## Desktop app
 
 `desktop/` is a [Tauri](https://tauri.app) shell around the hosted site, for macOS. It needs Rust (`rustup`) and Xcode's command-line tools.

@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { createHub, sameSite } from "../server/hub.js";
+import { createHub, RESPONDENT_HEADER, sameSite } from "../server/hub.js";
 import { durableObjectSql } from "../server/sql.js";
 import { InterviewStore } from "../server/store.js";
 import type { Env } from "./env.js";
@@ -9,7 +9,7 @@ import { webPush } from "./push.js";
 /**
  * One user's workspace, in one SQLite-backed Durable Object: their
  * interviews and everything else. Browser sockets hibernate, tagged with
- * their session id.
+ * their session id, or `respondent:<id>` for an assignee's page.
  */
 export class InterviewHub extends DurableObject<Env> {
   private readonly hub: ReturnType<typeof createHub>;
@@ -35,13 +35,33 @@ export class InterviewHub extends DurableObject<Env> {
               /* closing */
             }
         },
-        sendAll: (data) => {
-          for (const socket of ctx.getWebSockets())
+        sendRespondent: (sessionId, data) => {
+          for (const socket of ctx.getWebSockets(respondentTag(sessionId)))
             try {
               socket.send(data);
             } catch {
               /* closing */
             }
+        },
+        closeRespondents: (sessionId) => {
+          for (const socket of ctx.getWebSockets(respondentTag(sessionId)))
+            try {
+              socket.close(1008, "No longer shared with you");
+            } catch {
+              /* closing */
+            }
+        },
+        // List changes are the owner's business only.
+        sendAll: (data) => {
+          for (const socket of ctx.getWebSockets())
+            if (
+              !ctx.getTags(socket).some((tag) => tag.startsWith("respondent:"))
+            )
+              try {
+                socket.send(data);
+              } catch {
+                /* closing */
+              }
         },
       },
     });
@@ -56,6 +76,13 @@ export class InterviewHub extends DurableObject<Env> {
       return new Response("Cross-site socket refused", { status: 403 });
     if (request.headers.get("upgrade") !== "websocket")
       return new Response("Expected a WebSocket", { status: 426 });
+    // An assignee listens to their one interview, never the list.
+    const respondent = request.headers.get(RESPONDENT_HEADER);
+    if (
+      respondent !== null &&
+      !this.hub.respondentMayUse(socket[1]!, respondent)
+    )
+      return new Response("Not shared with you", { status: 403 });
     // The home page listens for list changes only; tokens are never this short.
     let sessionId = "overview";
     if (socket[1] !== "overview")
@@ -68,8 +95,11 @@ export class InterviewHub extends DurableObject<Env> {
       WebSocket,
       WebSocket,
     ];
-    this.ctx.acceptWebSocket(server, [sessionId]);
-    if (sessionId !== "overview") server.send(this.hub.stateMessage(sessionId));
+    this.ctx.acceptWebSocket(server, [
+      respondent === null ? sessionId : respondentTag(sessionId),
+    ]);
+    if (sessionId !== "overview")
+      server.send(this.hub.stateMessage(sessionId, respondent !== null));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -94,3 +124,5 @@ export class InterviewHub extends DurableObject<Env> {
 }
 
 const TICK_MS = 60_000;
+
+const respondentTag = (sessionId: string) => `respondent:${sessionId}`;

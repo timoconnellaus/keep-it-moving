@@ -136,6 +136,8 @@ export interface ChatMessageView {
   /** A user's message reached the agent, as an answer does. */
   delivered: boolean;
   createdAt: string;
+  /** The assignee who wrote it; null for the owner and the agent. */
+  authorEmail: string | null;
 }
 
 export type SessionStatus = "active" | "stopped";
@@ -145,6 +147,8 @@ export interface AnswerView {
   revision: number;
   delivered: boolean;
   updatedAt: string;
+  /** The assignee who answered; null when the owner did. */
+  answeredBy: string | null;
 }
 export interface QuestionView {
   id: string;
@@ -210,6 +214,8 @@ export interface SessionSummary {
   total: number;
   /** Unanswered questions in an active interview: they wait on the user. */
   open: number;
+  /** Who the interview is assigned to answer it; its open questions wait on them. */
+  assignee: string | null;
   lastActivity: string;
   /** The agent's latest chat message, for the reply notification. */
   lastReply: { text: string; at: string } | null;
@@ -239,6 +245,12 @@ export interface SessionView {
   chat: ChatMessageView[];
   /** Browser views only: whether an agent is waiting on this interview now. */
   agentWatching?: boolean;
+  /** Someone else answers this interview: the owner sends them the link. */
+  assignee: string | null;
+  /** The owner's name (or email) as the assignee sees it. */
+  assignedBy: string | null;
+  /** Browser views only: the viewer is the assignee, not the owner. */
+  respondent?: boolean;
 }
 export interface InterviewEvent {
   id: number;
