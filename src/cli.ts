@@ -1336,9 +1336,10 @@ async function authorizedFetch(
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
     });
-  const response = await send(await accessToken(false));
+  const token = await accessToken();
+  const response = await send(token);
   if (response.status !== 401) return response;
-  const refreshed = await accessToken(true);
+  const refreshed = await accessToken(token);
   return refreshed ? send(refreshed) : response;
 }
 
@@ -1387,8 +1388,13 @@ function writeCredentials(credentials: Credentials | null): void {
   else delete all[defaultBase];
   const file = credentialsFile();
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(file, 0o600);
+  // Write then rename, so a concurrent reader never sees half a file.
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(all, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  chmodSync(temporary, 0o600);
+  renameSync(temporary, file);
 }
 
 /**
@@ -1522,27 +1528,73 @@ The key "${keyName}" is shown only here. Revoke it with:
   );
 }
 
-async function accessToken(forceRefresh: boolean): Promise<string | null> {
+/**
+ * The stored access token, refreshed when it is about to expire or the
+ * server refused it (`rejected`). Hooks run several CLI processes at once,
+ * and each refresh rotates the refresh token, so refreshes take a lock and
+ * reuse a token another process has just fetched; otherwise a process could
+ * save a refresh token the server had already replaced, signing the CLI out.
+ */
+async function accessToken(rejected?: string | null): Promise<string | null> {
   const token = setting("TOKEN");
   if (token) return token;
-  const stored = readCredentials()[defaultBase];
-  if (!stored) return null;
-  if (!forceRefresh && stored.expiresAt - Date.now() > 60_000)
-    return stored.accessToken;
-  if (!stored.refreshToken) return null;
-  const response = await fetch(`${defaultBase}/token`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: stored.refreshToken,
-      client_id: stored.clientId,
-    }),
+  const usable = (stored: Credentials | undefined) =>
+    stored &&
+    stored.accessToken !== rejected &&
+    stored.expiresAt - Date.now() > 60_000;
+  const before = readCredentials()[defaultBase];
+  if (!before) return null;
+  if (usable(before)) return before.accessToken;
+  return withRefreshLock(async () => {
+    const stored = readCredentials()[defaultBase];
+    if (!stored) return null;
+    if (usable(stored)) return stored.accessToken;
+    if (!stored.refreshToken) return null;
+    const response = await fetch(`${defaultBase}/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: stored.refreshToken,
+        client_id: stored.clientId,
+      }),
+    });
+    if (!response.ok) return null;
+    const tokens = (await response.json()) as TokenResponse;
+    writeCredentials(credentialsFrom(stored.clientId, tokens, stored));
+    return tokens.access_token;
   });
-  if (!response.ok) return null;
-  const tokens = (await response.json()) as TokenResponse;
-  writeCredentials(credentialsFrom(stored.clientId, tokens, stored));
-  return tokens.access_token;
+}
+
+/** How long a refresh lock is honoured before it counts as left by a dead process. */
+const REFRESH_LOCK_STALE_MS = 30_000;
+
+/** Runs `fn` while holding a lock directory beside the credentials. */
+async function withRefreshLock<T>(fn: () => Promise<T>): Promise<T> {
+  const lock = `${credentialsFile()}.lock`;
+  mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + REFRESH_LOCK_STALE_MS;
+  for (;;) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch {
+      let age = 0;
+      try {
+        age = Date.now() - statSync(lock).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (age > REFRESH_LOCK_STALE_MS || Date.now() > deadline)
+        rmSync(lock, { recursive: true, force: true });
+      else await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
 }
 
 interface TokenResponse {
