@@ -72,27 +72,6 @@ h1 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.progress {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font: 600 11px/1 var(--mono);
-  font-variant-numeric: tabular-nums;
-}
-.progress-bar {
-  width: 56px;
-  height: 4px;
-  border-radius: 2px;
-  background: #dde2de;
-  overflow: hidden;
-}
-.progress-bar > span {
-  display: block;
-  height: 100%;
-  background: var(--received);
-  transition: width 0.2s;
-}
 .accept-all {
   border: 1px solid var(--accent);
   border-radius: 5px;
@@ -138,7 +117,52 @@ h1 {
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 7px;
+  /* clip, not hidden: hidden would make this the more-below pill's sticky container. */
+  overflow: clip;
+}
+/* In the sticky top bar, so it stays in view while the questions scroll. */
+.question-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font: 600 11px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.question-progress-bar {
+  width: 96px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
   overflow: hidden;
+}
+.question-progress-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--received);
+  transition: width 0.2s;
+}
+.more-below {
+  position: sticky;
+  bottom: 12px;
+  display: block;
+  width: fit-content;
+  margin: 6px auto 10px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow:
+    0 0 0 6px rgb(255 255 255 / 0.85),
+    0 4px 14px rgb(24 32 28 / 0.18);
+  cursor: pointer;
+}
+.more-below:hover {
+  background: #26463a;
 }
 .question {
   scroll-margin: 64px;
@@ -752,6 +776,208 @@ h1 {
   margin: 0 0 4px;
   font-size: 15px;
 }
+/* Chat with the agent: one thread per interview, in a drawer */
+.edit.ask {
+  color: var(--muted);
+}
+.edit.ask:hover {
+  color: var(--accent);
+}
+.chat-launcher {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgb(24 32 28 / 18%);
+  cursor: pointer;
+}
+.chat-unread {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f2b84b;
+}
+.chat {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  width: min(400px, 100%);
+  background: #fff;
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgb(24 32 28 / 10%);
+}
+.chat-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.chat-header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.chat-presence {
+  color: var(--muted);
+  font-size: 11px;
+}
+.chat-presence::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #b9c2bd;
+  vertical-align: 1px;
+}
+.chat-presence.on::before {
+  background: var(--received);
+}
+.chat-close {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+.chat-empty,
+.chat-pending,
+.chat-closed {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.chat-closed {
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+.chat-message {
+  max-width: 88%;
+  border-radius: 10px;
+  padding: 8px 11px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.chat-message p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-message.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+}
+.chat-message.agent {
+  align-self: flex-start;
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+}
+.chat-message.agent .markdown > :first-child {
+  margin-top: 0;
+}
+.chat-message.agent .markdown > :last-child {
+  margin-bottom: 0;
+}
+.chat-message.agent .markdown p {
+  margin: 0 0 6px;
+  white-space: normal;
+}
+.chat-message.agent pre {
+  overflow-x: auto;
+}
+.chat-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin-bottom: 5px;
+  border-left: 3px solid currentcolor;
+  padding: 1px 6px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+.chat-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-chip button {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.chat-quote {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.chat-compose {
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--line);
+}
+.chat-compose .chat-chip {
+  color: var(--accent);
+}
+.chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.chat-input-row textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+.chat-input-row button {
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chat-input-row button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 @media (max-width: 960px) {
   .workspace {
     grid-template-columns: minmax(0, 1fr);
@@ -764,6 +990,16 @@ h1 {
 @media (max-width: 620px) {
   .shell {
     width: calc(100% - 16px);
+  }
+  .chat {
+    top: auto;
+    height: 85vh;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 12px 12px 0 0;
+  }
+  .chat-input-row textarea {
+    font-size: 16px;
   }
   .progress-bar {
     display: none;

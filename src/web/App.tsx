@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { defaultAnswerText } from "../shared/answers.js";
 import type { SessionView } from "../shared/schema.js";
 import { shownArtifact } from "../shared/workspace.js";
+import { Chat, useChat } from "./Chat.js";
 import { useOverview } from "./overview.js";
 import { QuestionCard } from "./QuestionCard.js";
+import { MoreBelow, QuestionProgress } from "./QuestionNav.js";
 import { Stage } from "./Stage.js";
 import { Switcher } from "./Switcher.js";
 
@@ -17,6 +19,8 @@ export function App() {
   const [stageExpanded, setStageExpanded] = useState(false);
   const [overviewVersion, setOverviewVersion] = useState(0);
   const sessions = useOverview(overviewVersion);
+  const questionsRef = useRef<HTMLElement>(null);
+  const chat = useChat();
   const showArtifact = useCallback(async (artifactId: string) => {
     await fetch(`/api/browser/${token}/stage`, {
       method: "POST",
@@ -123,8 +127,6 @@ export function App() {
   const unanswered = session.questions.find((question) => !question.answer)?.id;
   const focused = session.focusedQuestionId ?? unanswered;
   const active = session.status === "active";
-  const done = session.questions.filter((question) => question.answer).length;
-  const total = session.questions.length;
   // Questions whose form the user has touched keep their in-progress edits.
   const acceptable = session.questions.filter(
     (question) =>
@@ -157,7 +159,11 @@ export function App() {
   };
   const shown = shownArtifact(session);
   const questions = (
-    <section className="questions" aria-label="Interview questions">
+    <section
+      className="questions"
+      aria-label="Interview questions"
+      ref={questionsRef}
+    >
       {session.questions.length === 0 && (
         <div className="empty">
           <h2>No questions yet</h2>
@@ -180,8 +186,10 @@ export function App() {
             void showArtifact(id);
             if (!session.stageVisible) void setStageVisible(true);
           }}
+          onAsk={active ? () => chat.ask(question.id) : undefined}
         />
       ))}
+      <MoreBelow container={questionsRef} questions={session.questions} />
     </section>
   );
   const workspaceOpen = session.stageVisible && session.artifacts.length > 0;
@@ -189,19 +197,7 @@ export function App() {
     <main className={`shell ${workspaceOpen ? "with-workspace" : ""}`}>
       <header className="topbar">
         <Switcher session={session} sessions={sessions} />
-        {total > 0 && (
-          <span
-            className="progress"
-            aria-label={`${done} of ${total} questions done`}
-          >
-            <span className="progress-count">
-              {done}/{total}
-            </span>
-            <span className="progress-bar" aria-hidden="true">
-              <span style={{ width: `${(done / total) * 100}%` }} />
-            </span>
-          </span>
-        )}
+        <QuestionProgress questions={session.questions} />
         {active && acceptable.length > 0 && (
           <button
             className="accept-all"
@@ -257,6 +253,7 @@ export function App() {
       ) : (
         questions
       )}
+      <Chat token={token} session={session} chat={chat} onSent={refresh} />
     </main>
   );
 }

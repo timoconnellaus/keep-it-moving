@@ -34,6 +34,26 @@ async function waitingNotification() {
     .filter((session) => session.open > 0)
     .sort((a, b) => Date.parse(b.lastActivity) - Date.parse(a.lastActivity));
   const latest = waiting[0];
+  const reply = latestReply(sessions);
+  // An agent's chat reply pushes too; show it when it is the newest thing.
+  if (
+    reply &&
+    (!latest || reply.lastReply.at >= latest.lastActivity) &&
+    !((await newestInboxItem())?.since > reply.lastReply.at)
+  ) {
+    const text = reply.lastReply.text;
+    return self.registration.showNotification(
+      reply.project ? `${reply.project.name} · ${reply.title}` : reply.title,
+      {
+        body: `Agent: ${text.length > 170 ? `${text.slice(0, 169)}…` : text}`,
+        icon: ICON,
+        badge: BADGE,
+        tag: "keep-it-moving",
+        renotify: true,
+        data: { url: `/s/${reply.token}` },
+      },
+    );
+  }
   // Every push must show something; this one is a test or already answered.
   if (!latest && !(await newestInboxItem()))
     return self.registration.showNotification("Keep it moving", {
@@ -71,6 +91,15 @@ async function waitingNotification() {
       renotify: true,
       data: { url: `/s/${latest.token}` },
     },
+  );
+}
+
+/** The active interview whose agent replied in its chat most recently. */
+function latestReply(sessions) {
+  return (
+    sessions
+      .filter((session) => session.status === "active" && session.lastReply)
+      .sort((a, b) => b.lastReply.at.localeCompare(a.lastReply.at))[0] ?? null
   );
 }
 

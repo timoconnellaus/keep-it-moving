@@ -1,12 +1,15 @@
 import {
   AnswerInputSchema,
   ArtifactInputSchema,
+  ChatInputSchema,
   ArtifactPatchSchema,
   normalizeDefault,
   QuestionInputSchema,
   QuestionPatchSchema,
   SessionInputSchema,
   type ArtifactView,
+  type ChatAuthor,
+  type ChatMessageView,
   type InterviewEvent,
   type OriginView,
   type ProjectView,
@@ -105,12 +108,18 @@ export class InterviewStore {
         id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, name TEXT NOT NULL, color TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL,
+        question_id TEXT, reply_to TEXT, delivered INTEGER NOT NULL DEFAULT 0, event_id INTEGER,
+        created_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         endpoint TEXT PRIMARY KEY, created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS questions_session ON questions(session_id);
       CREATE INDEX IF NOT EXISTS events_session ON events(session_id, delivered);
       CREATE INDEX IF NOT EXISTS artifacts_session ON artifacts(session_id);
+      CREATE INDEX IF NOT EXISTS chat_session ON chat_messages(session_id, created_at);
     `);
     // Columns added after the first deploy; adding one that exists throws.
     for (const column of ORIGIN_COLUMNS)
@@ -264,7 +273,9 @@ export class InterviewStore {
           (SELECT COUNT(*) FROM questions q WHERE q.session_id = s.id AND q.deleted = 0) total,
           (SELECT COUNT(*) FROM questions q JOIN answers a ON a.question_id = q.id
             WHERE q.session_id = s.id AND q.deleted = 0) answered,
-          (SELECT MAX(created_at) FROM events e WHERE e.session_id = s.id) last_event
+          (SELECT MAX(created_at) FROM events e WHERE e.session_id = s.id) last_event,
+          (SELECT json_object('text', text, 'at', created_at) FROM chat_messages c
+            WHERE c.session_id = s.id AND c.author = 'agent' ORDER BY created_at DESC, rowid DESC LIMIT 1) last_reply
         FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
         ORDER BY COALESCE(last_event, s.updated_at) DESC LIMIT 200`,
       )
@@ -290,6 +301,9 @@ export class InterviewStore {
           total,
           open: status === "active" ? total - answered : 0,
           lastActivity: String(row.last_event ?? row.updated_at),
+          lastReply: row.last_reply
+            ? json<{ text: string; at: string }>(row.last_reply)
+            : null,
         };
       });
   }
@@ -420,7 +434,78 @@ export class InterviewStore {
       ) as StageSource | null,
       project: this.projectFor(session.project_id),
       origin: mapOrigin(session),
+      chat: this.chat(id),
     };
+  }
+
+  /** The interview's chat thread, oldest first. */
+  chat(sessionId: string): ChatMessageView[] {
+    return this.sql
+      .all(
+        "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at, rowid",
+        sessionId,
+      )
+      .map((row) => ({
+        id: String(row.id),
+        author: row.author as ChatAuthor,
+        text: String(row.text),
+        questionId: optional(row.question_id),
+        replyTo: optional(row.reply_to),
+        delivered: Boolean(row.delivered),
+        createdAt: String(row.created_at),
+      }));
+  }
+
+  /**
+   * Adds a message to the chat. The user's are about the interview or one
+   * question and reach the agent the way answers do; the agent's reply.
+   */
+  addChatMessage(
+    sessionId: string,
+    author: ChatAuthor,
+    input: unknown,
+  ): ChatMessageView {
+    this.requireActive(sessionId);
+    const parsed = ChatInputSchema.parse(input);
+    const questionId = author === "user" ? (parsed.questionId ?? null) : null;
+    const replyTo = author === "agent" ? (parsed.replyTo ?? null) : null;
+    if (questionId) this.questionRow(sessionId, questionId);
+    if (
+      replyTo &&
+      !first(
+        this.sql,
+        "SELECT 1 FROM chat_messages WHERE id = ? AND session_id = ?",
+        replyTo,
+        sessionId,
+      )
+    )
+      throw new Error(`No chat message ${replyTo} in this session`);
+    const id = crypto.randomUUID();
+    const event = this.emit(
+      sessionId,
+      author === "user" ? "chat.message" : "chat.reply",
+      {
+        messageId: id,
+        text: parsed.text,
+        ...(questionId ? { questionId } : {}),
+        ...(replyTo ? { replyTo } : {}),
+      },
+    );
+    // Only the user's messages wait to be delivered; the agent wrote its own.
+    this.sql.all(
+      `INSERT INTO chat_messages (id, session_id, author, text, question_id, reply_to, delivered, event_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      sessionId,
+      author,
+      parsed.text,
+      questionId,
+      replyTo,
+      author === "agent" ? 1 : 0,
+      event.id,
+      event.createdAt,
+    );
+    return this.chat(sessionId).find((message) => message.id === id)!;
   }
 
   private projectFor(projectId: unknown): ProjectView | null {
@@ -455,7 +540,7 @@ export class InterviewStore {
         "DELETE FROM answers WHERE question_id IN (SELECT id FROM questions WHERE session_id = ?)",
         id,
       );
-      for (const table of ["questions", "events", "artifacts"])
+      for (const table of ["questions", "events", "artifacts", "chat_messages"])
         this.sql.all(`DELETE FROM ${table} WHERE session_id = ?`, id);
       this.sql.all("DELETE FROM sessions WHERE id = ?", id);
     });
@@ -872,6 +957,11 @@ export class InterviewStore {
     );
     this.sql.all(
       `UPDATE answers SET delivered=1 WHERE event_id IN (SELECT id FROM events WHERE session_id=? AND id<=? AND delivered=1)`,
+      sessionId,
+      throughId,
+    );
+    this.sql.all(
+      "UPDATE chat_messages SET delivered=1 WHERE session_id=? AND event_id<=? AND delivered=0",
       sessionId,
       throughId,
     );

@@ -62,6 +62,7 @@ const state: SessionView = {
     agentSession: "Switcher",
     location: "local",
   },
+  chat: [],
 };
 
 const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
@@ -75,6 +76,7 @@ const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
   total: 1,
   open: 0,
   lastActivity: new Date().toISOString(),
+  lastReply: null,
   ...overrides,
 });
 let overview: SessionSummary[] = [summary({})];
@@ -356,7 +358,110 @@ describe("questionnaire UI seam", () => {
 
     expect(screen.getByLabelText("Skipped")).toBeInTheDocument();
     expect(screen.queryByLabelText("Saved locally")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("1 of 1 questions done")).toBeInTheDocument();
+    expect(screen.getByText("1 of 1 answered")).toBeInTheDocument();
+  });
+
+  describe("question navigation", () => {
+    const threeQuestions = () => {
+      const next = structuredClone(state);
+      for (const id of ["q2", "q3"])
+        next.questions.push({
+          ...structuredClone(state.questions[0]!),
+          id,
+          prompt: `Question ${id}`,
+          answer: null,
+        });
+      vi.mocked(fetch).mockImplementation(
+        async () =>
+          ({ ok: true, json: async () => structuredClone(next) }) as Response,
+      );
+    };
+
+    class FakeObserver {
+      static instances: FakeObserver[] = [];
+      targets: Element[] = [];
+      constructor(readonly callback: IntersectionObserverCallback) {
+        FakeObserver.instances.push(this);
+      }
+      observe(target: Element) {
+        this.targets.push(target);
+      }
+      disconnect() {
+        this.targets = [];
+      }
+      /** Reports every observed card as below the fold or on screen. */
+      report(below: boolean) {
+        this.callback(
+          this.targets.map(
+            (target) =>
+              ({
+                target,
+                isIntersecting: !below,
+                boundingClientRect: { top: below ? 900 : 100 },
+                rootBounds: { bottom: 700 },
+              }) as unknown as IntersectionObserverEntry,
+          ),
+          this as unknown as IntersectionObserver,
+        );
+      }
+    }
+    const latestObserver = () => FakeObserver.instances.at(-1)!;
+    beforeEach(() => {
+      FakeObserver.instances.length = 0;
+      vi.stubGlobal("IntersectionObserver", FakeObserver);
+    });
+
+    it("counts answered questions over the questions", async () => {
+      threeQuestions();
+      render(<App />);
+      expect(await screen.findByText("1 of 3 answered")).toBeInTheDocument();
+    });
+
+    it("hides the progress when there are no questions", async () => {
+      const empty = structuredClone(state);
+      empty.questions = [];
+      vi.mocked(fetch).mockImplementation(
+        async () =>
+          ({ ok: true, json: async () => structuredClone(empty) }) as Response,
+      );
+      render(<App />);
+      await screen.findByText("No questions yet");
+      expect(screen.queryByText(/answered$/)).not.toBeInTheDocument();
+    });
+
+    it("points to open questions below the fold and scrolls to the next one", async () => {
+      threeQuestions();
+      render(<App />);
+      await screen.findByText("Question q3");
+      expect(latestObserver().targets).toHaveLength(2);
+      expect(
+        screen.queryByText(/more questions? below/),
+      ).not.toBeInTheDocument();
+
+      act(() => latestObserver().report(true));
+      const pill = screen.getByRole("button", {
+        name: "↓ 2 more questions below",
+      });
+      const scrollIntoView = vi.fn();
+      latestObserver().targets[0]!.scrollIntoView = scrollIntoView;
+      fireEvent.click(pill);
+      expect(scrollIntoView).toHaveBeenCalled();
+
+      act(() => latestObserver().report(false));
+      expect(
+        screen.queryByText(/more questions? below/),
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders without IntersectionObserver", async () => {
+      vi.stubGlobal("IntersectionObserver", undefined);
+      threeQuestions();
+      render(<App />);
+      expect(await screen.findByText("1 of 3 answered")).toBeInTheDocument();
+      expect(
+        screen.queryByText(/more questions? below/),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it("accepts free text for number questions", async () => {

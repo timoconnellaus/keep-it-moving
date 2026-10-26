@@ -77,6 +77,7 @@ export function QuestionCard({
   artifacts,
   shownArtifactId,
   onShowArtifact,
+  onAsk,
 }: {
   token: string;
   question: QuestionView;
@@ -88,6 +89,8 @@ export function QuestionCard({
   artifacts: ArtifactView[];
   shownArtifactId: string | null;
   onShowArtifact(artifactId: string): void;
+  /** Opens the chat with this question attached; the interview page only. */
+  onAsk?: (() => void) | undefined;
 }) {
   const artifactFor = (id: string | null | undefined) =>
     id ? artifacts.find((artifact) => artifact.id === id) : undefined;
@@ -168,6 +171,7 @@ export function QuestionCard({
 
   return (
     <article
+      data-question-id={question.id}
       className={`question ${open ? "open" : ""} ${emphasized ? "emphasized" : ""} ${question.answer?.delivered ? "received" : ""}`}
     >
       <div className="question-heading">
@@ -181,6 +185,16 @@ export function QuestionCard({
             title="Show in the workspace"
           >
             {linked.title}
+          </button>
+        )}
+        {onAsk && (
+          <button
+            type="button"
+            className="edit ask"
+            onClick={onAsk}
+            title="Ask the agent about this question"
+          >
+            Ask about this
           </button>
         )}
         {question.answer && (

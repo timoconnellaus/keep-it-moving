@@ -48,6 +48,7 @@ async function main(args: string[]): Promise<void> {
   if (group === "question") return questionCommand(action, rest);
   if (group === "artifact") return artifactCommand(action, rest);
   if (group === "stage") return stageCommand(action, rest);
+  if (group === "chat") return chatCommand(action, rest);
   if (group === "project") return projectCommand(action, rest);
   if (group === "heartbeat" || group === "automation")
     return automationsCommand(group, action, rest);
@@ -719,6 +720,33 @@ async function stageCommand(action: string | undefined, args: string[]) {
     await api(`/api/sessions/${positional(args, 0)}/stage/visibility`, {
       method: "POST",
       body: JSON.stringify({ visible: action === "open" }),
+    }),
+  );
+}
+
+/**
+ * `chat list <session>` prints the interview's chat; `chat reply <session>
+ * --text "…" | --file <path|-> [--to <message>]` answers the user in it.
+ */
+async function chatCommand(action: string | undefined, args: string[]) {
+  const sessionId = positional(args, 0);
+  if (action === "list")
+    return output(await api(`/api/sessions/${sessionId}/chat`));
+  if (action !== "reply")
+    throw new Error(`Unknown chat action: ${action ?? ""}`);
+  const file = flag(args, "--file");
+  let text = flag(args, "--text");
+  if (file === "-") {
+    text = "";
+    for await (const chunk of process.stdin) text += chunk;
+  } else if (file) text = readFileSync(file, "utf8");
+  if (!text?.trim())
+    throw new Error('--text "…" or --file <path|-> is required');
+  const replyTo = flag(args, "--to");
+  return output(
+    await api(`/api/sessions/${sessionId}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ text, ...(replyTo ? { replyTo } : {}) }),
     }),
   );
 }
@@ -1751,6 +1779,9 @@ Commands:
   question add|update <session> [question] --json '<object>'  (use --json - for stdin)
   question delete|focus|reorder <session> <question> [--position N]
   wait <session> [--idle MS] [--timeout MS]   one batch of answers once the user pauses
+    the user's chat messages wake it too and arrive in \`messages\`
+  chat list <session>   the interview's chat with the user
+  chat reply <session> --text "…" | --file <path|-> [--to <message>]   answer the user in the chat (Markdown)
   attach <session>
   events next <session> [--timeout MS]
   plan <session> --file <path|-> | --content <md> [--show]   create or replace the plan document
