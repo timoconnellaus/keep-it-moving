@@ -275,7 +275,7 @@ export default {
       accessTokenTTL: 60 * 60,
       // A login lasts while the CLI keeps using it.
       refreshTokenTTL: 365 * 24 * 60 * 60,
-      refreshTokenIdleTTL: 30 * 24 * 60 * 60,
+      refreshTokenIdleTTL: 90 * 24 * 60 * 60,
     });
     return provider.fetch(request, env, ctx);
   },
