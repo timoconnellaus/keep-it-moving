@@ -72,27 +72,6 @@ h1 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.progress {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font: 600 11px/1 var(--mono);
-  font-variant-numeric: tabular-nums;
-}
-.progress-bar {
-  width: 56px;
-  height: 4px;
-  border-radius: 2px;
-  background: #dde2de;
-  overflow: hidden;
-}
-.progress-bar > span {
-  display: block;
-  height: 100%;
-  background: var(--received);
-  transition: width 0.2s;
-}
 .accept-all {
   border: 1px solid var(--accent);
   border-radius: 5px;
@@ -141,19 +120,18 @@ h1 {
   /* clip, not hidden: hidden would make this the more-below pill's sticky container. */
   overflow: clip;
 }
+/* In the sticky top bar, so it stays in view while the questions scroll. */
 .question-progress {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--line);
+  gap: 8px;
   color: var(--muted);
   font: 600 11px/1 var(--mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .question-progress-bar {
-  flex: 1;
+  width: 96px;
   height: 4px;
   border-radius: 2px;
   background: var(--line);

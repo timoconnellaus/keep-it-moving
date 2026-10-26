@@ -162,7 +162,6 @@ export function App() {
       aria-label="Interview questions"
       ref={questionsRef}
     >
-      <QuestionProgress questions={session.questions} />
       {session.questions.length === 0 && (
         <div className="empty">
           <h2>No questions yet</h2>
@@ -195,6 +194,7 @@ export function App() {
     <main className={`shell ${workspaceOpen ? "with-workspace" : ""}`}>
       <header className="topbar">
         <Switcher session={session} sessions={sessions} />
+        <QuestionProgress questions={session.questions} />
         {active && acceptable.length > 0 && (
           <button
             className="accept-all"
