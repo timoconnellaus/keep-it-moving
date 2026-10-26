@@ -62,6 +62,7 @@ const state: SessionView = {
     agentSession: "Switcher",
     location: "local",
   },
+  chat: [],
 };
 
 const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
@@ -75,6 +76,7 @@ const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
   total: 1,
   open: 0,
   lastActivity: new Date().toISOString(),
+  lastReply: null,
   ...overrides,
 });
 let overview: SessionSummary[] = [summary({})];

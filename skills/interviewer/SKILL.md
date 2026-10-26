@@ -84,8 +84,16 @@ Run `kim wait <session-id>` as a background process. It exits with one JSON batc
 - `answers`: the latest answer to each question touched, with `acceptedDefault`. A false value means the user departed from your suggestion, so treat it as a signal to probe.
 - `events`: everything queued, including your own edits.
 - `openQuestions`: how many questions remain open.
+- `messages`: what the user wrote in the interview's chat since the last batch, each with its `messageId`, `text`, and `about` (the question's id, number and prompt) when they asked about a specific question.
 
-Handle the batch: update the plan, adapt the questions, and add or revise visuals. Then run `wait` again. One watcher holds a session at a time; a new one takes over and the old one exits with "Replaced by a newer watcher", so never run two. If background processes are unavailable, loop on `kim wait` in the foreground. `kim attach` (NDJSON stream) and `kim events next` remain available.
+Handle `messages` first: the user is waiting on the reply. A message from the user wakes `wait` straight away.
+
+- **A clarification** ("what do you mean by sync?", "why recommend A?"): answer it with `kim chat reply <session-id> --text "…" --to <messageId>`. Replies are Markdown; keep them short. If it shows the question was unclear, also fix the question with `question update`.
+- **A direction** ("actually, focus on the mobile app", "skip the pricing questions"): steer by it. Add, update or delete questions and rewrite the plan, then reply briefly to confirm what you changed.
+
+`kim chat list <session-id>` shows the whole thread.
+
+Then handle the rest of the batch: update the plan, adapt the questions, and add or revise visuals. Then run `wait` again. One watcher holds a session at a time; a new one takes over and the old one exits with "Replaced by a newer watcher", so never run two. If background processes are unavailable, loop on `kim wait` in the foreground. `kim attach` (NDJSON stream) and `kim events next` remain available.
 
 Answers can arrive while detached and appear in the next batch. Treat `answer.revised` as a fresh decision point. Decide whether later questions should remain, change, or be deleted; there is no automatic dependency system.
 

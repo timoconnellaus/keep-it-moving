@@ -55,10 +55,20 @@ kim wait <session-id>
 
 `wait` blocks until there is something worth acting on, then prints one JSON batch and exits:
 
-- the user pauses for `--idle` milliseconds (default 15000) after answering; or
-- no open questions remain.
+- the user pauses for `--idle` milliseconds (default 15000) after answering;
+- no open questions remain; or
+- the user writes in the chat, which ends it after a short settle.
 
 The batch holds every queued event, the latest answer to each question it touched (with `acceptedDefault`), the open-question count, and whether the workspace is open. The agent's own edits ride along but never end a wait early. `--timeout` (default 600000) bounds the whole wait; an empty batch means nothing happened. Run it as a background process, handle the batch, then run it again.
+
+The interview page has one chat thread with the agent. The user asks about the interview, or about one question with its "Ask about this" action, or gives a direction. Their messages arrive in the batch's `messages`, each with `about` (the question's id, number and prompt) when it is about a question, and are marked delivered the way answers are. The agent answers in Markdown:
+
+```sh
+kim chat reply <session-id> --text "Sync means…" --to <message-id>
+kim chat list <session-id>
+```
+
+The page shows whether an agent is watching, so a message sent while none is says it will be read at the next check-in. The user's own messages never put an interview in their inbox or notify them; the agent's replies notify like new questions do.
 
 Two lower-level watchers remain. `attach` emits a snapshot and queued events, then streams NDJSON until cancelled. `events next <session-id> --timeout 25000` long-polls for the next event. Cancelling a watcher never stops the interview. One watcher holds a session at a time, and the newest wins: a new `wait`, `attach` or `events next` takes over, the old one ends (`wait` and `events next` fail with "Replaced by a newer watcher", `attach` emits a `replaced` line and closes), and anything still queued goes to the new one. So a killed watcher never blocks the next.
 

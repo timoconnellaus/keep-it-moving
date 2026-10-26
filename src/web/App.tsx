@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { defaultAnswerText } from "../shared/answers.js";
 import type { SessionView } from "../shared/schema.js";
 import { shownArtifact } from "../shared/workspace.js";
+import { Chat, useChat } from "./Chat.js";
 import { useOverview } from "./overview.js";
 import { QuestionCard } from "./QuestionCard.js";
 import { MoreBelow, QuestionProgress } from "./QuestionNav.js";
@@ -19,6 +20,7 @@ export function App() {
   const [overviewVersion, setOverviewVersion] = useState(0);
   const sessions = useOverview(overviewVersion);
   const questionsRef = useRef<HTMLElement>(null);
+  const chat = useChat();
   const showArtifact = useCallback(async (artifactId: string) => {
     await fetch(`/api/browser/${token}/stage`, {
       method: "POST",
@@ -184,6 +186,7 @@ export function App() {
             void showArtifact(id);
             if (!session.stageVisible) void setStageVisible(true);
           }}
+          onAsk={active ? () => chat.ask(question.id) : undefined}
         />
       ))}
       <MoreBelow container={questionsRef} questions={session.questions} />
@@ -250,6 +253,7 @@ export function App() {
       ) : (
         questions
       )}
+      <Chat token={token} session={session} chat={chat} onSent={refresh} />
     </main>
   );
 }
