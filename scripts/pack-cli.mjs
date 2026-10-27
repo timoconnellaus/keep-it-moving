@@ -5,15 +5,21 @@
  * setup script can run `npm install -g https://<host>/cli.tgz`. It holds no
  * secrets. Run after `build:cli` and `build:web` (Vite empties web-dist).
  *
+ * It stamps the package with a build id, a hash of its contents, in
+ * build.json, and writes the same to cli-version.json beside the tarball,
+ * which the site serves so `kim` can tell when it's out of date.
+ *
  *   node scripts/pack-cli.mjs [--out <file>]
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -86,13 +92,15 @@ try {
     license: root.license,
     engines: root.engines,
     bin: root.bin,
-    files: ["dist", "skills", "README.md", "LICENSE"],
+    files: ["dist", "skills", "build.json", "README.md", "LICENSE"],
     dependencies,
   };
   writeFileSync(
     join(stage, "package.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
+  const stamp = `${JSON.stringify({ version: root.version, build: contentHash(stage) })}\n`;
+  writeFileSync(join(stage, "build.json"), stamp);
   const [packed] = JSON.parse(
     execFileSync("npm", ["pack", "--json", "--pack-destination", stage], {
       cwd: stage,
@@ -102,9 +110,31 @@ try {
   );
   mkdirSync(dirname(out), { recursive: true });
   copyFileSync(join(stage, packed.filename), out);
+  writeFileSync(join(dirname(out), "cli-version.json"), stamp);
   process.stdout.write(
-    `${out}: ${packed.entryCount} files, ${packed.size} bytes; dependencies ${JSON.stringify(dependencies)}\n`,
+    `${out}: ${packed.entryCount} files, ${packed.size} bytes; dependencies ${JSON.stringify(dependencies)}; ${stamp}`,
   );
 } finally {
   rmSync(stage, { recursive: true, force: true });
+}
+
+/** A short hash of every file under `dir`, by path and content. */
+function contentHash(dir) {
+  const hash = createHash("sha256");
+  const walk = (folder) => {
+    for (const entry of readdirSync(folder, { withFileTypes: true }).sort(
+      (a, b) => a.name.localeCompare(b.name),
+    )) {
+      const path = join(folder, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else
+        hash
+          .update(relative(dir, path))
+          .update("\0")
+          .update(readFileSync(path))
+          .update("\0");
+    }
+  };
+  walk(dir);
+  return hash.digest("hex").slice(0, 12);
 }

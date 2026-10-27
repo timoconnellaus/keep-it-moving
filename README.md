@@ -2,18 +2,30 @@
 
 Keep it moving (formerly Interviewer) runs interviews between agents and people: an agent asks questions in the browser, beside a living plan, diagrams and mockups, and waits for the answers; the person answers, chats with the agent, or hands the interview to someone else. The home page lists every interview and what's left to do on it. It's hosted on a Cloudflare Worker at https://keep-it-moving.zerobsai.com. The CLI is `kim`; `interviewer` is the same command, kept so older scripts still work.
 
-## Requirements
+## Use it
 
-- Node.js 22.13 or newer, for the CLI
-- The [archify](https://github.com/tt-a1i/archify) skill, for diagrams
-- To deploy: the Cloudflare account that owns `zerobsai.com`
+You need Node.js 22.13 or newer and a Google account.
 
-## Install and develop
+```sh
+npm install -g https://keep-it-moving.zerobsai.com/cli.tgz
+kim skill install
+kim login
+```
+
+`skill install` asks which agents get the interviewer skill (Claude Code, Codex, Pi). Then ask Claude to interview you about something, such as "interview me about this feature", and answer in the browser. Diagrams also need the [archify](https://github.com/tt-a1i/archify) skill.
+
+The skill lives in `~/.agents/skills/interviewer`, a copy kim made (marked by `.installed-by-kim`), and each chosen agent's skills folder links to it. Every `kim` run refreshes that copy when the CLI's bundled skill has changed, so the agents stay current. Outside a terminal, pick agents with `--agents claude,codex,pi` or `--all`; without either it uses the last choice, or Claude Code. It never replaces a link or folder it didn't make, such as a dev checkout's links, unless `--force`. `kim skill uninstall` removes what it made.
+
+`kim update` reinstalls the CLI from the site and refreshes the skill. Once a day, `kim` checks the site's `/cli-version.json` (the build `npm run pack:cli` stamped into the package, a static file) and says on stderr when a newer one is out.
+
+## Develop
+
+Deploying needs the Cloudflare account that owns `zerobsai.com`.
 
 ```sh
 npm install
 npm run link:dev        # builds the CLI and links the `interviewer` executable
-npm run setup:agents    # links the skill and adds the /grill-me pointer
+npm run setup:agents    # links the skill to this checkout and adds the /grill-me pointer
 kim login       # browser sign-in: Google, then OAuth back to the CLI
 ```
 
@@ -174,7 +186,7 @@ It creates an agent key named "<project name> cloud" (`--key-name` picks another
    exit 0
    ```
 
-The CLI package is served behind the agent API at `/api/sessions/kim/cli.tgz`, so the setup script fetches it with the environment's `KEEP_IT_MOVING_TOKEN` and nothing new is public. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. The docs don't say whether a setup script sees the environment's variables; if `kim` is missing in a cloud session, that's why, and `/cli.tgz` is public as a fallback.
+The CLI package is served behind the agent API at `/api/sessions/kim/cli.tgz`, so the setup script fetches it with the environment's `KEEP_IT_MOVING_TOKEN` and nothing new is public. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. It stamps the package's `build.json` with a hash of its contents and writes the same to `web-dist/cli-version.json`. The docs don't say whether a setup script sees the environment's variables; if `kim` is missing in a cloud session, that's why, and `/cli.tgz` is public as a fallback.
 
 ## On your phone
 

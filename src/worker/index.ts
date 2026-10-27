@@ -29,7 +29,7 @@ import {
 export { InterviewHub } from "./hub.js";
 
 const PUBLIC_FILES =
-  /^\/(assets\/|icons\/|manifest\.webmanifest$|sw\.js$|cli\.tgz$)/;
+  /^\/(assets\/|icons\/|manifest\.webmanifest$|sw\.js$|cli\.tgz$|cli-version\.json$)/;
 
 /** Where an agent key downloads the CLI package. */
 const CLI_PACKAGE_PATH = "/api/sessions/kim/cli.tgz";
@@ -138,7 +138,8 @@ const site: ExportedHandler<Env> = {
     if (url.pathname === "/health") return Response.json({ ok: true });
     // Build output and app-install files hold nothing private, and Google's
     // servers fetch the icons without a sign-in when installing. A cloud
-    // environment's setup script installs the CLI from cli.tgz.
+    // environment's setup script installs the CLI from cli.tgz, and `kim`
+    // checks cli-version.json for a newer one.
     if (PUBLIC_FILES.test(url.pathname)) return env.ASSETS.fetch(request);
     if (url.pathname === "/auth/google/start") return googleStart(request, env);
     if (url.pathname === "/auth/google/callback")

@@ -1,6 +1,13 @@
 /** @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "../src/shared/schema.js";
 import { Home } from "../src/web/Home.js";
@@ -137,6 +144,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  localStorage.clear();
 });
 
 describe("home page", () => {
@@ -221,5 +229,58 @@ describe("home page", () => {
   it("says how interviews start when there are none", async () => {
     render(<Home />);
     expect(await screen.findByText("No interviews yet")).toBeInTheDocument();
+  });
+});
+
+describe("the Claude Code setup box", () => {
+  const commands = [
+    `npm install -g ${location.origin}/cli.tgz`,
+    "kim skill install",
+    "kim login",
+  ].join("\n");
+
+  it("shows the install commands for this site, and copies them", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    render(<Home />);
+    const box = screen.getByRole("region", { name: "Use it with Claude Code" });
+    expect(box.querySelector("pre")?.textContent).toBe(commands);
+    expect(box).toHaveTextContent("interview me about this feature");
+    await act(async () => {
+      fireEvent.click(within(box).getByRole("button", { name: "Copy" }));
+    });
+    expect(writeText).toHaveBeenCalledWith(commands);
+    expect(within(box).getByRole("button", { name: "Copied" })).toBeVisible();
+  });
+
+  it("stays dismissed once dismissed", () => {
+    const { unmount } = render(<Home />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(
+      screen.queryByRole("region", { name: "Use it with Claude Code" }),
+    ).toBeNull();
+    unmount();
+    render(<Home />);
+    expect(
+      screen.queryByRole("region", { name: "Use it with Claude Code" }),
+    ).toBeNull();
+  });
+
+  it("still shows and dismisses when storage throws", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    try {
+      render(<Home />);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      expect(
+        screen.queryByRole("region", { name: "Use it with Claude Code" }),
+      ).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
