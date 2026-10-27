@@ -7,6 +7,7 @@ import { Chat, useChat } from "./Chat.js";
 import { useOverview } from "./overview.js";
 import { QuestionCard } from "./QuestionCard.js";
 import { MoreBelow, QuestionProgress } from "./QuestionNav.js";
+import { liveSocket, probeStatus, STOP_MESSAGES } from "./liveSocket.js";
 import { Stage } from "./Stage.js";
 import { Switcher } from "./Switcher.js";
 
@@ -72,27 +73,19 @@ export function App() {
     const disconnectedMessage =
       "Live updates disconnected. Reconnecting automatically…";
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    let socket: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let disposed = false;
-
-    const connectStateSocket = () => {
-      if (disposed) return;
-      const nextSocket = new WebSocket(
-        `${protocol}//${location.host}/ws/${token}`,
-      );
-      socket = nextSocket;
-      nextSocket.onopen = () => {
+    void refresh();
+    return liveSocket({
+      url: `${protocol}//${location.host}/ws/${token}`,
+      probe: probeStatus(`/api/browser/${token}/session`),
+      onOpen: () => {
         setError((current) => (current === disconnectedMessage ? "" : current));
         void refresh();
-      };
-      nextSocket.onmessage = (event) => {
+      },
+      onMessage: (data) => {
         let message: { type: string; session?: SessionView };
         try {
-          message = JSON.parse(String(event.data)) as typeof message;
+          message = JSON.parse(data) as typeof message;
         } catch {
-          setError(disconnectedMessage);
-          nextSocket.close();
           return;
         }
         if (message.type === "overview")
@@ -100,26 +93,10 @@ export function App() {
         if (message.type === "state" && message.session) {
           setSession(message.session);
         }
-      };
-      nextSocket.onerror = () => setError(disconnectedMessage);
-      nextSocket.onclose = () => {
-        if (disposed || socket !== nextSocket) return;
-        setError(disconnectedMessage);
-        reconnectTimer = setTimeout(connectStateSocket, 1_000);
-      };
-    };
-
-    void refresh();
-    connectStateSocket();
-    return () => {
-      disposed = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (
-        socket?.readyState === WebSocket.CONNECTING ||
-        socket?.readyState === WebSocket.OPEN
-      )
-        socket.close();
-    };
+      },
+      onDrop: () => setError(disconnectedMessage),
+      onStop: (reason) => setError(STOP_MESSAGES[reason]),
+    });
   }, [refresh]);
 
   if (!session)

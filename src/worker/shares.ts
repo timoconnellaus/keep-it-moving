@@ -1,3 +1,4 @@
+import { ttlCache } from "./cache.js";
 import type { Env } from "./env.js";
 
 /**
@@ -38,8 +39,15 @@ const TOKEN_PATH = /^\/(?:s|ws|api\/browser)\/([A-Za-z0-9_-]{32})(?:\/|$)/;
 export const interviewToken = (path: string) =>
   TOKEN_PATH.exec(path)?.[1] ?? null;
 
+/**
+ * Shares looked up lately, most of them none: the owner's own interviews.
+ * Assigning updates this isolate's copy; other isolates catch up within
+ * the TTL, and the owner's hub checks the assignee on every request anyway.
+ */
+const shares = ttlCache<Share | null>(30_000);
+
 export const shareFor = (env: Env, token: string) =>
-  env.OAUTH_KV.get<Share>(shareKey(token), "json");
+  shares.get(token, () => env.OAUTH_KV.get<Share>(shareKey(token), "json"));
 
 export async function recordAssignment(
   env: Env,
@@ -49,13 +57,13 @@ export async function recordAssignment(
   if (change.previous && change.previous !== change.assignee)
     await env.OAUTH_KV.delete(assignedKey(change.previous, change.token));
   if (!change.assignee) {
+    shares.set(change.token, null);
     await env.OAUTH_KV.delete(shareKey(change.token));
     return;
   }
-  await env.OAUTH_KV.put(
-    shareKey(change.token),
-    JSON.stringify({ owner: owner.toLowerCase(), assignee: change.assignee }),
-  );
+  const share = { owner: owner.toLowerCase(), assignee: change.assignee };
+  shares.set(change.token, share);
+  await env.OAUTH_KV.put(shareKey(change.token), JSON.stringify(share));
   const listed: Omit<SharedInterview, "token"> = {
     title: change.title,
     from: change.assignedBy ?? owner,
@@ -71,6 +79,7 @@ export async function forgetShare(
   token: string,
   assignee: string | null,
 ): Promise<void> {
+  shares.set(token, null);
   await env.OAUTH_KV.delete(shareKey(token));
   if (assignee) await env.OAUTH_KV.delete(assignedKey(assignee, token));
 }

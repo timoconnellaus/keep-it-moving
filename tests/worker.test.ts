@@ -12,7 +12,7 @@ import {
 import { GOOGLE_JWKS, GOOGLE_TOKEN } from "../src/worker/auth.js";
 import type { Env } from "../src/worker/env.js";
 import worker from "../src/worker/index.js";
-import { hubHarness } from "./helpers/harness.js";
+import { ACCEPTED_SOCKET, hubHarness } from "./helpers/harness.js";
 
 const ORIGIN = "https://kim.test";
 const OWNER = "owner@example.com";
@@ -613,11 +613,15 @@ describe("assigning an interview to someone else", () => {
     expect((await asBob(`/api/browser/${session.token}/session`)).status).toBe(
       404,
     );
-    // A stale directory entry still reaches the owner's hub, which says no.
+    // A stale directory entry, as another isolate may have cached it, still
+    // reaches the owner's hub, which says no.
     kv.data.set(`share:${session.token}`, share);
+    const later = Date.now() + 31_000;
+    vi.spyOn(Date, "now").mockReturnValue(later);
     expect((await asBob(`/api/browser/${session.token}/session`)).status).toBe(
       403,
     );
+    vi.mocked(Date.now).mockRestore();
   });
 
   it("lists it under Shared with you, and forgets it when deleted", async () => {
@@ -656,5 +660,94 @@ describe("assigning an interview to someone else", () => {
       body: JSON.stringify({ email: "ann@example.com" }),
     });
     expect(response.status).toBe(400);
+  });
+});
+
+describe("agent sockets through the Worker", () => {
+  it("reaches the user's hub with a token, and refuses without one", async () => {
+    const s = setup();
+    const token = await s.cliToken(await s.signIn("ann@example.com"));
+    const session = (await (
+      await s.call("/api/sessions", { method: "POST", ...s.bearer(token) })
+    ).json()) as { id: string };
+    const upgrade = { upgrade: "websocket" };
+    const accepted = await s.call(`/api/sessions/${session.id}/socket`, {
+      headers: { ...upgrade, authorization: `Bearer ${token}` },
+    });
+    expect(accepted.headers.get(ACCEPTED_SOCKET)).toBe("1");
+    const hub = s.hubs.get("user:ann@example.com")!;
+    expect(hub.agents.list(session.id)).toHaveLength(1);
+    const refused = await s.call(`/api/sessions/${session.id}/socket`, {
+      headers: upgrade,
+    });
+    expect(refused.status).toBe(401);
+  });
+});
+
+describe("rate limits", () => {
+  /** A Rate Limiting binding allowing `limit` calls per key. */
+  function limiter(limit: number) {
+    const counts = new Map<string, number>();
+    return {
+      limit: vi.fn(async ({ key }: { key: string }) => {
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+        return { success: counts.get(key)! <= limit };
+      }),
+    };
+  }
+
+  it("answers 429 once an IP registers or starts sign-in too often", async () => {
+    const s = setup();
+    const binding = limiter(2);
+    Object.assign(s.env, { AUTH_LIMITER: binding });
+    const from = (ip: string) => ({ headers: { "cf-connecting-ip": ip } });
+    expect((await s.call("/auth/google/start", from("1.1.1.1"))).status).toBe(
+      302,
+    );
+    const register = () =>
+      s.call("/register", {
+        method: "POST",
+        headers: {
+          "cf-connecting-ip": "1.1.1.1",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          redirect_uris: ["http://127.0.0.1:4567/callback"],
+          token_endpoint_auth_method: "none",
+        }),
+      });
+    expect((await register()).status).toBe(201);
+    const refused = await register();
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("retry-after")).toBe("60");
+    expect(
+      (await s.call("/auth/google/callback", from("1.1.1.1"))).status,
+    ).toBe(429);
+    // Another address, and every other route, carry on.
+    expect((await s.call("/auth/google/start", from("2.2.2.2"))).status).toBe(
+      302,
+    );
+    expect((await s.call("/health", from("1.1.1.1"))).status).toBe(200);
+    expect(binding.limit).toHaveBeenCalledTimes(5);
+  });
+});
+
+describe("KV reads", () => {
+  it("reads a browser session and a share from KV once, not per request", async () => {
+    const s = setup();
+    const cookie = await s.signIn("ann@example.com");
+    const token = await s.cliToken(cookie);
+    const session = (await (
+      await s.call("/api/sessions", { method: "POST", ...s.bearer(token) })
+    ).json()) as { token: string };
+    const get = vi.spyOn(s.kv, "get");
+    for (let index = 0; index < 5; index++)
+      expect(
+        (await s.call(`/api/browser/${session.token}/session`, { cookie }))
+          .status,
+      ).toBe(200);
+    const keys = get.mock.calls.map(([key]) => key.split(":")[0]);
+    expect(keys.filter((key) => key === "session")).toHaveLength(0);
+    expect(keys.filter((key) => key === "share")).toHaveLength(1);
   });
 });

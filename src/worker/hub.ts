@@ -1,5 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
-import { createHub, RESPONDENT_HEADER, sameSite } from "../server/hub.js";
+import {
+  createHub,
+  RESPONDENT_HEADER,
+  sameSite,
+  type AgentSocket,
+  type AgentWatch,
+} from "../server/hub.js";
 import { durableObjectSql } from "../server/sql.js";
 import { InterviewStore } from "../server/store.js";
 import type { Env } from "./env.js";
@@ -8,7 +14,9 @@ import { webPush } from "./push.js";
 /**
  * One user's workspace, in one SQLite-backed Durable Object: their
  * interviews, agent keys and devices. Browser sockets hibernate, tagged with
- * their session id, or `respondent:<id>` for an assignee's page.
+ * their session id, or `respondent:<id>` for an assignee's page. Agents'
+ * sockets, tagged `agent:<id>`, hibernate too, carrying what they wait for;
+ * the object's one alarm wakes it when a wait's batch or timeout is due.
  */
 export class InterviewHub extends DurableObject<Env> {
   private readonly hub: ReturnType<typeof createHub>;
@@ -16,6 +24,10 @@ export class InterviewHub extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     const sql = durableObjectSql(ctx.storage);
+    // The CLI's keepalive pings are answered without waking the object.
+    ctx.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair("ping", "pong"),
+    );
     this.hub = createHub({
       store: new InterviewStore(sql),
       sql,
@@ -50,7 +62,12 @@ export class InterviewHub extends DurableObject<Env> {
         sendAll: (data) => {
           for (const socket of ctx.getWebSockets())
             if (
-              !ctx.getTags(socket).some((tag) => tag.startsWith("respondent:"))
+              !ctx
+                .getTags(socket)
+                .some(
+                  (tag) =>
+                    tag.startsWith("respondent:") || tag.startsWith(AGENT),
+                )
             )
               try {
                 socket.send(data);
@@ -58,6 +75,44 @@ export class InterviewHub extends DurableObject<Env> {
                 /* closing */
               }
         },
+        closeSession: (sessionId) => {
+          for (const tag of [sessionId, respondentTag(sessionId)])
+            for (const socket of ctx.getWebSockets(tag))
+              try {
+                socket.close(4404, "Interview deleted");
+              } catch {
+                /* closing */
+              }
+        },
+      },
+      agentSockets: {
+        accept: (watch) => {
+          const [client, server] = Object.values(new WebSocketPair()) as [
+            WebSocket,
+            WebSocket,
+          ];
+          ctx.acceptWebSocket(server, [agentTag(watch.sessionId)]);
+          server.serializeAttachment(watch);
+          return {
+            socket: agentSocket(server),
+            response: new Response(null, { status: 101, webSocket: client }),
+          };
+        },
+        list: (sessionId) =>
+          ctx
+            .getWebSockets(
+              sessionId === undefined ? undefined : agentTag(sessionId),
+            )
+            .filter(
+              (socket) =>
+                socket.readyState === WebSocket.OPEN &&
+                ctx.getTags(socket).some((tag) => tag.startsWith(AGENT)),
+            )
+            .map(agentSocket),
+        wakeAt: (time) =>
+          void (time === null
+            ? ctx.storage.deleteAlarm()
+            : ctx.storage.setAlarm(time)),
       },
     });
   }
@@ -97,16 +152,36 @@ export class InterviewHub extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  /** Older deploys ran a once-a-minute alarm; one still set ends here. */
-  override async alarm(): Promise<void> {}
+  /** A waiting agent's batch or timeout is due. */
+  override async alarm(): Promise<void> {
+    this.hub.wake();
+  }
 
   override webSocketMessage(): void {
-    // The page only listens; it writes through the HTTP API.
+    // Pages and agents only listen; they write through the HTTP API.
+  }
+
+  override webSocketError(socket: WebSocket): void {
+    this.webSocketClose(socket, 1011);
   }
 
   override webSocketClose(socket: WebSocket, code: number): void {
-    socket.close(code === 1005 ? 1000 : code);
+    try {
+      socket.close(code === 1005 ? 1000 : code);
+    } catch {
+      /* already closed */
+    }
+    const agent = this.ctx.getTags(socket).find((tag) => tag.startsWith(AGENT));
+    if (agent) this.hub.agentSocketClosed(agent.slice(AGENT.length));
   }
 }
 
 const respondentTag = (sessionId: string) => `respondent:${sessionId}`;
+const AGENT = "agent:";
+const agentTag = (sessionId: string) => `${AGENT}${sessionId}`;
+
+const agentSocket = (socket: WebSocket): AgentSocket => ({
+  watch: socket.deserializeAttachment() as AgentWatch,
+  send: (data) => socket.send(data),
+  close: (code, reason) => socket.close(code, reason),
+});

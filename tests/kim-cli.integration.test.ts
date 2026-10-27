@@ -1,12 +1,11 @@
 import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { serve } from "@hono/node-server";
 import { afterEach, describe, expect, it } from "vitest";
 import { hubHarness } from "./helpers/harness.js";
+import { serveHarness } from "./helpers/serve.js";
 
 const exec = promisify(execFile);
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -29,24 +28,17 @@ async function listeningHarness() {
   const harness = hubHarness();
   /** Every request's method and path, in order. */
   const requests: string[] = [];
-  const fetch = (request: Request) => {
+  const served = await serveHarness(harness, (request) => {
     requests.push(`${request.method} ${new URL(request.url).pathname}`);
     return harness.app.fetch(request);
-  };
-  const server = await new Promise<ReturnType<typeof serve>>((resolve) => {
-    const started = serve({ fetch, hostname: "127.0.0.1", port: 0 }, () =>
-      resolve(started),
-    );
   });
-  const { port } = server.address() as AddressInfo;
   cleanups.push(async () => {
-    server.closeAllConnections?.();
-    await new Promise((resolve) => server.close(resolve));
+    await served.close();
     // The hub checks for push a couple of seconds after questions arrive;
     // later tests keep the process alive, so close the database after that.
     setTimeout(() => harness.sql.close(), 3_000).unref();
   });
-  return { ...harness, requests, address: `http://127.0.0.1:${port}` };
+  return { ...harness, requests, address: served.address };
 }
 
 const env = (address: string, extra: Record<string, string> = {}) => {
@@ -90,6 +82,35 @@ describe("ask", () => {
     const session = store.getSession(result.interviewId, "");
     expect(session.title).toBe("Run the migration?");
     expect(session.questions[0]!.prompt).toBe("Back up first?");
+  });
+});
+
+describe("wait over the socket", () => {
+  it("returns the batch once answered, never using the HTTP long-polls", async () => {
+    const { address, store, requests } = await listeningHarness();
+    const session = store.createSession("", { title: "Socket" });
+    const [question] = store.addQuestions(session.id, [
+      { type: "text", prompt: "Name?" },
+    ]);
+    const waiting = kim(address, "wait", session.id, "--idle", "0");
+    while (!requests.some((line) => line.endsWith("/socket")))
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    store.answerQuestion(session.id, question!.id, { answer: "Kim" });
+    const batch = JSON.parse((await waiting).stdout);
+    expect(batch.answers).toEqual([
+      expect.objectContaining({ answer: "Kim", number: 1 }),
+    ]);
+    expect(
+      requests.filter((line) => /\/(wait|attach|events\/next)$/.test(line)),
+    ).toEqual([]);
+    expect(store.undeliveredEvents(session.id)).toEqual([]);
+  });
+
+  it("exits with an error for an interview that isn't there", async () => {
+    const { address } = await listeningHarness();
+    await expect(kim(address, "wait", "missing")).rejects.toMatchObject({
+      stderr: expect.stringContaining("Session not found"),
+    });
   });
 });
 

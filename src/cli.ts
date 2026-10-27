@@ -567,55 +567,133 @@ async function chatCommand(action: string | undefined, args: string[]) {
 
 async function attach(args: string[]) {
   const id = positional(args, 0);
-  const response = await authorizedFetch(`/api/sessions/${id}/attach`);
-  if (!response.ok) throw new Error(await errorMessage(response));
-  if (!response.body) throw new Error("Attach stream unavailable");
   process.stdout.on("error", () => process.exit(0));
-  const decoder = new TextDecoder();
-  let buffered = "";
-  for await (const chunk of response.body) {
-    buffered += decoder.decode(chunk, { stream: true });
-    const lines = buffered.split("\n");
-    buffered = lines.pop() ?? "";
-    for (const line of lines)
-      // Heartbeats only keep the connection open through proxies.
-      if (line && !line.startsWith('{"type":"heartbeat"'))
-        process.stdout.write(`${line}\n`);
-  }
+  await watchInterview(
+    id,
+    () => ({ mode: "attach" }),
+    (message, line) => {
+      process.stdout.write(`${line}\n`);
+      // The interview ends this watch; a newer watcher took over.
+      return message.type === "replaced" ? "done" : undefined;
+    },
+  );
 }
 
 async function eventsNext(args: string[]) {
   const id = positional(args, 0);
   const timeout = flag(args, "--timeout") ?? "25000";
-  output(
-    await api(
-      `/api/sessions/${id}/events/next?timeout=${encodeURIComponent(timeout)}`,
-    ),
+  let result: unknown;
+  await watchInterview(
+    id,
+    () => ({ mode: "next", timeout }),
+    (message) => {
+      if (message.type !== "next") return;
+      result = message.result;
+      return "done";
+    },
   );
+  output(result);
 }
-
-/**
- * Cloudflare drops a response that sends nothing for 100 s, so a long wait
- * is a chain of shorter requests. Each but the last asks for a partial
- * result, which leaves events queued rather than ending the batch early.
- */
-const WAIT_REQUEST_MS = 60_000;
 
 async function waitForBatch(args: string[]) {
   output(await nextBatch(positional(args, 0), args));
 }
 
-/** One batch of answers for an interview, chained over short requests. */
+/** One batch of answers for an interview. */
 async function nextBatch(id: string, args: string[]): Promise<unknown> {
   const idle = flag(args, "--idle") ?? "15000";
   const deadline = Date.now() + Number(flag(args, "--timeout") ?? 600_000);
-  for (;;) {
-    const remaining = Math.max(0, deadline - Date.now());
-    const last = remaining <= WAIT_REQUEST_MS;
-    const batch = (await api(
-      `/api/sessions/${id}/wait?idle=${encodeURIComponent(idle)}&timeout=${Math.min(remaining, WAIT_REQUEST_MS)}${last ? "" : "&partial=1"}`,
-    )) as { partial?: boolean };
-    if (!batch.partial) return batch;
+  let batch: unknown;
+  await watchInterview(
+    id,
+    // A reconnect asks only for what is left of the wait.
+    () => ({
+      mode: "wait",
+      idle,
+      timeout: String(Math.max(0, deadline - Date.now())),
+    }),
+    (message) => {
+      if (message.type !== "batch") return;
+      batch = message.batch;
+      return "done";
+    },
+  );
+  return batch;
+}
+
+/** How often the CLI pings an idle socket, so proxies keep it open. */
+const PING_MS = 30_000;
+/** A socket that hears nothing, not even a pong, for this long is gone. */
+const SILENT_MS = 75_000;
+const RECONNECT_MAX_MS = 30_000;
+
+interface WatchMessage {
+  type: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Watches an interview over a WebSocket, which costs the server nothing
+ * while the user is away; the HTTP long-polls older CLIs use kept it busy.
+ * `onMessage` returns "done" once it has what it came for. A dropped
+ * connection reconnects with backoff, asking `query` again; a refusal
+ * (signed out, deleted, not allowed) or a newer watcher ends it with an error.
+ */
+async function watchInterview(
+  id: string,
+  query: () => Record<string, string>,
+  onMessage: (message: WatchMessage, line: string) => "done" | undefined,
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    const token = await accessToken();
+    const ended = await new Promise<"done" | "dropped" | Error>((resolve) => {
+      const url = `${defaultBase.replace(/^http/, "ws")}/api/sessions/${encodeURIComponent(id)}/socket?${new URLSearchParams(query())}`;
+      // Node's WebSocket takes headers, unlike a browser's.
+      const socket = new WebSocket(url, {
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+      } as unknown as string[]);
+      let heard = Date.now();
+      let finished: "done" | Error | null = null;
+      const pinger = setInterval(() => {
+        if (Date.now() - heard > SILENT_MS) socket.close();
+        else if (socket.readyState === WebSocket.OPEN) socket.send("ping");
+      }, PING_MS);
+      socket.onopen = () => {
+        attempt = 0;
+      };
+      socket.onmessage = (event) => {
+        heard = Date.now();
+        const line = String(event.data);
+        if (line === "pong") return;
+        const message = JSON.parse(line) as WatchMessage;
+        if (message.type === "replaced" && !finished)
+          finished = new Error(message.message ?? "Replaced");
+        if (message.type === "deleted")
+          finished = new Error(message.message ?? "Session not found");
+        if (onMessage(message, line) === "done") finished = "done";
+        if (finished) socket.close();
+      };
+      socket.onerror = () => undefined;
+      socket.onclose = (event) => {
+        clearInterval(pinger);
+        if (finished) return resolve(finished);
+        if (event.code === 4404) return resolve(new Error("Session not found"));
+        resolve("dropped");
+      };
+    });
+    if (ended === "done") return;
+    if (ended instanceof Error) throw ended;
+    // A refused upgrade only says it failed: ask over HTTP why.
+    const probe = await authorizedFetch(
+      `/api/sessions/${encodeURIComponent(id)}`,
+    ).catch(() => null);
+    if (probe && !probe.ok && probe.status !== 429 && probe.status < 500)
+      throw new Error(await errorMessage(probe));
+    const backoff = Math.min(RECONNECT_MAX_MS, 1_000 * 2 ** attempt);
+    await new Promise((resolve) =>
+      setTimeout(resolve, backoff / 2 + Math.random() * (backoff / 2)),
+    );
   }
 }
 

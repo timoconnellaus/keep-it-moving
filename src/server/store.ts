@@ -74,6 +74,20 @@ const ATTRIBUTION_COLUMNS = [
 /** Just enough to catch a typo; Google checks the address at sign-in. */
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/**
+ * Caps on one workspace, so an open sign-up can't fill a Durable Object.
+ * Deleted questions and artifacts still count: their rows remain.
+ */
+export const LIMITS = {
+  interviews: 500,
+  questions: 200,
+  artifacts: 50,
+  chatMessages: 2_000,
+} as const;
+
+/** The hub answers these with 403 and the message. */
+export const LIMIT_REACHED = "Limit reached";
+
 /** 192 random bits, URL-safe: the secret part of a session's browser URL. */
 function sessionToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(24));
@@ -153,6 +167,10 @@ export class InterviewStore {
 
   createSession(baseUrl: string, input: unknown = {}): SessionView {
     const { title, stageVisible, origin } = SessionInputSchema.parse(input);
+    if (this.count("sessions") >= LIMITS.interviews)
+      throw new Error(
+        `${LIMIT_REACHED}: a workspace holds at most ${LIMITS.interviews} interviews; delete some (kim session delete --stopped) to make room`,
+      );
     const id = crypto.randomUUID();
     const time = now();
     const projectId = this.resolveProject(origin);
@@ -459,6 +477,10 @@ export class InterviewStore {
   ): ChatMessageView {
     this.requireActive(sessionId);
     const parsed = ChatInputSchema.parse(input);
+    if (this.count("chat_messages", sessionId) >= LIMITS.chatMessages)
+      throw new Error(
+        `${LIMIT_REACHED}: an interview's chat holds at most ${LIMITS.chatMessages} messages; start a new interview`,
+      );
     const questionId = author === "user" ? (parsed.questionId ?? null) : null;
     const replyTo = author === "agent" ? (parsed.replyTo ?? null) : null;
     if (questionId) this.questionRow(sessionId, questionId);
@@ -598,6 +620,10 @@ export class InterviewStore {
         ),
       };
     });
+    if (this.count("questions", sessionId) + parsed.length > LIMITS.questions)
+      throw new Error(
+        `${LIMIT_REACHED}: an interview holds at most ${LIMITS.questions} questions; start a new interview`,
+      );
     const maxRow = first(
       this.sql,
       "SELECT COALESCE(MAX(position), -1) max FROM questions WHERE session_id = ? AND deleted = 0",
@@ -812,6 +838,10 @@ export class InterviewStore {
           show: parsed.show,
         });
     }
+    if (this.count("artifacts", sessionId) >= LIMITS.artifacts)
+      throw new Error(
+        `${LIMIT_REACHED}: an interview holds at most ${LIMITS.artifacts} artifacts; update one instead, or start a new interview`,
+      );
     const id = crypto.randomUUID();
     const time = now();
     this.sql.all(
@@ -1034,6 +1064,21 @@ export class InterviewStore {
     payload: json(row.payload),
     createdAt: String(row.created_at),
   });
+  /** Rows in a table, for the workspace or one interview. */
+  private count(
+    table: "sessions" | "questions" | "artifacts" | "chat_messages",
+    sessionId?: string,
+  ): number {
+    const row =
+      sessionId === undefined
+        ? first(this.sql, `SELECT COUNT(*) n FROM ${table}`)
+        : first(
+            this.sql,
+            `SELECT COUNT(*) n FROM ${table} WHERE session_id = ?`,
+            sessionId,
+          );
+    return Number(row?.n ?? 0);
+  }
   private requireSession(id: string): void {
     if (!first(this.sql, "SELECT 1 FROM sessions WHERE id=?", id))
       throw new Error("Session not found");

@@ -95,7 +95,7 @@ class FakeSocket {
   onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event?: { code: number }) => void) | null = null;
   close = vi.fn(() => {
     this.readyState = FakeSocket.CLOSED;
   });
@@ -200,13 +200,26 @@ describe("questionnaire UI seam", () => {
     await screen.findByText("Choose a direction");
     vi.useFakeTimers();
 
-    act(() => {
+    await act(async () => {
       FakeSocket.instances[0]!.onclose?.();
-      vi.advanceTimersByTime(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
     });
 
     expect(FakeSocket.instances).toHaveLength(2);
     vi.useRealTimers();
+  });
+
+  it("stops reconnecting and says why when the interview is deleted", async () => {
+    render(<App />);
+    await screen.findByText("Choose a direction");
+    vi.useFakeTimers();
+    await act(async () => {
+      FakeSocket.instances[0]!.onclose?.({ code: 4404 });
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(FakeSocket.instances).toHaveLength(1);
+    vi.useRealTimers();
+    expect(screen.getByText("This interview was deleted.")).toBeVisible();
   });
 
   it("renders the interview title above the questions", async () => {
