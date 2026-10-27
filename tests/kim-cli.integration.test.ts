@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -239,8 +239,12 @@ describe("the CLI package", () => {
     expect(files).toEqual([
       "package/LICENSE",
       "package/README.md",
+      "package/build.json",
+      "package/dist/checkbox.js",
       "package/dist/cli.js",
       "package/dist/shared/remote.js",
+      "package/dist/skill.js",
+      "package/dist/update.js",
       "package/package.json",
       "package/skills/interviewer/SKILL.md",
     ]);
@@ -253,6 +257,17 @@ describe("the CLI package", () => {
     });
     expect(manifest.type).toBe("module");
     expect(Object.keys(manifest.dependencies)).toEqual(["env-paths"]);
+    // The build stamp kim compares with the site's cli-version.json.
+    const stamp = JSON.parse(
+      (await exec("tar", ["-xzOf", tarball, "package/build.json"])).stdout,
+    );
+    expect(stamp).toEqual({
+      version: manifest.version,
+      build: expect.stringMatching(/^[0-9a-f]{12}$/) as string,
+    });
+    expect(
+      JSON.parse(readFileSync(join(dir, "cli-version.json"), "utf8")),
+    ).toEqual(stamp);
   }, 60_000);
 });
 

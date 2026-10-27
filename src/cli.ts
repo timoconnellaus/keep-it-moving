@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -16,8 +16,23 @@ import {
 import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import envPaths from "env-paths";
+import { checkbox } from "./checkbox.js";
 import { normalizeRemote, projectName } from "./shared/remote.js";
+import {
+  type AgentId,
+  canonicalSkill,
+  installedAgents,
+  installSkill,
+  parseAgents,
+  refreshSkill,
+  rememberedAgents,
+  SKILL_AGENTS,
+  type SkillPaths,
+  uninstallSkill,
+} from "./skill.js";
+import { checkForUpdate, readBuild } from "./update.js";
 
 /**
  * KEEP_IT_MOVING_<name>, else the older INTERVIEWER_<name>, so environments
@@ -31,9 +46,11 @@ const defaultBase = (
 ).replace(/\/+$/, "");
 
 async function main(args: string[]): Promise<void> {
+  housekeeping(args[0]);
   if (!args.length || args.includes("--help") || args[0] === "help")
     return printHelp();
   const [group, action, ...rest] = args;
+  if (group === "update") return update();
   if (group === "login") return login();
   if (group === "logout") return logout();
   if (group === "whoami") return whoami();
@@ -45,6 +62,7 @@ async function main(args: string[]): Promise<void> {
   if (group === "project") return projectCommand(action);
   if (group === "key") return keyCommand(action, rest);
   if (group === "cloud") return cloudCommand(action, rest);
+  if (group === "skill") return skillCommand(action, rest);
   if (group === "ask")
     return ask(
       [action, ...rest].filter((value): value is string => Boolean(value)),
@@ -845,6 +863,116 @@ The key "${keyName}" is shown only here. Revoke it with:
  * reuse a token another process has just fetched; otherwise a process could
  * save a refresh token the server had already replaced, signing the CLI out.
  */
+/** The installed package: dist/ (or src/) sits in it beside skills/ and build.json. */
+const packageRoot = () => fileURLToPath(new URL("..", import.meta.url));
+const skillPaths = (): SkillPaths => ({
+  home: homedir(),
+  source: join(packageRoot(), "skills", "interviewer"),
+  choiceFile: configFile("skill.json"),
+});
+
+/**
+ * `skill install` copies the bundled skill to ~/.agents/skills and links it
+ * into the chosen agents' skills folders: picked from a checklist in a
+ * terminal, else `--agents claude,codex` or `--all`, else the agents chosen
+ * last time, else Claude Code. `skill uninstall` removes only what it made;
+ * `skill refresh` brings the copy up to date, as every run does.
+ */
+async function skillCommand(action: string | undefined, args: string[]) {
+  const paths = skillPaths();
+  if (action === "install") {
+    const agents = await chooseAgents(args, paths);
+    if (!agents) throw new Error("Cancelled");
+    const result = installSkill(paths, agents, args.includes("--force"));
+    output(result);
+    if (result.skipped.length) process.exitCode = 1;
+    return;
+  }
+  if (action === "uninstall") return output(uninstallSkill(paths));
+  if (action === "refresh")
+    return output({
+      canonical: canonicalSkill(paths.home),
+      refreshed: refreshSkill(paths),
+    });
+  throw new Error(`Unknown skill action: ${action ?? ""}`);
+}
+
+async function chooseAgents(
+  args: string[],
+  paths: SkillPaths,
+): Promise<AgentId[] | null> {
+  if (args.includes("--all")) return SKILL_AGENTS.map((agent) => agent.id);
+  const list = flag(args, "--agents");
+  if (list) return parseAgents(list);
+  const remembered = rememberedAgents(paths.choiceFile);
+  if (process.stdin.isTTY && process.stderr.isTTY) {
+    const present = installedAgents(paths.home);
+    const preselected =
+      remembered ?? (present.length ? present : (["claude"] as AgentId[]));
+    return checkbox(
+      "Install the interviewer skill for which agents?",
+      SKILL_AGENTS.map((agent) => ({
+        value: agent.id,
+        label: `${agent.name} (~/${agent.home}/skills)`,
+        checked: preselected.includes(agent.id),
+      })),
+    );
+  }
+  if (remembered) return remembered;
+  process.stderr.write(
+    "Installing for Claude Code only. Run `kim skill install` in a terminal to choose, or pass --agents claude,codex,pi or --all.\n",
+  );
+  return ["claude"];
+}
+
+/** Reinstalls the CLI from the site, then refreshes the skill with the new one. */
+function update() {
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  // npm's output goes to stderr, keeping stdout for the JSON result.
+  const installed = spawnSync(
+    npm,
+    ["install", "-g", `${defaultBase}/cli.tgz`],
+    { stdio: ["inherit", 2, 2], shell: process.platform === "win32" },
+  );
+  if (installed.status !== 0)
+    throw new Error(`npm install -g ${defaultBase}/cli.tgz failed`);
+  const refreshed = spawnSync("kim", ["skill", "refresh"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", 2],
+    shell: process.platform === "win32",
+  });
+  let skill: unknown = null;
+  try {
+    skill = JSON.parse(refreshed.stdout);
+  } catch {
+    // An older kim on PATH; the next run refreshes the skill anyway.
+  }
+  output({ updated: true, skill });
+}
+
+/**
+ * What every run does first: refresh an installed skill copy that's out of
+ * date, and once a day hint on stderr that a newer CLI exists. Neither
+ * writes to stdout, holds up the command, or fails it.
+ */
+function housekeeping(group: string | undefined) {
+  if (group !== "skill" && group !== "update")
+    try {
+      refreshSkill(skillPaths());
+    } catch {
+      // The command matters more than the skill copy.
+    }
+  const current = readBuild(join(packageRoot(), "build.json"));
+  if (!current || group === "update") return;
+  void checkForUpdate({
+    base: defaultBase,
+    current,
+    stateFile: configFile("update-check.json"),
+  }).then((hint) => {
+    if (hint) process.stderr.write(`${hint}\n`);
+  });
+}
+
 async function accessToken(rejected?: string | null): Promise<string | null> {
   const token = setting("TOKEN");
   if (token) return token;
@@ -1099,6 +1227,7 @@ const BOOLEAN_FLAGS = new Set([
   "--stdin",
   "--open-stage",
   "--clear",
+  "--force",
 ]);
 
 function positional(args: string[], index: number): string {
@@ -1167,6 +1296,15 @@ Cloud sessions (claude.ai/code):
   cloud setup [--project <key>] [--key-name <name>] [--json]
     creates the project's agent key and prints its cloud environment's network
     access, environment variables and setup script, ready to paste
+
+Setup:
+  skill install [--agents claude,codex,pi | --all] [--force]
+    copy the interviewer skill to ~/.agents/skills and link it into each agent's
+    skills folder; asks which agents in a terminal, and remembers the choice.
+    It never replaces a link or folder it didn't make unless --force
+  skill uninstall   remove the links and copy skill install made
+  skill refresh     bring the skill copy up to date (every run does this)
+  update   reinstall kim from this site, then refresh the skill
 
 KEEP_IT_MOVING_URL points at another deployment, such as wrangler dev.
 `,

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Account } from "./Account.js";
+import { GetStarted } from "./GetStarted.js";
 import { NotifyToggle } from "./Notify.js";
 import {
   homeOrder,
@@ -87,6 +88,7 @@ export function Home() {
             </span>
           )}
         </div>
+        <GetStarted />
         {shared.length > 0 && (
           <section className="home-list" aria-label="Shared with you">
             <h2>Shared with you</h2>

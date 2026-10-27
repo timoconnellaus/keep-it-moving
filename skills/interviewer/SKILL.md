@@ -1,17 +1,23 @@
 ---
 name: interviewer
-description: Conduct a persistent browser-based interview and live planning session with adaptive questions, recommended defaults, a living plan document, diagrams, and mockups. Use when gathering structured requirements or decisions from the user, working out a plan with them, or when /grill-me should run through the local interviewer UI.
+description: Conduct a persistent browser-based interview and live planning session with adaptive questions, recommended defaults, a living plan document, diagrams, and mockups, through the Keep it moving CLI (`kim`). Use when gathering structured requirements or decisions from the user, working out a plan with them, or when they ask to be interviewed or grilled ("interview me about…", "grill me about…", /grill-me).
 ---
 
 # Interviewer
 
-Use the `interviewer` CLI to run an adaptive interview in the user's browser.
+Use the `kim` CLI (Keep it moving) to run an adaptive interview in the user's browser. The user answers there, beside a plan you keep up to date, while you wait for their answers and adapt.
+
+## Before you start
+
+- If `kim` isn't installed, ask the user to install it (Node.js 22.13 or newer): `npm install -g https://keep-it-moving.zerobsai.com/cli.tgz`.
+- If a command says the CLI isn't signed in, ask the user to run `kim login` in their own terminal; it signs in with Google in the browser. `kim whoami` checks.
+- If `kim` says on stderr that an update is available, mention it to the user; `kim update` installs it.
 
 ## Start or resume
 
-1. From the repository the interview is about, run `kim session create --title "<concise interview title>" --agent-session "<your session's title>"` and retain the returned session ID and URL. To continue a stopped interview, run `kim session resume <id>` instead. If a command says you are not signed in, ask the user to run `kim login` in their own terminal.
+1. From the repository the interview is about, run `kim session create --title "<concise interview title>" --agent-session "<your session's title>"` and retain the returned session ID and URL. To continue a stopped interview, run `kim session resume <id>` instead.
 
-   The user switches between interviews from many agent sessions, grouped by project. The CLI works out the project from the git remote, plus the branch, worktree and agent, so run it inside the repo. Pass `--agent-session` with the title of your conversation or task so the user can tell your interview apart. If the returned `project` is null or wrong (no remote, or a scratch folder), run `kim project list` and pass `--project "<name>"` to use the right one.
+   The user may have interviews from several agent sessions, grouped by project. The CLI works out the project from the git remote, plus the branch, worktree and agent, so run it inside the repo when there is one. Pass `--agent-session` with the title of your conversation or task so the user can tell your interview apart. If the returned `project` is null or wrong (no remote, or a scratch folder) and the interview belongs to an existing project, run `kim project list` and pass `--project "<name>"`.
 
 2. Add the currently useful frontier of questions. Use simple flags for one question or JSON over stdin for rich questions and batches:
 
@@ -46,7 +52,7 @@ JSON
 
 Put what you were doing and what's blocked in the question's `recommendation` or prompt. The URL goes to stderr; stdout gets one batch like `wait`'s, plus `interviewId`. If it times out before the user answers, run `kim wait <interviewId>` (in the background if you can). Everything else in this skill (adding questions, the plan, `session stop`) works on it too.
 
-In a claude.ai cloud session, the CLI authenticates with the environment's `KEEP_IT_MOVING_TOKEN`. If `interviewer` isn't installed or the host is unreachable there, the environment isn't set up: tell the user to run `kim cloud setup` from the repo on their own machine, rather than trying to install or sign in yourself. Never print or commit `KEEP_IT_MOVING_TOKEN`.
+In a claude.ai cloud session, the CLI authenticates with the environment's `KEEP_IT_MOVING_TOKEN`. If `kim` isn't installed or the host is unreachable there, the environment isn't set up: tell the user to run `kim cloud setup` from the repo on their own machine, rather than trying to install or sign in yourself. Never print or commit `KEEP_IT_MOVING_TOKEN`.
 
 ## Workspace: plan, diagrams, mockups
 
@@ -61,7 +67,7 @@ kim artifact show <session-id> <artifact-id>     # put it on screen
 ```
 
 - **Plan:** create it early and rewrite it after each batch of answers. Record decisions (what was chosen and why), open questions, and next steps. The user reads it, so keep it short and current.
-- **Diagrams:** use one when structure matters, such as architecture, workflow, a request sequence, data flow or state. Author an archify spec by following the archify skill: pick the type, then read its schema and one example. Don't hand-write HTML or run `archify deliver` yourself. Pass the spec to `artifact add` or `artifact update`: it validates, and on failure returns archify's diagnostics with `supportedFixes`, so fix only what they name and retry. Keep the spec file and update it rather than adding near-duplicates. Keep labels meaningful.
+- **Diagrams:** use one when structure matters, such as architecture, workflow, a request sequence, data flow or state. Diagrams need the [archify](https://github.com/tt-a1i/archify) skill; if it isn't installed, describe the structure in the plan instead, or use a mockup. Author an archify spec by following the archify skill: pick the type, then read its schema and one example. Don't hand-write HTML or run `archify deliver` yourself. Pass the spec to `artifact add` or `artifact update`: it validates, and on failure returns archify's diagnostics with `supportedFixes`, so fix only what they name and retry. Keep the spec file and update it rather than adding near-duplicates. Keep labels meaningful.
 - **Mockups:** use self-contained HTML (inline CSS; CDN scripts work). Always pass `--description`; it keeps the options readable.
 - **Whether the workspace is shown:** the workspace column starts closed, and you decide whether to open it. Keep it closed when the user follows the plan somewhere else, for example a Markdown file you are writing in the repo or a design open beside the interviewer, or when the interview is just questions. Open it (`kim stage open <session-id>`, or `session create --open-stage`) when the user should look at something here: a diagram, a mockup to choose between, or a plan they have no other view of. Close it with `kim stage close <session-id>` when it stops being useful. You can change your mind during the session. The user can toggle it too; `stage.visibility` events and `stageVisible` in each batch tell you its state. If the user closed it, don't reopen it unless you are showing something new they need to see.
 - **What's on screen:** `--show` switches the workspace to an item, but doesn't open a closed workspace. Don't yank the screen around while the user is mid-question; show a new item when you ask about it.

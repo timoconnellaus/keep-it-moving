@@ -242,6 +242,7 @@ describe("Google sign-in", () => {
     expect((await call("/ws/overview")).status).toBe(401);
     // Install files stay public.
     expect((await call("/manifest.webmanifest")).status).toBe(200);
+    expect((await call("/cli-version.json")).status).toBe(200);
   });
 
   it("starts with state, nonce and PKCE, and comes back to `next`", async () => {
