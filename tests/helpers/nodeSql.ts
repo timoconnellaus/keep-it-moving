@@ -5,7 +5,10 @@ import type { Row, Sql } from "../../src/server/sql.js";
 export function nodeSql(path = ":memory:"): Sql & { close(): void } {
   const db = new DatabaseSync(path);
   return {
-    all: (query, ...params) => db.prepare(query).all(...params) as Row[],
+    // The hub's push check runs a moment after questions arrive, often after
+    // a test has closed the database: it then finds nothing.
+    all: (query, ...params) =>
+      db.isOpen ? (db.prepare(query).all(...params) as Row[]) : [],
     exec: (script) => db.exec(script),
     transaction(fn) {
       db.exec("BEGIN");

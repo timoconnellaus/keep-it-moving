@@ -233,10 +233,31 @@ async function authorize(request: Request, env: Env, user: User) {
   return Response.redirect(redirectTo, 302);
 }
 
+/**
+ * Routes anyone can call that write KV or start a sign-in: the CLI's client
+ * registration and Google sign-in. A `kim login` calls each once.
+ */
+const RATE_LIMITED = /^\/(register|auth\/google\/(start|callback))$/;
+
+/** A 429 once a client IP has called the rate-limited routes too often. */
+async function rateLimited(request: Request, env: Env) {
+  if (!env.AUTH_LIMITER || !RATE_LIMITED.test(new URL(request.url).pathname))
+    return null;
+  const key = request.headers.get("cf-connecting-ip") ?? "unknown";
+  const { success } = await env.AUTH_LIMITER.limit({ key });
+  if (success) return null;
+  return Response.json(
+    { error: "Too many sign-in attempts; try again in a minute" },
+    { status: 429, headers: { "retry-after": "60" } },
+  );
+}
+
 let provider: OAuthProvider<Env> | null = null;
 
 export default {
-  fetch(request, env, ctx) {
+  async fetch(request, env, ctx) {
+    const limited = await rateLimited(request, env);
+    if (limited) return limited;
     // Built on first use, because the resource URL comes from the environment.
     provider ??= new OAuthProvider<Env>({
       apiRoute: "/api/sessions",

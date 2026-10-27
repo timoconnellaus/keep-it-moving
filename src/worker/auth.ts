@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { sameSite } from "../server/hub.js";
+import { ttlCache } from "./cache.js";
 import type { Env } from "./env.js";
 import { page } from "./pages.js";
 import { saveProfile } from "./shares.js";
@@ -39,9 +40,8 @@ export async function currentUser(
     return { email: env.DEV_EMAIL };
   const id = cookie(request, SESSION_COOKIE);
   if (!id) return null;
-  const stored = await env.OAUTH_KV.get<User & { refreshed: number }>(
-    `session:${id}`,
-    "json",
+  const stored = await sessions.get(id, () =>
+    env.OAUTH_KV.get<StoredSession>(`session:${id}`, "json"),
   );
   if (!stored) return null;
   const { refreshed, ...user } = stored;
@@ -134,7 +134,10 @@ export async function logout(request: Request, env: Env) {
   if (!sameSite(request))
     return new Response("Cross-site request refused", { status: 403 });
   const id = cookie(request, SESSION_COOKIE);
-  if (id) await env.OAUTH_KV.delete(`session:${id}`);
+  if (id) {
+    sessions.delete(id);
+    await env.OAUTH_KV.delete(`session:${id}`);
+  }
   return redirect("/signin", [setCookie(SESSION_COOKIE, "", 0)], 303);
 }
 
@@ -163,12 +166,21 @@ const callbackOrigin = (url: URL, env: Env) =>
 const signInAgain = (message: string) =>
   `${message} <a href="/signin">Sign in again</a>.`;
 
-const saveSession = (env: Env, id: string, user: User) =>
-  env.OAUTH_KV.put(
-    `session:${id}`,
-    JSON.stringify({ ...user, refreshed: Date.now() }),
-    { expirationTtl: SESSION_TTL },
-  );
+type StoredSession = User & { refreshed: number };
+
+/**
+ * Sessions read in this isolate lately. A sign-out elsewhere reaches it
+ * within the TTL.
+ */
+const sessions = ttlCache<StoredSession | null>(30_000);
+
+async function saveSession(env: Env, id: string, user: User) {
+  const stored: StoredSession = { ...user, refreshed: Date.now() };
+  sessions.set(id, stored);
+  await env.OAUTH_KV.put(`session:${id}`, JSON.stringify(stored), {
+    expirationTtl: SESSION_TTL,
+  });
+}
 
 function redirect(location: string, cookies: string[], status = 302) {
   const headers = new Headers({ location });

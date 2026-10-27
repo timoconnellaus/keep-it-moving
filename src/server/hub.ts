@@ -8,7 +8,7 @@ import type {
 import { ARTIFACT_VIEW_HEADERS } from "./artifactView.js";
 import { agentKeys, VIA_KEY_HEADER } from "./keys.js";
 import type { Sql } from "./sql.js";
-import type { InterviewStore } from "./store.js";
+import { LIMIT_REACHED, type InterviewStore } from "./store.js";
 
 /**
  * The header the Worker sets, to the signed-in email, on a request from an
@@ -28,7 +28,45 @@ export interface BrowserSockets {
   closeRespondents?(sessionId: string): void;
   /** Every open page, whichever interview it shows. */
   sendAll(data: string): void;
+  /** A deleted interview ends its pages' sockets, the assignee's too. */
+  closeSession?(sessionId: string): void;
 }
+
+/**
+ * What an agent's socket is waiting for. It is kept with the socket, not in
+ * memory, so a hibernated Durable Object picks up where it left off.
+ */
+export interface AgentWatch {
+  sessionId: string;
+  /** wait: one batch; attach: every event; next: the next event. */
+  mode: "wait" | "attach" | "next";
+  /** wait: how long the user pauses before the batch goes. */
+  idle: number;
+  /** When a wait or next gives up, in ms since the epoch. */
+  deadline: number;
+}
+
+export interface AgentSocket {
+  readonly watch: AgentWatch;
+  send(data: string): void;
+  close(code: number, reason: string): void;
+}
+
+/** Agents' WebSockets: hibernating in production, woken by an alarm. */
+export interface AgentSockets {
+  /** Accepts the upgrade; the response completes it. */
+  accept(watch: AgentWatch): { socket: AgentSocket; response: Response };
+  /** Open sockets, for one interview or every one. */
+  list(sessionId?: string): AgentSocket[];
+  /** Calls `wake` at this time, or never; the hub has one alarm. */
+  wakeAt(time: number | null): void;
+}
+
+/** Close codes an agent socket ends with, beyond 1000 for done. */
+export const AGENT_CLOSE = {
+  replaced: 4409,
+  deleted: 4404,
+} as const;
 
 /** Sends a data-less Web Push; resolves to the push service's HTTP status. */
 export type PushSender = (endpoint: string) => Promise<number>;
@@ -40,6 +78,8 @@ export interface HubOptions {
   /** The public origin, used in session URLs. */
   baseUrl: string;
   sockets: BrowserSockets;
+  /** Agents waiting over WebSockets; without it only the HTTP waits work. */
+  agentSockets?: AgentSockets | undefined;
   /** Web Push to the user's devices; absent when no VAPID key is configured. */
   push?: { publicKey: string; send: PushSender } | undefined;
 }
@@ -59,26 +99,149 @@ const REPLACED = "Replaced by a newer watcher on this interview";
 
 /** The interview API: agent routes under /api/sessions, browser routes under /api/browser/:token. */
 export function createHub(options: HubOptions) {
-  const { store, baseUrl, sockets } = options;
+  const { store, baseUrl, sockets, agentSockets } = options;
+  // Older CLIs' long-polls, held in memory for as long as the request runs.
   const watchers = new Map<string, Watcher>();
-  // `kim wait` chains short requests, so an agent counts as watching for a
-  // moment after its request ends; the chat says whether anyone will read.
+  // `kim wait` runs once per batch, so an agent counts as watching for a
+  // moment after its wait ends; the chat says whether anyone will read.
   const watchedUntil = new Map<string, number>();
   const watching = (id: string) =>
-    watchers.has(id) || (watchedUntil.get(id) ?? 0) > Date.now();
+    watchers.has(id) ||
+    Boolean(agentSockets?.list(id).length) ||
+    (watchedUntil.get(id) ?? 0) > Date.now();
+  /** A newer watcher takes over: whatever held the interview ends. */
+  const replaceWatchers = (id: string) => {
+    watchers.get(id)?.replace();
+    for (const socket of agentSockets?.list(id) ?? [])
+      endSocket(
+        socket,
+        { type: "replaced", message: REPLACED },
+        AGENT_CLOSE.replaced,
+      );
+  };
   const claim = (id: string, watcher: Watcher) => {
     const was = watching(id);
-    watchers.get(id)?.replace();
+    replaceWatchers(id);
     watchers.set(id, watcher);
     if (!was) later(() => broadcast(id));
   };
-  const release = (id: string, watcher: Watcher | null) => {
-    if (!watcher || watchers.get(id) !== watcher) return;
-    watchers.delete(id);
+  /** Watching ends after a grace period, unless another watcher starts. */
+  const unwatched = (id: string) => {
     watchedUntil.set(id, Date.now() + WATCH_GRACE_MS);
     setTimeout(() => {
       if (!watching(id)) broadcast(id);
     }, WATCH_GRACE_MS + 50);
+  };
+  const release = (id: string, watcher: Watcher | null) => {
+    if (!watcher || watchers.get(id) !== watcher) return;
+    watchers.delete(id);
+    unwatched(id);
+  };
+
+  const endSocket = (socket: AgentSocket, last: unknown, code = 1000) => {
+    try {
+      socket.send(JSON.stringify(last));
+      socket.close(code, code === 1000 ? "Done" : String(code));
+    } catch {
+      /* already closing */
+    }
+  };
+  /** Sends a waiting socket its batch, marking it delivered, and ends it. */
+  const sendBatch = (socket: AgentSocket) => {
+    const id = socket.watch.sessionId;
+    const events = store.undeliveredEvents(id);
+    if (events.length) store.markDelivered(id, events.at(-1)!.id);
+    endSocket(socket, {
+      type: "batch",
+      batch: batchSummary(store.getSession(id, ""), events),
+    });
+    later(() => broadcast(id));
+  };
+  const sendNext = (socket: AgentSocket, events: InterviewEvent[]) => {
+    const id = socket.watch.sessionId;
+    if (events.length) store.markDelivered(id, events.at(-1)!.id);
+    endSocket(socket, {
+      type: "next",
+      result: { session: forAgent(store.getSession(id, baseUrl)), events },
+    });
+    later(() => broadcast(id));
+  };
+  /**
+   * Settles a socket against the store and the clock: a due batch or
+   * timeout goes now. Returns when it next needs a look, or null.
+   */
+  const review = (socket: AgentSocket, now: number): number | null => {
+    const { sessionId: id, mode, idle, deadline } = socket.watch;
+    if (mode === "attach") return null;
+    if (mode === "next") {
+      if (now < deadline) return deadline;
+      sendNext(socket, []);
+      return null;
+    }
+    const events = store.undeliveredEvents(id);
+    const due = batchDue(events, unanswered(store, id), idle);
+    if ((due !== null && due <= now) || deadline <= now) {
+      sendBatch(socket);
+      return null;
+    }
+    return due === null ? deadline : Math.min(due, deadline);
+  };
+  /** Looks at every agent socket and sets the alarm for the next look. */
+  const wake = () => {
+    if (!agentSockets) return;
+    const now = Date.now();
+    let next: number | null = null;
+    for (const socket of agentSockets.list()) {
+      const at = review(socket, now);
+      if (at !== null && (next === null || at < next)) next = at;
+    }
+    agentSockets.wakeAt(next);
+  };
+  const deliverToSockets = (event: InterviewEvent) => {
+    if (!agentSockets) return;
+    const open = agentSockets.list(event.sessionId);
+    if (!open.length) return;
+    // A socket opened since the event began has it already.
+    const pending = store
+      .undeliveredEvents(event.sessionId)
+      .some((known) => known.id === event.id);
+    if (pending)
+      for (const socket of open)
+        if (socket.watch.mode === "attach") {
+          socket.send(JSON.stringify({ type: "event", event }));
+          store.markDelivered(event.sessionId, event.id);
+        } else if (socket.watch.mode === "next") sendNext(socket, [event]);
+    // A wait's batch may be due sooner now.
+    wake();
+  };
+  /** An agent's socket, already checked by the Worker and the key rules. */
+  const openAgentSocket = (watch: AgentWatch): Response => {
+    const id = watch.sessionId;
+    replaceWatchers(id);
+    const { socket, response } = agentSockets!.accept(watch);
+    if (watch.mode === "attach") {
+      const pending = store.undeliveredEvents(id);
+      socket.send(
+        JSON.stringify({
+          type: "snapshot",
+          session: forAgent(store.getSession(id, baseUrl)),
+          events: pending,
+        }),
+      );
+      if (pending.length) store.markDelivered(id, pending.at(-1)!.id);
+    }
+    if (watch.mode === "next") {
+      const pending = store.undeliveredEvents(id);
+      if (pending.length) sendNext(socket, pending);
+    }
+    wake();
+    later(() => broadcast(id));
+    return response;
+  };
+  /** The host saw an agent socket close. */
+  const agentSocketClosed = (sessionId: string) => {
+    unwatched(sessionId);
+    wake();
   };
   const app = new Hono();
 
@@ -86,7 +249,7 @@ export function createHub(options: HubOptions) {
     const message = error instanceof Error ? error.message : String(error);
     const status = /not found/i.test(message)
       ? 404
-      : /can't manage keys/i.test(message)
+      : /can't manage keys/i.test(message) || message.startsWith(LIMIT_REACHED)
         ? 403
         : /stopped|replaced by a newer watcher/i.test(message)
           ? 409
@@ -181,6 +344,7 @@ export function createHub(options: HubOptions) {
     later(() => {
       const watcher = watchers.get(event.sessionId);
       if (watcher?.write(event)) store.markDelivered(event.sessionId, event.id);
+      deliverToSockets(event);
       broadcast(event.sessionId);
       if (OVERVIEW_EVENTS.test(event.type)) pingOverview();
     });
@@ -280,6 +444,13 @@ export function createHub(options: HubOptions) {
       baseUrl,
     );
     store.deleteSession(id);
+    sockets.closeSession?.(id);
+    for (const socket of agentSockets?.list(id) ?? [])
+      endSocket(
+        socket,
+        { type: "deleted", message: "Session not found" },
+        AGENT_CLOSE.deleted,
+      );
     // The Worker forgets the share when there was one.
     return c.json({ ok: true, id, title, token, assignee });
   });
@@ -430,6 +601,30 @@ export function createHub(options: HubOptions) {
     });
   });
 
+  // The CLI waits over a WebSocket, which the Durable Object can hibernate
+  // while nothing happens; the HTTP waits below stay for older CLIs.
+  app.get("/api/sessions/:id/socket", (c) => {
+    if (!agentSockets)
+      return c.json({ error: "Sockets are not available here" }, 501);
+    if (c.req.header("upgrade")?.toLowerCase() !== "websocket")
+      return c.json({ error: "Expected a WebSocket" }, 426);
+    const id = c.req.param("id");
+    store.getSession(id, baseUrl);
+    const mode = c.req.query("mode") ?? "wait";
+    if (mode !== "wait" && mode !== "attach" && mode !== "next")
+      return c.json({ error: `Unknown mode ${mode}` }, 400);
+    const timeout =
+      mode === "next"
+        ? bounded(c.req.query("timeout"), 25_000, 0, 30_000)
+        : bounded(c.req.query("timeout"), 600_000, 0, SOCKET_WAIT_MAX_MS);
+    return openAgentSocket({
+      sessionId: id,
+      mode,
+      idle: bounded(c.req.query("idle"), 15_000, 0, 600_000),
+      deadline: Date.now() + timeout,
+    });
+  });
+
   app.get("/api/sessions/:id/events/next", async (c) => {
     const id = c.req.param("id");
     store.getSession(id, baseUrl);
@@ -564,10 +759,15 @@ export function createHub(options: HubOptions) {
     stateMessage,
     tokenSession,
     respondentMayUse,
+    /** The alarm went off: settle agent sockets whose time has come. */
+    wake,
+    agentSocketClosed,
   };
 }
 
 const HEARTBEAT_MS = 25_000;
+/** A socket costs nothing while it waits, so it may wait a week. */
+const SOCKET_WAIT_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 const OVERVIEW_PING_MS = 300;
 /** Agents add a batch of questions in a burst; notify once it has landed. */
 const PUSH_SETTLE_MS = 1_500;
@@ -684,8 +884,30 @@ const USER_EVENTS = new Set([
   "answer.revised",
   "chat.message",
 ]);
+/** Questions still without an answer, whoever they wait on. */
+const unanswered = (store: InterviewStore, id: string) =>
+  store.getSession(id, "").questions.filter((question) => !question.answer)
+    .length;
+
 /** Gathers a trailing burst, such as "Accept all defaults", into one batch. */
 const SETTLE_MS = 750;
+
+/**
+ * When a batch of these events is due: once the user has paused for `idle`
+ * ms, or settled briefly when nothing is left open or they asked something
+ * in the chat. Null while nothing the user did is waiting.
+ */
+function batchDue(
+  events: InterviewEvent[],
+  open: number,
+  idle: number,
+): number | null {
+  const latest = events.filter((event) => USER_EVENTS.has(event.type)).at(-1);
+  if (!latest) return null;
+  // Someone who asked something is waiting on the reply.
+  const quiet = open && latest.type !== "chat.message" ? idle : SETTLE_MS;
+  return Date.parse(latest.createdAt) + quiet;
+}
 
 /**
  * Collects events until the user pauses for `idle` ms or finishes every open
@@ -726,19 +948,13 @@ async function waitForBatch(
       resolve(batchSummary(store.getSession(id, ""), events));
     };
     const evaluate = () => {
-      const userEvents = events.filter((event) => USER_EVENTS.has(event.type));
-      if (!userEvents.length) return;
-      const open = store
-        .getSession(id, "")
-        .questions.filter((question) => !question.answer).length;
-      const latest = userEvents.at(-1)!;
-      const since = Date.now() - Date.parse(latest.createdAt);
-      // Someone who asked something is waiting on the reply.
-      const quiet =
-        open && latest.type !== "chat.message" ? options.idle : SETTLE_MS;
-      const wait = Math.max(0, quiet - since);
+      const due = batchDue(events, unanswered(store, id), options.idle);
+      if (due === null) return;
       if (quietTimer) clearTimeout(quietTimer);
-      quietTimer = setTimeout(() => finish(true), wait);
+      quietTimer = setTimeout(
+        () => finish(true),
+        Math.max(0, due - Date.now()),
+      );
     };
     const watcher: Watcher = {
       write: (event) => {
@@ -833,7 +1049,9 @@ const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
   ["GET", /^\/api\/sessions(\/projects)?$/],
   [
     "GET",
-    new RegExp(`^/api/sessions/${ID}(/(attach|wait|events/next|chat))?$`),
+    new RegExp(
+      `^/api/sessions/${ID}(/(attach|wait|events/next|socket|chat))?$`,
+    ),
   ],
   ["POST", /^\/api\/sessions$/],
   [

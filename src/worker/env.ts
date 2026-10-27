@@ -17,6 +17,8 @@ export interface Env {
   /** Web Push (VAPID): the public key as base64url, the private key a JWK secret. */
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_JWK?: string;
+  /** Limits sign-in and client registration per IP; see wrangler.jsonc. */
+  AUTH_LIMITER?: RateLimit;
   /** Local development only: skips Google and signs in as this address on localhost. */
   DEV_EMAIL?: string;
 }

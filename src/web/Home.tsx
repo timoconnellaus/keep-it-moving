@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Account } from "./Account.js";
+import { liveSocket, probeStatus, STOP_MESSAGES } from "./liveSocket.js";
 import { NotifyToggle } from "./Notify.js";
 import {
   homeOrder,
@@ -27,27 +28,18 @@ export function Home() {
   const [version, setVersion] = useState(0);
   const sessions = useOverview(version);
   const [shared, setShared] = useState<SharedInterview[]>([]);
+  const [live, setLive] = useState("");
 
   useEffect(() => {
     // The server pings open pages whenever an interview changes.
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    let socket: WebSocket | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let disposed = false;
-    const connect = () => {
-      if (disposed) return;
-      socket = new WebSocket(`${protocol}//${location.host}/ws/overview`);
-      socket.onmessage = () => setVersion((value) => value + 1);
-      socket.onclose = () => {
-        if (!disposed) timer = setTimeout(connect, 2_000);
-      };
-    };
-    connect();
-    return () => {
-      disposed = true;
-      if (timer) clearTimeout(timer);
-      socket?.close();
-    };
+    return liveSocket({
+      url: `${protocol}//${location.host}/ws/overview`,
+      probe: probeStatus("/api/browser/me"),
+      onOpen: () => setLive(""),
+      onMessage: () => setVersion((value) => value + 1),
+      onStop: (reason) => setLive(STOP_MESSAGES[reason]),
+    });
   }, []);
 
   useEffect(() => {
@@ -78,6 +70,11 @@ export function Home() {
         <Account />
       </header>
       <main className="home">
+        {live && (
+          <div className="notice" role="status">
+            {live}
+          </div>
+        )}
         <div className="home-head">
           <h1>Interviews</h1>
           {sessions && (
