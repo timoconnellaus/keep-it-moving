@@ -1,3 +1,4 @@
+import type { PlanRecord, PlanSource, PlanView } from "./plans.js";
 import type { UserRecord } from "./users.js";
 
 export const REPO_URL = "https://github.com/timoconnellaus/keep-it-moving";
@@ -43,6 +44,34 @@ const shell = (body: string, className = "") => `<!doctype html>
   }
   .google:hover { border-color: var(--muted); }
   main.wide { width: min(960px, 100%); text-align: left; }
+  .plans {
+    display: grid; gap: 12px; margin: 20px 0 8px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+  .plan {
+    display: flex; flex-direction: column; gap: 8px; padding: 18px;
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  .plan.current { border-color: var(--accent); }
+  .plan h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .plan .price { margin: 0; color: var(--ink); font-size: 22px; font-weight: 600; }
+  .plan .price small { color: var(--muted); font-size: 13px; font-weight: 400; }
+  .plan ul { flex: 1; margin: 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+  .plan li + li { margin-top: 4px; }
+  .plan form { margin: 0; }
+  .plan .action, .plan button {
+    display: inline-block; padding: 8px 14px; border: 1px solid var(--accent);
+    border-radius: 8px; background: var(--accent); color: var(--paper);
+    font: inherit; font-size: 14px; font-weight: 500; text-decoration: none;
+    cursor: pointer;
+  }
+  .plan .note { margin: 0; font-size: 14px; }
+  .notice {
+    padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px;
+    color: var(--ink);
+  }
+  td form { display: flex; gap: 6px; margin: 0; }
+  td select, td button { font: inherit; font-size: 13px; }
   .wide h1 { margin-top: 0; }
   .table { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -94,6 +123,7 @@ Sign in with Google</a>
 kim skill install
 kim login</pre>
 <p><code>kim skill install</code> asks which agents get the skill: Claude Code, Codex, Cursor, Gemini CLI, Copilot, OpenCode and more. Then ask your agent to interview you about something, such as “interview me about this feature”.</p>
+<p>Free runs three live interviews at once; Pro, $5 a month, has no limit and assigns interviews to other people. <a href="/pricing">See the plans</a>.</p>
 <p>Or run your own: the source is available at <a href="${REPO_URL}">github.com/timoconnellaus/keep-it-moving</a>, with how to deploy it to your Cloudflare account.</p>
 </section>`),
     {
@@ -111,22 +141,56 @@ export const escapeHtml = (text: string) =>
 const day = (ms?: number) =>
   ms === undefined ? "—" : new Date(ms).toISOString().slice(0, 10);
 
-/** Who has signed up, for ADMIN_EMAILS only. */
-export const adminPage = (users: UserRecord[]) =>
+/** One person's plan on /admin. */
+export interface AdminPlan {
+  plan: PlanView["plan"];
+  source: PlanSource;
+  record: PlanRecord | null;
+}
+
+const planLabel = ({ plan, source, record }: AdminPlan) => {
+  if (plan === "free")
+    return record?.status ? `Free (Stripe: ${record.status})` : "Free";
+  if (source === "stripe")
+    return `Pro (Stripe: ${record?.status ?? "active"}${record?.currentPeriodEnd ? `, to ${day(record.currentPeriodEnd)}` : ""})`;
+  return `Pro (${source})`;
+};
+
+/** Grant Pro by hand, or take the grant back: a same-site form post. */
+const compForm = (email: string, { record }: AdminPlan) =>
+  `<form method="post" action="/admin/plan"><input type="hidden" name="email" value="${escapeHtml(email)}">${
+    record?.comp
+      ? `<input type="hidden" name="plan" value="none"><button type="submit">End comp</button>`
+      : `<input type="hidden" name="plan" value="pro"><button type="submit">Comp Pro</button>`
+  }</form>`;
+
+/** Who has signed up, and on which plan, for ADMIN_EMAILS only. */
+export const adminPage = (
+  users: UserRecord[],
+  planFor: (email: string) => AdminPlan,
+) =>
   new Response(
     shell(
       `<h1>Signed up</h1>
-<p>${users.length} ${users.length === 1 ? "person" : "people"}. “Last seen” is accurate to a day; people who signed in before 29 October 2026 have no dates until they come back.</p>
+<p>${users.length} ${users.length === 1 ? "person" : "people"}. “Last seen” is accurate to a day; people who signed in before 29 October 2026 have no dates until they come back. A comp is Pro until it's ended, whatever Stripe says.</p>
 <div class="table"><table>
-<thead><tr><th>Email</th><th>Name</th><th>First seen</th><th>Last seen</th></tr></thead>
+<thead><tr><th>Email</th><th>Name</th><th>First seen</th><th>Last seen</th><th>Plan</th><th></th></tr></thead>
 <tbody>
 ${users
-  .map(
-    (user) =>
-      `<tr><td>${escapeHtml(user.email)}</td><td>${escapeHtml(user.name ?? "")}</td><td class="when">${day(user.first)}</td><td class="when">${day(user.last)}</td></tr>`,
-  )
+  .map((user) => {
+    const plan = planFor(user.email);
+    const comp =
+      plan.source === "owner" || plan.source === "admin"
+        ? ""
+        : compForm(user.email, plan);
+    return `<tr><td>${escapeHtml(user.email)}</td><td>${escapeHtml(user.name ?? "")}</td><td class="when">${day(user.first)}</td><td class="when">${day(user.last)}</td><td>${escapeHtml(planLabel(plan))}</td><td>${comp}</td></tr>`;
+  })
   .join("\n")}
-</tbody></table></div>`,
+</tbody></table></div>
+<form method="post" action="/admin/plan" class="setup">
+<h2>Comp someone who hasn't signed up yet</h2>
+<p><input type="email" name="email" required placeholder="name@example.com"> <input type="hidden" name="plan" value="pro"><button type="submit">Comp Pro</button></p>
+</form>`,
       "wide",
     ),
     {
@@ -136,3 +200,84 @@ ${users
       },
     },
   );
+
+/**
+ * The plans, public: Free, Pro and Team (coming soon), with what to do
+ * next for whoever is looking, signed in or not.
+ */
+export const pricingPage = (
+  viewer: PlanView | null,
+  notice: string | null = null,
+) => {
+  const proAction = !viewer
+    ? `<a class="action" href="/signin?next=%2Fpricing">Sign in to upgrade</a>`
+    : viewer.plan === "pro"
+      ? viewer.source === "stripe"
+        ? `<form method="post" action="/billing/portal"><button type="submit">Manage billing</button></form>`
+        : `<p class="note">You're on Pro.</p>`
+      : viewer.billing
+        ? `<form method="post" action="/billing/checkout"><button type="submit">Upgrade to Pro</button></form>`
+        : `<p class="note">Pro is coming soon.</p>`;
+  const card = (
+    name: string,
+    price: string,
+    per: string,
+    points: string[],
+    action: string,
+    current: boolean,
+  ) => `<section class="plan${current ? " current" : ""}">
+<h2>${name}${current ? " · your plan" : ""}</h2>
+<p class="price">${price} <small>${per}</small></p>
+<ul>${points.map((point) => `<li>${point}</li>`).join("")}</ul>
+${action}
+</section>`;
+  return new Response(
+    shell(
+      `<h1>Plans</h1>
+${notice ? `<p class="notice">${notice}</p>` : ""}
+<p>Every plan has the questions, the chat, the living plan, diagrams and mockups. A live interview is one an agent is waiting on for answers; half-done ones nobody is waiting on don't count.</p>
+<div class="plans">
+${card(
+  "Free",
+  "$0",
+  "",
+  [
+    "Up to 3 live interviews at once",
+    "As many interviews as you like",
+    "Answer interviews others assign to you",
+  ],
+  "",
+  viewer?.plan === "free",
+)}
+${card(
+  "Pro",
+  "$5",
+  "a month",
+  [
+    "No limit on live interviews",
+    "Assign interviews to other people to answer",
+    "Everything in Free",
+  ],
+  proAction,
+  viewer?.plan === "pro",
+)}
+${card(
+  "Team",
+  "$5",
+  "a user, a month",
+  ["Shared workspaces for your team", "Everything in Pro, for everyone"],
+  `<p class="note">Coming soon.</p>`,
+  false,
+)}
+</div>
+<p><a href="/">${viewer ? "Back to your interviews" : "Sign in"}</a></p>`,
+      "wide",
+    ),
+    {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    },
+  );
+};

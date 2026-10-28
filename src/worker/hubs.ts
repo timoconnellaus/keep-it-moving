@@ -3,7 +3,7 @@ import type { Env } from "./env.js";
 /** The owner's workspace keeps the name it had when there was only one. */
 const OWNER_HUB = "interviews";
 
-const isOwner = (email: string, env: Env) =>
+export const isOwner = (email: string, env: Env) =>
   !!env.OWNER_EMAIL &&
   email.toLowerCase() === env.OWNER_EMAIL.trim().toLowerCase();
 

@@ -12,6 +12,7 @@ Use the `kim` CLI (Keep it moving) to run an adaptive interview in the user's br
 - If `kim` isn't installed, ask the user to install it (Node.js 22.13 or newer): `npm install -g https://keep-it-moving.zerobsai.com/cli.tgz`.
 - If a command says the CLI isn't signed in, ask the user to run `kim login` in their own terminal; it signs in with Google in the browser. `kim whoami` checks.
 - If `kim` says on stderr that an update is available, mention it to the user; `kim update` installs it.
+- If a command fails with `"code": "plan_limit"`, the user's Free plan refused it; don't retry or work around it. Relay the error to the user in plain words. For too many live interviews (agents waiting on at most 3 at once), name the interviews in `live` and suggest stopping one they're done with (`kim session stop <id>`) or upgrading at `upgradeUrl`. For assigning, which is Pro only, offer the upgrade or to run the interview with the user instead. When `session create --assign` is refused, the interview was still created, unassigned; its id is in the error.
 
 ## Start or resume
 

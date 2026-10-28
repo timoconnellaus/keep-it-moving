@@ -1383,8 +1383,30 @@ h1 {
   text-align: left;
   cursor: pointer;
 }
-.account-menu button:hover {
+.account-menu button:hover,
+.account-plan a:hover {
   background: var(--line);
+}
+.account-plan {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0 4px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.account-plan > span {
+  padding: 2px 8px 4px;
+  font-weight: 600;
+}
+.account-plan .account-soon {
+  color: var(--muted);
+  font-weight: 400;
+}
+.account-plan a {
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
 }
 .home {
   width: min(960px, calc(100% - 32px));
@@ -1733,6 +1755,18 @@ h1 {
 .assign-actions {
   display: flex;
   gap: 8px;
+}
+.pro-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.assign-menu .assign-pro {
+  color: inherit;
 }
 .assign-menu .assign-error {
   color: #b42318;

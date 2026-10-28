@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { SessionView } from "../shared/schema.js";
+import { onFree, useMe } from "./me.js";
 
 /**
  * Hands the interview to someone else to answer: they sign in with Google as
@@ -19,6 +20,8 @@ export function Assign({
   const [email, setEmail] = useState(session.assignee ?? "");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  // Free can't assign; an assignment made earlier keeps working.
+  const locked = onFree(useMe());
   const root = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) return;
@@ -64,9 +67,16 @@ export function Assign({
         title="Have someone else answer this interview"
       >
         {session.assignee ? `Assigned to ${session.assignee}` : "Assign"}
+        {locked && !session.assignee && <span className="pro-badge">Pro</span>}
       </button>
       {open && (
         <div className="assign-menu" role="dialog" aria-label="Assign">
+          {locked && (
+            <p className="assign-pro">
+              Assigning interviews to other people is a Pro feature.{" "}
+              <a href="/pricing">Upgrade to Pro</a>
+            </p>
+          )}
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -79,10 +89,11 @@ export function Assign({
                 type="email"
                 value={email}
                 placeholder="name@example.com"
+                disabled={locked}
                 onChange={(event) => setEmail(event.target.value)}
               />
             </label>
-            <button type="submit" disabled={!email.trim()}>
+            <button type="submit" disabled={locked || !email.trim()}>
               {session.assignee ? "Reassign" : "Assign"}
             </button>
           </form>

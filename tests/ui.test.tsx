@@ -183,6 +183,36 @@ describe("assigning an interview", () => {
   });
 });
 
+describe("assigning on the Free plan", () => {
+  it("shows Assign as a Pro feature, with the way to upgrade", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/me")
+          ? {
+              ok: true,
+              json: async () => ({
+                email: "ann@example.com",
+                plan: { plan: "free", source: null, billing: true },
+              }),
+            }
+          : String(url).endsWith("/overview")
+            ? { ok: true, json: async () => ({ sessions: [] }) }
+            : { ok: true, json: async () => structuredClone(state) },
+      ),
+    );
+    render(<App />);
+    await screen.findByText("Choose a direction");
+    const button = await screen.findByRole("button", { name: "Assign Pro" });
+    fireEvent.click(button);
+    expect(screen.getByText(/is a Pro feature/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Upgrade to Pro" }),
+    ).toHaveAttribute("href", "/pricing");
+    expect(screen.getByRole("textbox")).toBeDisabled();
+  });
+});
+
 describe("questionnaire UI seam", () => {
   it("does not close an already-closed state socket during refresh cleanup", async () => {
     const { unmount } = render(<App />);

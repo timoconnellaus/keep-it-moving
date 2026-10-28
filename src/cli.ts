@@ -97,10 +97,20 @@ async function sessionCommand(action: string | undefined, args: string[]) {
     const assignee = flag(args, "--assign");
     if (!assignee) return output(session);
     const { id } = session as { id: string };
-    return output({
-      ...(session as object),
-      ...((await assign(id, assignee)) as object),
-    });
+    try {
+      return output({
+        ...(session as object),
+        ...((await assign(id, assignee)) as object),
+      });
+    } catch (error) {
+      // Say what was made, so a refused assign doesn't strand it.
+      if (error instanceof ApiError)
+        throw new ApiError(
+          `${error.message} The interview was created without an assignee: ${id}`,
+          { ...error.details, session },
+        );
+      throw error;
+    }
   }
   if (action === "list")
     return output(
@@ -685,12 +695,19 @@ async function watchInterview(
     });
     if (ended === "done") return;
     if (ended instanceof Error) throw ended;
-    // A refused upgrade only says it failed: ask over HTTP why.
+    // A refused upgrade only says it failed: ask the same route over HTTP
+    // why, such as the Free plan's limit. 426 means it would take a socket.
     const probe = await authorizedFetch(
-      `/api/sessions/${encodeURIComponent(id)}`,
+      `/api/sessions/${encodeURIComponent(id)}/socket?${new URLSearchParams(query())}`,
     ).catch(() => null);
-    if (probe && !probe.ok && probe.status !== 429 && probe.status < 500)
-      throw new Error(await errorMessage(probe));
+    if (
+      probe &&
+      !probe.ok &&
+      probe.status !== 426 &&
+      probe.status !== 429 &&
+      probe.status < 500
+    )
+      throw await apiError(probe);
     const backoff = Math.min(RECONNECT_MAX_MS, 1_000 * 2 ** attempt);
     await new Promise((resolve) =>
       setTimeout(resolve, backoff / 2 + Math.random() * (backoff / 2)),
@@ -730,16 +747,37 @@ const shellQuote = (value: string) =>
 
 async function api(path: string, init?: RequestInit): Promise<unknown> {
   const response = await authorizedFetch(path, init);
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw await apiError(response);
   return response.json();
 }
-async function errorMessage(response: Response): Promise<string> {
+
+/**
+ * A refusal from the service. A plan limit (402, code "plan_limit") keeps
+ * the rest of its body, such as the live interviews and the upgrade URL,
+ * and prints it beside the error.
+ */
+class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly details: Record<string, unknown> = {},
+  ) {
+    super(message);
+  }
+}
+async function apiError(response: Response): Promise<ApiError> {
   if (response.status === 401)
-    return "Not signed in. Run `kim login` in a terminal.";
+    return new ApiError("Not signed in. Run `kim login` in a terminal.");
   const value = (await response
     .json()
-    .catch(() => ({ error: response.statusText }))) as { error?: string };
-  return value.error ?? `HTTP ${response.status}`;
+    .catch(() => ({ error: response.statusText }))) as {
+    error?: string;
+    code?: string;
+  };
+  const { error, ...details } = value;
+  return new ApiError(
+    error ?? `HTTP ${response.status}`,
+    value.code === "plan_limit" ? details : {},
+  );
 }
 
 /** A request with the stored access token, refreshed when it is about to expire or is refused. */
@@ -1413,7 +1451,10 @@ KEEP_IT_MOVING_URL points at another deployment, such as wrangler dev.
 
 main(process.argv.slice(2)).catch((error: unknown) => {
   process.stderr.write(
-    `${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}\n`,
+    `${JSON.stringify({
+      error: error instanceof Error ? error.message : String(error),
+      ...(error instanceof ApiError ? error.details : {}),
+    })}\n`,
   );
   process.exitCode = 1;
 });
