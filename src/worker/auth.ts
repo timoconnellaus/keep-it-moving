@@ -2,7 +2,8 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { sameSite } from "../server/hub.js";
 import { ttlCache } from "./cache.js";
 import type { Env } from "./env.js";
-import { page } from "./pages.js";
+import { link, linkedEmails, MAX_LINKED } from "./links.js";
+import { escapeHtml, page } from "./pages.js";
 import { saveProfile } from "./shares.js";
 import { recordUser } from "./users.js";
 
@@ -60,27 +61,72 @@ export async function googleStart(request: Request, env: Env) {
   const origin = callbackOrigin(url, env);
   if (url.origin !== origin)
     return Response.redirect(`${origin}${url.pathname}${url.search}`, 302);
-  const flow = {
+  return toGoogle(env, origin, {
     state: random(),
     nonce: random(),
     verifier: random(),
     next: safeNext(url.searchParams.get("next")),
-  };
+  });
+}
+
+/**
+ * "Link another Google account": a form post from our own page, never a
+ * link another site could make, and only from a real Google session. The
+ * flow carries who is linking and a hash of their session, so the callback
+ * links only if the browser is still in that same session.
+ */
+export async function linkStart(request: Request, env: Env, user: User) {
+  if (!env.GOOGLE_CLIENT_ID) return notSetUp();
+  if (!sameSite(request))
+    return new Response("Cross-site request refused", { status: 403 });
+  const url = new URL(request.url);
+  const origin = callbackOrigin(url, env);
+  const id = cookie(request, SESSION_COOKIE);
+  // The callback lands on the public origin, where this session isn't.
+  if (url.origin !== origin || !id)
+    return page(
+      400,
+      `Link accounts while signed in with Google at <a href="${origin}/">${escapeHtml(new URL(origin).host)}</a>.`,
+    );
+  if ((await linkedEmails(env, user.email)).length >= MAX_LINKED)
+    return page(409, tooMany);
+  const form = await request.formData().catch(() => null);
+  const next = form?.get("next");
+  return toGoogle(
+    env,
+    origin,
+    {
+      state: random(),
+      nonce: random(),
+      verifier: random(),
+      next: safeNext(typeof next === "string" ? next : null),
+      link: { email: user.email.toLowerCase(), session: await sha256(id) },
+    },
+    303,
+  );
+}
+
+const tooMany = `At most ${MAX_LINKED} accounts can be linked together. Unlink one from the Account menu first.`;
+
+/** Off to Google's sign-in, with the flow in a short-lived cookie. */
+async function toGoogle(env: Env, origin: string, flow: Flow, status = 302) {
   const google = new URL(GOOGLE_AUTHORIZE);
   google.search = new URLSearchParams({
-    client_id: env.GOOGLE_CLIENT_ID,
+    client_id: env.GOOGLE_CLIENT_ID!,
     redirect_uri: `${origin}/auth/google/callback`,
     response_type: "code",
     scope: "openid email profile",
     state: flow.state,
     nonce: flow.nonce,
-    code_challenge: await challenge(flow.verifier),
+    code_challenge: await sha256(flow.verifier),
     code_challenge_method: "S256",
     prompt: "select_account",
   }).toString();
-  return redirect(google.toString(), [
-    setCookie(FLOW_COOKIE, encode(flow), FLOW_TTL),
-  ]);
+  return redirect(
+    google.toString(),
+    [setCookie(FLOW_COOKIE, encode(flow), FLOW_TTL)],
+    status,
+  );
 }
 
 /** Google's redirect back: checks it, then starts a browser session. */
@@ -122,6 +168,7 @@ export async function googleCallback(request: Request, env: Env) {
     return page(400, signInAgain("That sign-in link was not ours."));
   if (typeof claims.email !== "string" || claims.email_verified !== true)
     return page(403, signInAgain("That Google account has no verified email."));
+  if (flow.link) return linked(request, env, flow, claims.email.toLowerCase());
   const user: User = { email: claims.email.toLowerCase() };
   if (typeof claims.name === "string") user.name = claims.name;
   if (typeof claims.picture === "string") user.picture = claims.picture;
@@ -133,6 +180,33 @@ export async function googleCallback(request: Request, env: Env) {
     setCookie(SESSION_COOKIE, id, SESSION_TTL),
     setCookie(FLOW_COOKIE, "", 0),
   ]);
+}
+
+/**
+ * Back from Google as the account to link. The browser must still be in
+ * the session that started it; it stays signed in as that account.
+ */
+async function linked(request: Request, env: Env, flow: Flow, email: string) {
+  const id = cookie(request, SESSION_COOKIE);
+  const user = await currentUser(request, env);
+  if (
+    !id ||
+    (await sha256(id)) !== flow.link!.session ||
+    user?.email.toLowerCase() !== flow.link!.email
+  )
+    return page(
+      403,
+      `This browser's sign-in changed while you were at Google, so nothing was linked. <a href="/">Try again</a>.`,
+    );
+  const refused = await link(env, user.email, email);
+  if (refused)
+    return page(
+      refused === "full" ? 409 : 400,
+      refused === "full"
+        ? tooMany
+        : `That's the account you're signed in as. To link another, pick it at Google. <a href="${escapeHtml(flow.next)}">Back</a>.`,
+    );
+  return redirect(flow.next, [setCookie(FLOW_COOKIE, "", 0)]);
 }
 
 /** Ends the browser session; a form posts here, so check it is our own page. */
@@ -216,6 +290,8 @@ interface Flow {
   nonce: string;
   verifier: string;
   next: string;
+  /** Set when linking: who is signed in, and a hash of their session id. */
+  link?: { email: string; session: string };
 }
 
 const encode = (flow: Flow) =>
@@ -232,11 +308,24 @@ function decode(value: string | null): Flow | null {
         Uint8Array.from(binary, (character) => character.charCodeAt(0)),
       ),
     ) as Partial<Flow>;
-    return typeof flow.state === "string" &&
-      typeof flow.nonce === "string" &&
-      typeof flow.verifier === "string"
-      ? { ...(flow as Flow), next: safeNext(flow.next ?? null) }
-      : null;
+    if (
+      typeof flow.state !== "string" ||
+      typeof flow.nonce !== "string" ||
+      typeof flow.verifier !== "string"
+    )
+      return null;
+    const decoded: Flow = {
+      state: flow.state,
+      nonce: flow.nonce,
+      verifier: flow.verifier,
+      next: safeNext(flow.next ?? null),
+    };
+    if (
+      typeof flow.link?.email === "string" &&
+      typeof flow.link.session === "string"
+    )
+      decoded.link = { email: flow.link.email, session: flow.link.session };
+    return decoded;
   } catch {
     return null;
   }
@@ -246,13 +335,15 @@ function decode(value: string | null): Flow | null {
 const random = () =>
   base64url(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
 
-async function challenge(verifier: string) {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(verifier),
+/** SHA-256, base64url: the PKCE challenge, and a session id kept in a flow. */
+const sha256 = async (text: string) =>
+  base64url(
+    String.fromCharCode(
+      ...new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
+      ),
+    ),
   );
-  return base64url(String.fromCharCode(...new Uint8Array(digest)));
-}
 
 const base64url = (binary: string) =>
   btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");

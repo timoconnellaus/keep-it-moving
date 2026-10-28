@@ -4,6 +4,7 @@ import {
   googleCallback,
   googleStart,
   isLoopback,
+  linkStart,
   logout,
   safeNext,
   signInUrl,
@@ -14,13 +15,16 @@ import { ASSIGNED_BY_HEADER, RESPONDENT_HEADER } from "../server/hub.js";
 import type { Env } from "./env.js";
 import { hubFor } from "./hubs.js";
 import { isAdmin, listUsers } from "./users.js";
+import { linksResponse, samePerson, unlinkAccount } from "./links.js";
 import { adminPage, escapeHtml, page, signInPage } from "./pages.js";
 import {
   forgetShare,
   interviewToken,
   maskEmail,
+  ownerOf,
   profileName,
   recordAssignment,
+  recordOwner,
   shareFor,
   sharedWith,
   type Assignment,
@@ -117,7 +121,12 @@ const agentApi: ExportedHandler<Env> = {
         token?: string;
         assignee?: string | null;
       };
-      if (token && assignee) await forgetShare(env, token, assignee);
+      if (token) await forgetShare(env, token, assignee ?? null);
+    }
+    // Remember whose it is, for a link opened from another account.
+    if (request.method === "POST" && path === "/api/sessions" && response.ok) {
+      const { token } = (await response.clone().json()) as { token?: string };
+      if (token) await recordOwner(env, token, email);
     }
     // A new key remembers whose it is, so it reaches the same workspace.
     if (
@@ -168,6 +177,14 @@ const site: ExportedHandler<Env> = {
     }
     if (url.pathname === "/authorize") return authorize(request, env, user);
     if (url.pathname === "/api/browser/me") return Response.json(user);
+    if (url.pathname === "/auth/google/link" && request.method === "POST")
+      return linkStart(request, env, user);
+    if (url.pathname === "/api/browser/links") return linksResponse(env, user);
+    if (
+      url.pathname === "/api/browser/links/unlink" &&
+      request.method === "POST"
+    )
+      return unlinkAccount(request, env, user);
     // Not found, not forbidden: no hint that it exists.
     if (url.pathname === "/admin")
       return isAdmin(env, user.email)
@@ -180,6 +197,10 @@ const site: ExportedHandler<Env> = {
     const share = token ? await shareFor(env, token) : null;
     if (share && share.owner !== user.email.toLowerCase())
       return respond(request, env, user, share);
+    if (token && !share) {
+      const elsewhere = await notHere(request, env, user, token);
+      if (elsewhere) return elsewhere;
+    }
     if (request.method === "POST" && BROWSER_ASSIGN.test(url.pathname))
       return assign(
         env,
@@ -200,24 +221,89 @@ const site: ExportedHandler<Env> = {
 };
 
 /**
- * A request for an interview assigned to someone. Its assignee reaches it in
- * the owner's hub, marked as the respondent so the hub lets them see that
- * one interview and nothing else; anyone else is told whose it is.
+ * A request for an interview assigned to someone. Its assignee, or an
+ * account linked to theirs, reaches it in the owner's hub, marked as the
+ * assignee so the hub lets them see that one interview and nothing else,
+ * and their answers carry the address it was sent to. Anyone else is told
+ * whose it is.
  */
-function respond(request: Request, env: Env, user: User, share: Share) {
+async function respond(request: Request, env: Env, user: User, share: Share) {
   const url = new URL(request.url);
   const isPage = url.pathname.startsWith("/s/");
-  if (share.assignee !== user.email.toLowerCase())
-    return isPage
-      ? page(
-          403,
-          `This interview was shared with ${escapeHtml(maskEmail(share.assignee))}, and you're signed in as ${escapeHtml(user.email)}. <a href="${signInUrl(url, true)}">Switch account</a>.`,
-        )
-      : Response.json({ error: "Not shared with you" }, { status: 403 });
+  if (!(await samePerson(env, user.email, share.assignee))) {
+    const masked = maskEmail(share.assignee);
+    return elsewhereResponse(
+      url,
+      403,
+      "sent-elsewhere",
+      `This interview was sent to ${masked}. You're signed in as ${user.email}.`,
+      `<form method="post" action="/auth/google/link"><input type="hidden" name="next" value="${escapeHtml(url.pathname)}"><button class="google" type="submit">Link ${escapeHtml(masked)} to this account</button></form>`,
+    );
+  }
   if (isPage) return env.ASSETS.fetch(new Request(new URL("/index.html", url)));
   const forwarded = forwardable(request);
-  forwarded.headers.set(RESPONDENT_HEADER, user.email.toLowerCase());
+  forwarded.headers.set(RESPONDENT_HEADER, share.assignee);
   return hubFor(env, share.owner).fetch(forwarded);
+}
+
+/**
+ * An interview that isn't assigned, opened by someone other than its
+ * owner: the token would reach their own workspace, which doesn't have it,
+ * and the page would say it was deleted. So say whose it is (masked, to
+ * someone holding the private link), or that it isn't here. Null when it
+ * is the user's own.
+ */
+async function notHere(request: Request, env: Env, user: User, token: string) {
+  const url = new URL(request.url);
+  const me = user.email.toLowerCase();
+  const owner = await ownerOf(env, token);
+  if (owner === me) return null;
+  if (owner)
+    return elsewhereResponse(
+      url,
+      403,
+      "other-account",
+      `This interview is in another account (${maskEmail(owner)}). You're signed in as ${user.email}.`,
+    );
+  // Not indexed: from before the index, or deleted. A page asks the user's
+  // own workspace, and remembers the answer when it's there; other calls go
+  // there anyway, which answers for itself.
+  if (!url.pathname.startsWith("/s/")) return null;
+  const found = await hubFor(env, me).fetch(
+    new Request(new URL(`/api/browser/${token}/session`, url)),
+  );
+  if (found.ok) {
+    await recordOwner(env, token, me);
+    return null;
+  }
+  return elsewhereResponse(
+    url,
+    404,
+    "not-here",
+    `This interview isn't in ${user.email}. It may be in another Google account you use, or it was deleted.`,
+  );
+}
+
+/**
+ * Why this account can't open an interview, in plain text: a page, with
+ * Switch account and any other way in (HTML), or for the app's API calls
+ * JSON with a code.
+ */
+function elsewhereResponse(
+  url: URL,
+  status: number,
+  code: string,
+  message: string,
+  action = "",
+) {
+  if (!url.pathname.startsWith("/s/"))
+    return Response.json({ error: message, code }, { status });
+  return page(
+    status,
+    `${escapeHtml(message)}</p>
+${action}
+<p><a href="${signInUrl(url, true)}">Switch account</a>.`,
+  );
 }
 
 /**
@@ -242,9 +328,11 @@ async function authorize(request: Request, env: Env, user: User) {
 
 /**
  * Routes anyone can call that write KV or start a sign-in: the CLI's client
- * registration and Google sign-in. A `kim login` calls each once.
+ * registration, Google sign-in, and linking or unlinking an account. A
+ * `kim login` calls each sign-in route once.
  */
-const RATE_LIMITED = /^\/(register|auth\/google\/(start|callback))$/;
+const RATE_LIMITED =
+  /^\/(register|auth\/google\/(start|callback|link)|api\/browser\/links\/unlink)$/;
 
 /** A 429 once a client IP has called the rate-limited routes too often. */
 async function rateLimited(request: Request, env: Env) {
