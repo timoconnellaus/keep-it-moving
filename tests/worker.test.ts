@@ -828,7 +828,10 @@ describe("linked accounts", () => {
       ).linked;
     /** An interview from Ann, assigned to `assignee`. */
     const assignTo = async (assignee: string) => {
-      const ann = await s.signIn(person("ann"));
+      const annEmail = person("ann");
+      // Assigning is Pro.
+      await s.pro(annEmail);
+      const ann = await s.signIn(annEmail);
       const token = await s.cliToken(ann);
       const agent = (path: string, init: RequestInit = {}) =>
         s.call(path, {
@@ -873,9 +876,9 @@ describe("linked accounts", () => {
     expect(back.headers.get("location")).toBe("/s/abc");
     // No new session: the only cookie it sets clears the flow.
     expect(cookiesOf(back)).toBe("");
-    expect(await (await call("/api/browser/me", { cookie })).json()).toEqual({
-      email: work,
-    });
+    expect(
+      await (await call("/api/browser/me", { cookie })).json(),
+    ).toMatchObject({ email: work });
     expect(await linkedTo(cookie)).toEqual([home]);
     expect(await linkedTo(await signIn(home))).toEqual([work]);
     // Transitive: linking a third to the second joins all three.
@@ -1138,6 +1141,7 @@ describe("an interview opened from the wrong account", () => {
   async function opened() {
     const s = setup();
     const timEmail = person("tim");
+    await s.pro(timEmail);
     const tim = await s.signIn(timEmail);
     const work = await s.signIn(person("work"));
     const { headers } = s.bearer(await s.cliToken(tim));
@@ -1349,6 +1353,7 @@ describe("rate limits", () => {
 
   it("limits a user's KV writes more tightly: assigning and making keys", async () => {
     const s = setup();
+    await s.pro("ann@example.com");
     const ann = await s.signIn("ann@example.com");
     const token = await s.cliToken(ann);
     const session = (await (
@@ -1419,6 +1424,7 @@ describe("KV reads", () => {
 
   it("lists Shared with you from KV once, and again after an assignment", async () => {
     const s = setup();
+    await s.pro("ann@example.com");
     const ann = await s.signIn("ann@example.com");
     const cara = await s.signIn("cara@example.com");
     const token = await s.cliToken(ann);
@@ -1573,7 +1579,7 @@ describe("the Stripe webhook", () => {
     customer: "cus_1",
     status: "active",
     cancel_at_period_end: false,
-    metadata: { email: "ann@example.com" },
+    metadata: { email: "ann@example.com", app: "keep-it-moving" },
     items: { data: [{ quantity: 1, current_period_end: 1_900_000_000 }] },
     ...fields,
   });
@@ -1588,6 +1594,7 @@ describe("the Stripe webhook", () => {
         customer: "cus_1",
         subscription: "sub_1",
         client_reference_id: "ann@example.com",
+        metadata: { email: "ann@example.com", app: "keep-it-moving" },
         payment_status: "paid",
       },
     },
@@ -1616,6 +1623,49 @@ describe("the Stripe webhook", () => {
     // Any v1 may match, as while a rolled secret is still valid.
     const rolled = (payload: string) => `${sign(payload)},v1=${"0".repeat(64)}`;
     expect((await send(completed, rolled)).status).toBe(200);
+  });
+
+  it("leaves the Stripe account's other products alone", async () => {
+    const { send, record, kv } = billing();
+    // Another product's checkout and subscription: no tag, and not ours.
+    const foreignCheckout = {
+      ...completed,
+      id: "evt_other_checkout",
+      data: {
+        object: {
+          ...completed.data.object,
+          client_reference_id: null,
+          metadata: {},
+          customer_details: { email: "ann@example.com" },
+        },
+      },
+    };
+    const foreignUpdate = updated("evt_other_sub", 1_800_000_100, {
+      id: "sub_other",
+      metadata: {},
+    });
+    for (const event of [foreignCheckout, foreignUpdate]) {
+      const response = await send(event);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ignored: true });
+    }
+    expect(record()).toBeNull();
+    expect([...kv.data.keys()].some((key) => key.startsWith("stripe-"))).toBe(
+      false,
+    );
+    // Once Ann has Pro, another subscription of hers still isn't ours.
+    await send(completed);
+    await send(
+      updated("evt_other_sub_2", 1_800_000_300, {
+        id: "sub_other",
+        status: "canceled",
+        metadata: {},
+      }),
+    );
+    expect(record()).toMatchObject({
+      subscriptionId: "sub_1",
+      status: "active",
+    });
   });
 
   it("puts a paid checkout on Pro, and follows the subscription after", async () => {
@@ -1728,6 +1778,7 @@ describe("upgrading", () => {
       client_reference_id: "ann@example.com",
       customer_email: "ann@example.com",
       "subscription_data[metadata][email]": "ann@example.com",
+      "subscription_data[metadata][app]": "keep-it-moving",
       success_url: `${ORIGIN}/pricing?checkout=done`,
     });
     // Another site can't start one.

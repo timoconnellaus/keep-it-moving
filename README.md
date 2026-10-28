@@ -114,6 +114,8 @@ To set up Stripe:
 3. Add a webhook endpoint at `https://keep-it-moving.zerobsai.com/stripe/webhook` (`PUBLIC_URL` + `/stripe/webhook`) for `checkout.session.completed`, `customer.subscription.updated` and `customer.subscription.deleted`, and copy its signing secret (`whsec_…`).
 4. Set the three secrets: `npx wrangler secret put STRIPE_SECRET_KEY` (the secret key, or a restricted key with write on Checkout Sessions and Customer portal and read on Customers and Subscriptions), `STRIPE_WEBHOOK_SECRET` and `STRIPE_PRICE_PRO`.
 
+The Stripe account can sell other things too. Every Keep it moving checkout and subscription carries `metadata.app = "keep-it-moving"`, and the webhook ignores events without it (acknowledged, nothing stored), apart from updates to the exact subscription it already recorded. On a shared account, also add a portal configuration of its own (Settings → Billing → Customer portal → new configuration, with no product switching) and set its `bpc_…` id as `STRIPE_PORTAL_CONFIGURATION`, so the portal never offers the account's other products.
+
 Do it in test mode first, with test-mode keys and a test card, then again in live mode. [docs/billing.md](docs/billing.md) has more.
 
 ## Desktop app

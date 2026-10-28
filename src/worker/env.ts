@@ -38,6 +38,11 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET?: string;
   /** The recurring Price for Pro, $5 a month (price_…). */
   STRIPE_PRICE_PRO?: string;
+  /**
+   * A Customer Portal configuration of our own (bpc_…), so a shared Stripe
+   * account's portal doesn't offer its other products. Optional.
+   */
+  STRIPE_PORTAL_CONFIGURATION?: string;
   /** Local development only: skips Google and signs in as this address on localhost. */
   DEV_EMAIL?: string;
 }

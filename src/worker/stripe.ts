@@ -18,6 +18,13 @@ import {
  */
 export const STRIPE_API = "https://api.stripe.com/v1";
 
+/**
+ * Marks our checkouts and subscriptions. The Stripe account may sell other
+ * things, and its webhook sends their events here too: anything without
+ * this tag, or that isn't the subscription we recorded, is left alone.
+ */
+export const STRIPE_APP = "keep-it-moving";
+
 /** Which user a Stripe customer is, for subscription events. */
 const customerKey = (customer: string) => `stripe-customer:${customer}`;
 /** Events already applied: Stripe delivers at least once. */
@@ -80,8 +87,10 @@ export async function checkout(request: Request, env: Env, user: User) {
     cancel_url: `${origin}/pricing`,
     client_reference_id: email,
     "metadata[email]": email,
+    "metadata[app]": STRIPE_APP,
     // On the subscription too, so its events say whose it is.
     "subscription_data[metadata][email]": email,
+    "subscription_data[metadata][app]": STRIPE_APP,
   };
   if (record?.customerId) params.customer = record.customerId;
   else params.customer_email = email;
@@ -119,6 +128,10 @@ export async function portal(request: Request, env: Env, user: User) {
       {
         customer: record.customerId,
         return_url: `${new URL(env.PUBLIC_URL).origin}/`,
+        // Our own portal settings, so it never offers the account's other products.
+        ...(env.STRIPE_PORTAL_CONFIGURATION
+          ? { configuration: env.STRIPE_PORTAL_CONFIGURATION }
+          : {}),
       },
     );
     if (!session.url) throw new Error("no portal URL");
@@ -174,25 +187,26 @@ export async function stripeWebhook(request: Request, env: Env) {
   const event = JSON.parse(payload) as StripeEvent;
   if (await env.OAUTH_KV.get(eventKey(event.id)))
     return Response.json({ received: true, duplicate: true });
-  await applyEvent(env, event);
+  // Another product's event: acknowledged, and nothing stored.
+  if (!(await applyEvent(env, event)))
+    return Response.json({ received: true, ignored: true });
   await env.OAUTH_KV.put(eventKey(event.id), String(event.created), {
     expirationTtl: EVENT_TTL,
   });
   return Response.json({ received: true });
 }
 
-async function applyEvent(env: Env, event: StripeEvent) {
+/** Applies one of our events; false for anything that isn't ours. */
+async function applyEvent(env: Env, event: StripeEvent): Promise<boolean> {
   const object = event.data.object;
   if (event.type === "checkout.session.completed") {
-    if (object.mode !== "subscription") return;
-    const email = stringField(
-      object.client_reference_id,
-      (object.metadata as Record<string, string> | undefined)?.email,
-      (object.customer_details as { email?: string } | undefined)?.email,
-    );
+    const metadata = object.metadata as Record<string, string> | undefined;
+    if (object.mode !== "subscription" || metadata?.app !== STRIPE_APP)
+      return false;
+    const email = stringField(object.client_reference_id, metadata.email);
     const customer = stringField(object.customer);
     const id = stringField(object.subscription);
-    if (!email || !customer || !id) return;
+    if (!email || !customer || !id) return false;
     await env.OAUTH_KV.put(customerKey(customer), email.toLowerCase());
     // The session says it was paid, but not until when: ask Stripe.
     const subscription = await stripe<StripeSubscription>(
@@ -202,7 +216,7 @@ async function applyEvent(env: Env, event: StripeEvent) {
     const paid =
       object.payment_status === "paid" ||
       object.payment_status === "no_payment_required";
-    return applySubscription(
+    await applySubscription(
       env,
       email,
       event,
@@ -212,18 +226,29 @@ async function applyEvent(env: Env, event: StripeEvent) {
         status: paid ? "active" : "incomplete",
       },
     );
+    return true;
   }
   if (
     event.type === "customer.subscription.updated" ||
     event.type === "customer.subscription.deleted"
   ) {
     const subscription = object as unknown as StripeSubscription;
+    const tagged = subscription.metadata?.app === STRIPE_APP;
     const email =
-      subscription.metadata?.email ??
+      (tagged ? subscription.metadata?.email : undefined) ??
       (await env.OAUTH_KV.get(customerKey(subscription.customer)));
-    if (!email) return;
-    return applySubscription(env, email, event, subscription);
+    if (!email) return false;
+    // Untagged, it's ours only if it's the subscription we recorded: one of
+    // our customers may also subscribe to the account's other products.
+    if (
+      !tagged &&
+      (await planRecord(env, email))?.subscriptionId !== subscription.id
+    )
+      return false;
+    await applySubscription(env, email, event, subscription);
+    return true;
   }
+  return false;
 }
 
 async function applySubscription(
