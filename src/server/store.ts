@@ -1,5 +1,6 @@
 import {
   AnswerInputSchema,
+  ARTIFACT_MAX_BYTES,
   ArtifactInputSchema,
   ChatInputSchema,
   ArtifactPatchSchema,
@@ -842,6 +843,7 @@ export class InterviewStore {
           show: parsed.show,
         });
     }
+    fitsInRow(parsed.content, parsed.source);
     if (this.count("artifacts", sessionId) >= LIMITS.artifacts)
       throw new Error(
         `${LIMIT_REACHED}: an interview holds at most ${LIMITS.artifacts} artifacts; update one instead, or start a new interview`,
@@ -884,6 +886,10 @@ export class InterviewStore {
       parsed.description !== undefined ||
       parsed.source !== undefined;
     if (changed) {
+      fitsInRow(
+        parsed.content ?? String(current.content),
+        parsed.source === undefined ? optional(current.source) : parsed.source,
+      );
       this.sql.all(
         "UPDATE artifacts SET title=?, content=?, description=?, source=?, revision=revision+1, updated_at=? WHERE id=?",
         parsed.title ?? String(current.title),
@@ -1102,6 +1108,17 @@ export class InterviewStore {
     if (!row) throw new Error("Question not found");
     return row;
   }
+}
+
+/** An artifact's content and source share a row, which holds at most 2 MB. */
+function fitsInRow(content: string, source: string | null | undefined) {
+  const encoder = new TextEncoder();
+  const bytes =
+    encoder.encode(content).length + encoder.encode(source ?? "").length;
+  if (bytes > ARTIFACT_MAX_BYTES)
+    throw new Error(
+      `${LIMIT_REACHED}: an artifact's content and source together hold at most ${(ARTIFACT_MAX_BYTES / 1e6).toFixed(1)} MB; this is ${(bytes / 1e6).toFixed(1)} MB`,
+    );
 }
 
 function mapProject(row: Row): ProjectView {

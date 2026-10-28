@@ -79,8 +79,12 @@ export const QuestionPatchSchema = z.object(questionFields).partial().extend({
 export const artifactKinds = ["plan", "document", "diagram", "mockup"] as const;
 export type ArtifactKind = (typeof artifactKinds)[number];
 
-/** Content can be a whole HTML mockup, so allow well past the default body size. */
-export const ARTIFACT_MAX_BYTES = 4_000_000;
+/**
+ * Content can be a whole HTML mockup. A Durable Object's SQLite row holds
+ * at most 2 MB, so content and source together must stay under that, in
+ * UTF-8 bytes; the store checks the pair.
+ */
+export const ARTIFACT_MAX_BYTES = 1_900_000;
 
 const artifactFields = {
   title: z.string().trim().min(1).max(200),
