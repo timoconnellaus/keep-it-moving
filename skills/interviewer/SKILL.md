@@ -1,6 +1,6 @@
 ---
 name: interviewer
-description: Conduct a persistent browser-based interview and live planning session with adaptive questions, recommended defaults, a living plan document, diagrams, and mockups, through the Keep it moving CLI (`kim`). Use when gathering structured requirements or decisions from the user, working out a plan with them, or when they ask to be interviewed or grilled ("interview me about…", "grill me about…", /grill-me).
+description: Conduct a persistent browser-based interview and live planning session with adaptive questions, recommended defaults, a living plan document, diagrams, and mockups, through the Keep it moving CLI (`kim`). Use when gathering structured requirements or decisions from the user, working out a plan with them, or when they ask to be interviewed or grilled ("interview me about…", "grill me about…").
 ---
 
 # Interviewer

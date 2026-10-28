@@ -153,7 +153,7 @@ const site: ExportedHandler<Env> = {
             new URL(safeNext(url.searchParams.get("next")), url).toString(),
             302,
           )
-        : signInPage(safeNext(url.searchParams.get("next")));
+        : signInPage(safeNext(url.searchParams.get("next")), env.PUBLIC_URL);
     if (!user) {
       // The CLI's login was started on purpose, so go straight to Google.
       if (url.pathname === "/authorize")

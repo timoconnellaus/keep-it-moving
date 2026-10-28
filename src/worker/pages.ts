@@ -19,12 +19,13 @@ const shell = (body: string) => `<!doctype html>
   }
   body {
     margin: 0; min-height: 100vh; display: grid; place-items: center;
+    grid-template-columns: minmax(0, 1fr);
     padding: 16px; box-sizing: border-box; background: var(--page);
     color: var(--ink);
     font: 16px/1.5 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   main {
-    width: min(380px, 100%); box-sizing: border-box; padding: 32px 28px;
+    width: min(460px, 100%); box-sizing: border-box; padding: 32px 28px;
     border: 1px solid var(--line); border-radius: 12px; background: var(--paper);
     text-align: center;
   }
@@ -37,6 +38,19 @@ const shell = (body: string) => `<!doctype html>
     color: var(--ink); font-weight: 500; text-decoration: none;
   }
   .google:hover { border-color: var(--muted); }
+  .setup {
+    margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line);
+    text-align: left;
+  }
+  .setup h2 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+  .setup p { margin: 0 0 10px; font-size: 14px; }
+  .setup p:last-child { margin: 10px 0 0; }
+  .setup pre {
+    margin: 0; padding: 10px 12px; border-radius: 8px;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    background: var(--page); border: 1px solid var(--line);
+    font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
 </style>
 <main>
 <img src="/icons/icon.svg" alt="" width="40" height="40">
@@ -50,14 +64,25 @@ export const page = (status: number, message: string) =>
     headers: { "content-type": "text/html; charset=utf-8" },
   });
 
-/** Signed out: one button, which comes back to `next` afterwards. */
-export const signInPage = (next: string) =>
+/**
+ * Signed out: one button, which comes back to `next` afterwards, and how to
+ * set up the CLI and skill, since agents start the interviews.
+ */
+export const signInPage = (next: string, origin: string) =>
   new Response(
     shell(`<h1>Keep it moving</h1>
-<p>Sign in to see your projects.</p>
+<p>Sign in to see your interviews.</p>
 <a class="google" href="/auth/google/start?next=${encodeURIComponent(next)}">
 <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
-Sign in with Google</a>`),
+Sign in with Google</a>
+<section class="setup" aria-label="Set up the CLI and skill">
+<h2>Interviews start from your agent</h2>
+<p>Install the <code>kim</code> CLI and the interviewer skill, then sign in from the terminal:</p>
+<pre>npm install -g ${escapeHtml(origin)}/cli.tgz
+kim skill install
+kim login</pre>
+<p><code>kim skill install</code> asks which agents get the skill (Claude Code, Codex, pi). Then ask your agent to interview you about something, such as “interview me about this feature”.</p>
+</section>`),
     {
       status: 200,
       headers: {

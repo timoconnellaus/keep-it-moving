@@ -235,9 +235,10 @@ describe("Google sign-in", () => {
       `${ORIGIN}/signin?next=%2Fs%2Fabc%3Fview%3Dplan`,
     );
     const signin = await call("/signin?next=%2Fs%2Fabc");
-    expect(await signin.text()).toContain(
-      'href="/auth/google/start?next=%2Fs%2Fabc"',
-    );
+    const signinHtml = await signin.text();
+    expect(signinHtml).toContain('href="/auth/google/start?next=%2Fs%2Fabc"');
+    // How to get the CLI and skill, from this deployment.
+    expect(signinHtml).toContain(`npm install -g ${ORIGIN}/cli.tgz`);
     expect((await call("/api/browser/overview")).status).toBe(401);
     expect((await call("/ws/overview")).status).toBe(401);
     // Install files stay public.
