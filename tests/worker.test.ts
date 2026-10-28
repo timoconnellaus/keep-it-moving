@@ -245,6 +245,15 @@ describe("Google sign-in", () => {
     expect((await call("/cli-version.json")).status).toBe(200);
   });
 
+  it("refuses sign-in when GOOGLE_CLIENT_ID isn't set", async () => {
+    const { env, call } = setup();
+    delete (env as { GOOGLE_CLIENT_ID?: string }).GOOGLE_CLIENT_ID;
+    expect((await call("/auth/google/start")).status).toBe(503);
+    expect((await call("/auth/google/callback?code=c&state=s")).status).toBe(
+      503,
+    );
+  });
+
   it("starts with state, nonce and PKCE, and comes back to `next`", async () => {
     const { call, signIn, startAndReturn } = setup();
     const start = await call("/auth/google/start?next=/s/tok");
@@ -346,6 +355,14 @@ describe("one workspace per user", () => {
       "interviews",
       "user:ann@example.com",
     ]);
+  });
+
+  it("gives everyone their own hub when there's no OWNER_EMAIL", async () => {
+    const { env, hubs, call, signIn } = setup();
+    delete (env as { OWNER_EMAIL?: string }).OWNER_EMAIL;
+    const owner = await signIn("Owner@Example.com");
+    await call("/api/browser/overview", { cookie: owner });
+    expect([...hubs.keys()]).toEqual(["user:owner@example.com"]);
   });
 
   it("doesn't show one user's interviews to another", async () => {

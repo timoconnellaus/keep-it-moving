@@ -4,6 +4,7 @@ import type { Env } from "./env.js";
 const OWNER_HUB = "interviews";
 
 const isOwner = (email: string, env: Env) =>
+  !!env.OWNER_EMAIL &&
   email.toLowerCase() === env.OWNER_EMAIL.trim().toLowerCase();
 
 /**

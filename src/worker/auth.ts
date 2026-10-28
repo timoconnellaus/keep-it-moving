@@ -52,6 +52,7 @@ export async function currentUser(
 
 /** Sends the browser to Google, remembering where to come back to. */
 export async function googleStart(request: Request, env: Env) {
+  if (!env.GOOGLE_CLIENT_ID) return notSetUp();
   const url = new URL(request.url);
   // Sign in on the public origin, where the callback and cookies live.
   const origin = callbackOrigin(url, env);
@@ -82,6 +83,8 @@ export async function googleStart(request: Request, env: Env) {
 
 /** Google's redirect back: checks it, then starts a browser session. */
 export async function googleCallback(request: Request, env: Env) {
+  // Without it jwtVerify would skip the audience check.
+  if (!env.GOOGLE_CLIENT_ID) return notSetUp();
   const url = new URL(request.url);
   const flow = decode(cookie(request, FLOW_COOKIE));
   const code = url.searchParams.get("code");
@@ -162,6 +165,12 @@ export function isLoopback(hostname: string): boolean {
 /** The public origin, or the request's own on localhost for `wrangler dev`. */
 const callbackOrigin = (url: URL, env: Env) =>
   isLoopback(url.hostname) ? url.origin : new URL(env.PUBLIC_URL).origin;
+
+const notSetUp = () =>
+  page(
+    503,
+    "Google sign-in isn't set up on this deployment: GOOGLE_CLIENT_ID is missing.",
+  );
 
 const signInAgain = (message: string) =>
   `${message} <a href="/signin">Sign in again</a>.`;

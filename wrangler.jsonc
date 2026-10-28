@@ -35,11 +35,9 @@
   ],
   "vars": {
     "PUBLIC_URL": "https://keep-it-moving.zerobsai.com",
-    "OWNER_EMAIL": "tim.oconnell.australia@gmail.com",
-    // The Google OAuth client (web application) for "Sign in with Google". Its
-    // redirect URI is PUBLIC_URL + /auth/google/callback; the client secret is
-    // the GOOGLE_CLIENT_SECRET secret.
-    "GOOGLE_CLIENT_ID": "579404099276-3qfi99tid70udrhcfrkj68r3uivsk1ek.apps.googleusercontent.com",
+    // OWNER_EMAIL, GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are secrets
+    // (`wrangler secret put`), so a fork doesn't deploy with ours. The Google
+    // client's redirect URI is PUBLIC_URL + /auth/google/callback.
     "VAPID_PUBLIC_KEY": "BFBJwVqp8ONGf6it588x_gLRsw5dkqlyXVc9T3PlX0_QMrNLfc7aEqXPotuFR-g2CP_KGjxZTDyasvmg2eBNPjM",
   },
   "observability": { "enabled": true },

@@ -277,6 +277,7 @@ export default {
         const email =
           (await env.OAUTH_KV.get(keyOwner(await sha256(token)))) ??
           env.OWNER_EMAIL;
+        if (!email) return null;
         const verdict = (await hubFor(env, email)
           .fetch("https://hub/internal/keys/verify", {
             method: "POST",

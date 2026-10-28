@@ -20,7 +20,9 @@ export function webPush(
         .setProtectedHeader({ alg: "ES256", typ: "JWT" })
         .setAudience(new URL(endpoint).origin)
         .setExpirationTime("12h")
-        .setSubject(`mailto:${env.OWNER_EMAIL}`)
+        .setSubject(
+          env.OWNER_EMAIL ? `mailto:${env.OWNER_EMAIL}` : env.PUBLIC_URL,
+        )
         .sign(await key);
       const response = await fetch(endpoint, {
         method: "POST",

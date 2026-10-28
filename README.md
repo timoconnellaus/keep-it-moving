@@ -40,10 +40,10 @@ For local development, put `DEV_EMAIL=<your email>` and `PUBLIC_URL=http://local
 The browser signs in with Google; anyone with a Google account can, and each user gets a private workspace of their own. The Worker runs the sign-in itself (OpenID Connect with PKCE, checking Google's ID token and its verified email), so it needs a Google OAuth client:
 
 1. In Google Cloud Console, create an OAuth client of type **Web application** with the redirect URI `https://keep-it-moving.zerobsai.com/auth/google/callback` (that is, `PUBLIC_URL` + `/auth/google/callback`).
-2. Put its client ID in `GOOGLE_CLIENT_ID` in `wrangler.jsonc`.
+2. Run `npx wrangler secret put GOOGLE_CLIENT_ID` and paste its client ID.
 3. Run `npx wrangler secret put GOOGLE_CLIENT_SECRET` and paste its secret.
 
-`OWNER_EMAIL` in `wrangler.jsonc` names the deployment's owner. Their workspace is the one from before there were other users.
+The optional `OWNER_EMAIL` secret (`npx wrangler secret put OWNER_EMAIL`) names the deployment's owner: their workspace is the one from before there were other users. Leave it out on a new deployment. These stay out of `wrangler.jsonc` so a copy of the repo doesn't deploy with someone else's.
 
 ### Assigning an interview to someone else
 

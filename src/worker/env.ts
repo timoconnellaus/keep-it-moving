@@ -9,10 +9,13 @@ export interface Env {
   ASSETS: Fetcher;
   /** The public origin, e.g. https://keep-it-moving.zerobsai.com. */
   PUBLIC_URL: string;
-  /** The deployment's owner: their workspace predates multi-user. */
-  OWNER_EMAIL: string;
-  /** The Google OAuth client the browser signs in with; its secret is a secret. */
-  GOOGLE_CLIENT_ID: string;
+  /**
+   * The deployment's owner, whose workspace predates multi-user. A secret, so
+   * it isn't in the repo; without it, every user gets a `user:` workspace.
+   */
+  OWNER_EMAIL?: string;
+  /** The Google OAuth client the browser signs in with. A secret, like its secret. */
+  GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   /** Web Push (VAPID): the public key as base64url, the private key a JWK secret. */
   VAPID_PUBLIC_KEY?: string;
