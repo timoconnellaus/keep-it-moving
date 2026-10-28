@@ -7,6 +7,15 @@ import type {
 } from "../shared/schema.js";
 import { ARTIFACT_VIEW_HEADERS } from "./artifactView.js";
 import { agentKeys, VIA_KEY_HEADER } from "./keys.js";
+import {
+  ASSIGN_ROUTE,
+  assignRefusal,
+  FREE_LIVE_LIMIT,
+  liveRefusal,
+  PLAN_HEADER,
+  WATCH_ROUTE,
+  type LiveInterview,
+} from "./plans.js";
 import type { Sql } from "./sql.js";
 import { LIMIT_REACHED, type InterviewStore } from "./store.js";
 
@@ -109,6 +118,30 @@ export function createHub(options: HubOptions) {
     watchers.has(id) ||
     Boolean(agentSockets?.list(id).length) ||
     (watchedUntil.get(id) ?? 0) > Date.now();
+  /**
+   * The other active interviews an agent is waiting on, counting the grace
+   * between chained waits; none when one already waits on this interview,
+   * since a new watcher there only takes its place.
+   */
+  const liveBesides = (id: string): LiveInterview[] => {
+    const now = Date.now();
+    const live = new Set([
+      ...watchers.keys(),
+      ...(agentSockets?.list() ?? []).map((socket) => socket.watch.sessionId),
+      ...[...watchedUntil]
+        .filter(([, until]) => until > now)
+        .map(([sessionId]) => sessionId),
+    ]);
+    if (live.has(id)) return [];
+    return [...live].flatMap((sessionId) => {
+      try {
+        const { title, url, status } = store.getSession(sessionId, baseUrl);
+        return status === "active" ? [{ id: sessionId, title, url }] : [];
+      } catch {
+        return [];
+      }
+    });
+  };
   /** A newer watcher takes over: whatever held the interview ends. */
   const replaceWatchers = (id: string) => {
     watchers.get(id)?.replace();
@@ -412,6 +445,27 @@ export function createHub(options: HubOptions) {
     await next();
   });
 
+  // The Free plan: a few interviews with an agent waiting at once, and no
+  // assigning. A watcher already waiting is never ended, and taking an
+  // assignment back is always allowed.
+  app.use("*", async (c, next) => {
+    if (c.req.header(PLAN_HEADER) !== "free") return next();
+    const watch = c.req.method === "GET" && WATCH_ROUTE.exec(c.req.path);
+    if (watch) {
+      const live = liveBesides(watch[1]!);
+      if (live.length >= FREE_LIVE_LIMIT)
+        return c.json(liveRefusal(baseUrl, live), 402);
+    }
+    if (c.req.method === "POST" && ASSIGN_ROUTE.test(c.req.path)) {
+      const input = (await c.req.raw
+        .clone()
+        .json()
+        .catch(() => ({}))) as { email?: unknown } | null;
+      if (input?.email) return c.json(assignRefusal(baseUrl), 402);
+    }
+    await next();
+  });
+
   // Agent keys, mounted before the :id routes.
   const keys = agentKeys(options.sql);
   app.route("/api/sessions/kim", keys.agentRoutes);
@@ -606,10 +660,11 @@ export function createHub(options: HubOptions) {
   app.get("/api/sessions/:id/socket", (c) => {
     if (!agentSockets)
       return c.json({ error: "Sockets are not available here" }, 501);
-    if (c.req.header("upgrade")?.toLowerCase() !== "websocket")
-      return c.json({ error: "Expected a WebSocket" }, 426);
+    // Not found first: the CLI asks here why an upgrade was refused.
     const id = c.req.param("id");
     store.getSession(id, baseUrl);
+    if (c.req.header("upgrade")?.toLowerCase() !== "websocket")
+      return c.json({ error: "Expected a WebSocket" }, 426);
     const mode = c.req.query("mode") ?? "wait";
     if (mode !== "wait" && mode !== "attach" && mode !== "next")
       return c.json({ error: `Unknown mode ${mode}` }, 400);

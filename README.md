@@ -66,6 +66,29 @@ An interview can be assigned to someone else's email, for them to answer: `kim s
 
 The interview stays in the owner's workspace. The Worker keeps a directory in `OAUTH_KV` (`share:<token>` → owner and assignee, `assigned:<email>:<token>` for the list) to route the assignee there, marked with a header only the Worker sets; the owner's hub then allows that header on the one interview's page routes only, and only while the interview is still assigned to that email, so clearing the assignment locks them out at once, before KV catches up. Deleting the interview removes the entries.
 
+## Plans and billing
+
+- **Free**: an agent can wait on at most 3 interviews at once ("live": a `wait`, `attach` or `events next` connected to an active interview). Half-done interviews nobody is waiting on don't count, and there's no limit on how many exist. Free can't assign interviews to other people, though assignments made before keep working and can be taken back, and answering an interview someone assigned to you is always free.
+- **Pro**, $5 a month: no live limit, and assigning.
+- **Team**, $5 a user a month with shared workspaces, is next; `/pricing` lists it as coming soon.
+
+`OWNER_EMAIL` and everyone in `ADMIN_EMAILS` are always on Pro, and an admin can comp anyone Pro from `/admin`.
+
+A 4th agent starting to wait, or an assign on Free, gets HTTP 402 with `{"code": "plan_limit", "feature": "live" | "assign", "upgradeUrl", "live": [...]}`, naming the live interviews. One already waiting is never ended, and a new watcher on an interview that's already live only takes its place. `kim` prints the refusal on stderr and exits 1; for a refused socket it asks the same route over HTTP why.
+
+Each user's plan is a record in `OAUTH_KV` (`plan:<email>`: plan, Stripe status, customer and subscription ids, period end, seats, and any admin comp), read through a 30-second cache. The Worker sets the owner's plan in `x-kim-plan` on every request to their hub and strips whatever a client sent, like the respondent header; the hub enforces the limits, since it knows its own watchers (`src/server/plans.ts`).
+
+Stripe does the billing (`src/worker/stripe.ts`, over fetch and Web Crypto): **Upgrade to Pro** in the Account menu or on `/pricing` starts a Checkout session in subscription mode, **Manage billing** opens the Customer Portal, and `POST /stripe/webhook` (public, signature-checked, each event applied once) handles `checkout.session.completed`, `customer.subscription.updated` and `customer.subscription.deleted`. Without the Stripe secrets, upgrading says Pro is coming soon and nothing calls Stripe.
+
+To set up Stripe:
+
+1. In the Stripe dashboard, create a product "Keep it moving Pro" with a recurring price of $5 a month, and copy its price id (`price_…`).
+2. Turn on the Customer Portal (Settings → Billing → Customer portal): let customers update payment methods, see invoices and cancel (at the end of the period).
+3. Add a webhook endpoint at `https://keep-it-moving.zerobsai.com/stripe/webhook` (`PUBLIC_URL` + `/stripe/webhook`) for `checkout.session.completed`, `customer.subscription.updated` and `customer.subscription.deleted`, and copy its signing secret (`whsec_…`).
+4. Set the three secrets: `npx wrangler secret put STRIPE_SECRET_KEY` (the secret key, or a restricted key with write on Checkout Sessions and Customer portal and read on Customers and Subscriptions), `STRIPE_WEBHOOK_SECRET` and `STRIPE_PRICE_PRO`.
+
+Do it in test mode first, with test-mode keys and a test card, then again in live mode. [docs/billing.md](docs/billing.md) has more.
+
 ## Desktop app
 
 `desktop/` is a [Tauri](https://tauri.app) shell around the hosted site, for macOS. It needs Rust (`rustup`) and Xcode's command-line tools.

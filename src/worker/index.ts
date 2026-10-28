@@ -10,11 +10,24 @@ import {
   type User,
 } from "./auth.js";
 import { KEY_PREFIX, sha256, VIA_KEY_HEADER } from "../server/keys.js";
-import { ASSIGNED_BY_HEADER, RESPONDENT_HEADER } from "../server/hub.js";
+import {
+  ASSIGNED_BY_HEADER,
+  RESPONDENT_HEADER,
+  sameSite,
+} from "../server/hub.js";
+import { PLAN_HEADER } from "../server/plans.js";
 import type { Env } from "./env.js";
 import { hubFor } from "./hubs.js";
 import { isAdmin, listUsers } from "./users.js";
-import { adminPage, escapeHtml, page, signInPage } from "./pages.js";
+import {
+  adminPage,
+  escapeHtml,
+  page,
+  pricingPage,
+  signInPage,
+} from "./pages.js";
+import { listPlans, planOf, planView, resolvePlan, setComp } from "./plans.js";
+import { checkout, portal, stripeWebhook } from "./stripe.js";
 import {
   forgetShare,
   interviewToken,
@@ -45,9 +58,20 @@ const BROWSER_ASSIGN = /^\/api\/browser\/[^/]+\/assign$/;
 /** Headers only the Worker may set; whatever a client sent is dropped. */
 function forwardable(request: Request): Request {
   const forwarded = new Request(request);
-  for (const header of [VIA_KEY_HEADER, RESPONDENT_HEADER, ASSIGNED_BY_HEADER])
+  for (const header of [
+    VIA_KEY_HEADER,
+    RESPONDENT_HEADER,
+    ASSIGNED_BY_HEADER,
+    PLAN_HEADER,
+  ])
     forwarded.headers.delete(header);
   return forwarded;
+}
+
+/** Sends a request to this user's hub, telling it their plan. */
+async function toHub(env: Env, email: string, forwarded: Request) {
+  forwarded.headers.set(PLAN_HEADER, await planOf(env, email));
+  return hubFor(env, email).fetch(forwarded);
 }
 
 /** An owner can't assign an interview to themselves. */
@@ -78,7 +102,7 @@ async function assign(
       { status: 400 },
     );
   forwarded.headers.set(ASSIGNED_BY_HEADER, encodeURIComponent(name));
-  const response = await hubFor(env, owner).fetch(forwarded);
+  const response = await toHub(env, owner, forwarded);
   if (response.ok)
     await recordAssignment(
       env,
@@ -111,7 +135,7 @@ const agentApi: ExportedHandler<Env> = {
         (await profileName(env, email)) ?? email,
         forwarded,
       );
-    const response = await hubFor(env, email).fetch(forwarded);
+    const response = await toHub(env, email, forwarded);
     if (request.method === "DELETE" && AGENT_DELETE.test(path) && response.ok) {
       const { token, assignee } = (await response.clone().json()) as {
         token?: string;
@@ -147,7 +171,18 @@ const site: ExportedHandler<Env> = {
       return googleCallback(request, env);
     if (url.pathname === "/auth/logout" && request.method === "POST")
       return logout(request, env);
+    // Only Stripe can sign it, so it needs no sign-in.
+    if (url.pathname === "/stripe/webhook" && request.method === "POST")
+      return stripeWebhook(request, env);
     const user = await currentUser(request, env);
+    // Public, and says what to do next to whoever is signed in.
+    if (url.pathname === "/pricing")
+      return pricingPage(
+        user ? await planView(env, user.email) : null,
+        url.searchParams.get("checkout") === "done"
+          ? "Thanks! Pro turns on as soon as Stripe confirms the payment, usually within a few seconds."
+          : null,
+      );
     if (url.pathname === "/signin")
       return user
         ? Response.redirect(
@@ -167,11 +202,16 @@ const site: ExportedHandler<Env> = {
       return Response.redirect(new URL(signInUrl(url), url).toString(), 302);
     }
     if (url.pathname === "/authorize") return authorize(request, env, user);
-    if (url.pathname === "/api/browser/me") return Response.json(user);
+    if (url.pathname === "/api/browser/me")
+      return Response.json({ ...user, plan: await planView(env, user.email) });
+    if (request.method === "POST" && url.pathname === "/billing/checkout")
+      return checkout(request, env, user);
+    if (request.method === "POST" && url.pathname === "/billing/portal")
+      return portal(request, env, user);
     // Not found, not forbidden: no hint that it exists.
-    if (url.pathname === "/admin")
+    if (url.pathname === "/admin" || url.pathname === "/admin/plan")
       return isAdmin(env, user.email)
-        ? adminPage(await listUsers(env))
+        ? admin(request, env, user)
         : new Response("Not found", { status: 404 });
     if (url.pathname === "/api/browser/shared")
       return Response.json({ interviews: await sharedWith(env, user.email) });
@@ -191,13 +231,47 @@ const site: ExportedHandler<Env> = {
       url.pathname.startsWith("/api/browser/") ||
       url.pathname.startsWith("/ws/")
     )
-      return hubFor(env, user.email).fetch(forwardable(request));
+      return toHub(env, user.email, forwardable(request));
     // The interview list and each interview are the same app.
     if (url.pathname === "/" || url.pathname.startsWith("/s/"))
       return env.ASSETS.fetch(new Request(new URL("/index.html", url)));
     return env.ASSETS.fetch(request);
   },
 };
+
+/**
+ * Who has signed up and on which plan, and an admin's comp: a form on the
+ * page posts here, so check it is our own page.
+ */
+async function admin(request: Request, env: Env, user: User) {
+  if (request.method === "POST") {
+    if (!sameSite(request))
+      return new Response("Cross-site request refused", { status: 403 });
+    const form = await request.formData();
+    const email = String(form.get("email") ?? "")
+      .trim()
+      .toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+$/.test(email))
+      return page(400, 'That isn\'t an email. <a href="/admin">Back</a>.');
+    await setComp(
+      env,
+      email,
+      form.get("plan") === "pro" ? "pro" : null,
+      user.email,
+    );
+    return new Response(null, { status: 303, headers: { location: "/admin" } });
+  }
+  if (new URL(request.url).pathname !== "/admin")
+    return new Response("Not found", { status: 404 });
+  const [users, plans] = await Promise.all([listUsers(env), listPlans(env)]);
+  // Someone comped before they first sign in is listed too.
+  for (const email of plans.keys())
+    if (!users.some((listed) => listed.email === email)) users.push({ email });
+  return adminPage(users, (email) => {
+    const record = plans.get(email) ?? null;
+    return { ...resolvePlan(env, email, record), record };
+  });
+}
 
 /**
  * A request for an interview assigned to someone. Its assignee reaches it in

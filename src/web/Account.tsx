@@ -1,23 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import { useMe, type PlanView } from "./me.js";
 
-interface Me {
-  email: string;
-  name?: string;
-  picture?: string;
-}
-
-/** Who is signed in, as an avatar in the top bar, with Sign out behind it. */
+/**
+ * Who is signed in, as an avatar in the top bar, with their plan, billing
+ * and Sign out behind it.
+ */
 export function Account() {
-  const [me, setMe] = useState<Me | null>(null);
+  const me = useMe();
   const [open, setOpen] = useState(false);
-  useEffect(() => {
-    void fetch("/api/browser/me")
-      .then((response) =>
-        response.ok ? (response.json() as Promise<Me>) : null,
-      )
-      .then(setMe)
-      .catch(() => undefined);
-  }, []);
   const root = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) return;
@@ -60,6 +50,7 @@ export function Account() {
             {me.name && <b>{me.name}</b>}
             <span>{me.email}</span>
           </div>
+          {me.plan && <Plan plan={me.plan} />}
           {/* A plain form: the Worker ends the session and shows sign-in. */}
           <form method="post" action="/auth/logout">
             <button type="submit" role="menuitem">
@@ -68,6 +59,41 @@ export function Account() {
           </form>
         </div>
       )}
+    </div>
+  );
+}
+
+/** The plan, and Upgrade or Manage billing; both are forms the Worker sends to Stripe. */
+function Plan({ plan }: { plan: PlanView }) {
+  const until = plan.currentPeriodEnd
+    ? new Date(plan.currentPeriodEnd).toLocaleDateString()
+    : null;
+  return (
+    <div className="account-plan">
+      <span>
+        {plan.plan === "pro" ? "Pro" : "Free"} plan
+        {plan.cancelAtPeriodEnd && until ? `, ends ${until}` : ""}
+      </span>
+      {plan.plan === "free" &&
+        (plan.billing ? (
+          <form method="post" action="/billing/checkout">
+            <button type="submit" role="menuitem">
+              Upgrade to Pro, $5/month
+            </button>
+          </form>
+        ) : (
+          <span className="account-soon">Pro is coming soon</span>
+        ))}
+      {plan.manageable && plan.source === "stripe" && (
+        <form method="post" action="/billing/portal">
+          <button type="submit" role="menuitem">
+            Manage billing
+          </button>
+        </form>
+      )}
+      <a href="/pricing" role="menuitem">
+        Compare plans
+      </a>
     </div>
   );
 }

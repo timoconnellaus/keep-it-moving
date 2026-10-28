@@ -24,6 +24,15 @@ export interface Env {
   AUTH_LIMITER?: RateLimit;
   /** Comma-separated emails that may open /admin. A secret; without it, nobody can. */
   ADMIN_EMAILS?: string;
+  /**
+   * Stripe billing for Pro, all secrets. Without them, upgrading says Pro is
+   * coming soon and nothing calls Stripe.
+   */
+  STRIPE_SECRET_KEY?: string;
+  /** The webhook endpoint's signing secret (whsec_…). */
+  STRIPE_WEBHOOK_SECRET?: string;
+  /** The recurring Price for Pro, $5 a month (price_…). */
+  STRIPE_PRICE_PRO?: string;
   /** Local development only: skips Google and signs in as this address on localhost. */
   DEV_EMAIL?: string;
 }

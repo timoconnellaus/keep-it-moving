@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT, type JWTPayload } from "jose";
 import {
   afterAll,
@@ -12,6 +12,8 @@ import {
 import { GOOGLE_JWKS, GOOGLE_TOKEN } from "../src/worker/auth.js";
 import type { Env } from "../src/worker/env.js";
 import worker from "../src/worker/index.js";
+import { plans, updatePlan } from "../src/worker/plans.js";
+import { STRIPE_API } from "../src/worker/stripe.js";
 import { ACCEPTED_SOCKET, hubHarness } from "./helpers/harness.js";
 
 const ORIGIN = "https://kim.test";
@@ -21,6 +23,10 @@ const CLIENT_ID = "google-client";
 let googleKey: CryptoKey;
 /** Claims the fake Google puts in the next ID token, nonce aside. */
 let nextClaims: JWTPayload = {};
+/** Stripe's API as the tests fake it, and what was sent to it. */
+let stripeApi: (path: string, form: URLSearchParams) => Response = () =>
+  Response.json({ error: { message: "No Stripe here" } }, { status: 500 });
+const stripeCalls: Array<{ path: string; form: URLSearchParams }> = [];
 
 beforeAll(async () => {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
@@ -32,6 +38,12 @@ beforeAll(async () => {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       if (url === GOOGLE_JWKS) return Response.json({ keys: [jwk] });
+      if (url.startsWith(STRIPE_API)) {
+        const path = url.slice(STRIPE_API.length);
+        const form = new URLSearchParams(String(init?.body ?? ""));
+        stripeCalls.push({ path, form });
+        return stripeApi(path, form);
+      }
       if (url === GOOGLE_TOKEN) {
         const form = new URLSearchParams(String(init?.body));
         if (form.get("code") !== "good-code")
@@ -95,6 +107,8 @@ function memoryKv() {
 
 /** The Worker with every binding faked: each hub name gets its own node:sqlite hub. */
 function setup() {
+  // Each test starts with nobody's plan cached.
+  plans.clear();
   const hubs = new Map<string, ReturnType<typeof hubHarness>>();
   const idFromName = (name: string) => ({
     name,
@@ -120,7 +134,11 @@ function setup() {
         if (!hub) {
           hub = hubHarness();
           hubs.set(name, hub);
-          closers.push(() => hub!.sql.close());
+          closers.push(() => {
+            // Open agent sockets would be reviewed after the database closes.
+            for (const socket of hub!.agents.list()) socket.disconnect();
+            hub!.sql.close();
+          });
         }
         const harness = hub;
         return {
@@ -222,7 +240,15 @@ function setup() {
     headers: { authorization: `Bearer ${token}` },
   });
 
-  return { env, kv, hubs, call, startAndReturn, signIn, cliToken, bearer };
+  /** Puts someone on Pro, as a paid Stripe subscription would. */
+  const pro = (email: string) =>
+    updatePlan(env, email, (record) => ({
+      ...record,
+      plan: "pro",
+      status: "active",
+    }));
+
+  return { env, kv, hubs, call, startAndReturn, signIn, cliToken, bearer, pro };
 }
 
 /** The Set-Cookie values, as the browser would send them back. */
@@ -288,6 +314,7 @@ describe("Google sign-in", () => {
     expect(await (await call("/api/browser/me", { cookie })).json()).toEqual({
       email: "ann@example.com",
       name: "Ann",
+      plan: { plan: "free", source: null, billing: false, manageable: false },
     });
     expect(await signIn("bob@example.com")).not.toBe(cookie);
   });
@@ -519,6 +546,7 @@ describe("assigning an interview to someone else", () => {
   /** Ann's interview with two questions, assigned to Bob. */
   async function assigned() {
     const s = setup();
+    await s.pro("ann@example.com");
     const ann = await s.signIn("ann@example.com");
     const bob = await s.signIn("bob@example.com");
     const annToken = await s.cliToken(ann);
@@ -800,5 +828,371 @@ describe("KV reads", () => {
     const keys = get.mock.calls.map(([key]) => key.split(":")[0]);
     expect(keys.filter((key) => key === "session")).toHaveLength(0);
     expect(keys.filter((key) => key === "share")).toHaveLength(1);
+  });
+});
+
+describe("plans through the Worker", () => {
+  /** A signed-in user's CLI, sending whatever headers it likes. */
+  async function agentOf(s: ReturnType<typeof setup>, email: string) {
+    const token = await s.cliToken(await s.signIn(email));
+    return (path: string, init: RequestInit = {}) =>
+      s.call(path, {
+        ...init,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          ...init.headers,
+        },
+      });
+  }
+  const create = async (agent: Awaited<ReturnType<typeof agentOf>>) =>
+    (await (
+      await agent("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ title: "Survey" }),
+      })
+    ).json()) as { id: string; token: string };
+
+  it("ignores a plan header a client sends", async () => {
+    const s = setup();
+    const agent = await agentOf(s, "ann@example.com");
+    const forged = { "x-kim-plan": "pro" };
+    const sessions = [];
+    for (let index = 0; index < 4; index++) sessions.push(await create(agent));
+    const refused = await agent(`/api/sessions/${sessions[0]!.id}/assign`, {
+      method: "POST",
+      headers: forged,
+      body: JSON.stringify({ email: "bob@example.com" }),
+    });
+    expect(refused.status).toBe(402);
+    expect((await refused.json()).code).toBe("plan_limit");
+    // Nor does it lift the live limit: three wait, the fourth is refused.
+    const hub = s.hubs.get("user:ann@example.com")!;
+    for (const session of sessions.slice(0, 3))
+      await agent(`/api/sessions/${session.id}/socket`, {
+        headers: { ...forged, upgrade: "websocket" },
+      });
+    expect(hub.agents.list()).toHaveLength(3);
+    const fourth = await agent(`/api/sessions/${sessions[3]!.id}/socket`, {
+      headers: { ...forged, upgrade: "websocket" },
+    });
+    expect(fourth.status).toBe(402);
+    // Without an upgrade, the same route says why, as the CLI asks it.
+    const probe = await agent(`/api/sessions/${sessions[3]!.id}/socket`);
+    expect(await probe.json()).toMatchObject({ code: "plan_limit" });
+    // And the browser can't claim Pro either.
+    const cookie = await s.signIn("ann@example.com");
+    const page = await s.call(`/api/browser/${sessions[1]!.token}/assign`, {
+      method: "POST",
+      cookie,
+      headers: { ...forged, "content-type": "application/json" },
+      body: JSON.stringify({ email: "bob@example.com" }),
+    });
+    expect(page.status).toBe(402);
+  });
+
+  it("lets Pro, the owner and admins assign", async () => {
+    const s = setup();
+    await s.pro("pro@example.com");
+    for (const email of [OWNER, "admin@example.com", "pro@example.com"]) {
+      const agent = await agentOf(s, email);
+      const session = await create(agent);
+      const response = await agent(`/api/sessions/${session.id}/assign`, {
+        method: "POST",
+        body: JSON.stringify({ email: "bob@example.com" }),
+      });
+      expect(response.status).toBe(200);
+    }
+  });
+
+  it("tells the page the plan", async () => {
+    const s = setup();
+    const cookie = await s.signIn(OWNER);
+    const me = await (await s.call("/api/browser/me", { cookie })).json();
+    expect(me.plan).toMatchObject({ plan: "pro", source: "owner" });
+  });
+});
+
+describe("the Stripe webhook", () => {
+  const SECRET = "whsec_test";
+  /** A Worker with billing set up, and a way to send it signed events. */
+  function billing() {
+    const s = setup();
+    Object.assign(s.env, {
+      STRIPE_SECRET_KEY: "sk_test",
+      STRIPE_WEBHOOK_SECRET: SECRET,
+      STRIPE_PRICE_PRO: "price_pro",
+    });
+    stripeCalls.length = 0;
+    stripeApi = (path) =>
+      path === "/subscriptions/sub_1"
+        ? Response.json(subscription({ status: "active" }))
+        : Response.json({ error: { message: "Unknown" } }, { status: 404 });
+    const sign = (payload: string, at = Math.floor(Date.now() / 1000)) =>
+      `t=${at},v1=${createHmac("sha256", SECRET).update(`${at}.${payload}`).digest("hex")}`;
+    const send = (
+      event: Record<string, unknown>,
+      signature?: (payload: string) => string,
+    ) => {
+      const payload = JSON.stringify(event);
+      return s.call("/stripe/webhook", {
+        method: "POST",
+        headers: { "stripe-signature": (signature ?? sign)(payload) },
+        body: payload,
+      });
+    };
+    const record = () =>
+      JSON.parse(s.kv.data.get("plan:ann@example.com") ?? "null");
+    const planOfAnn = async () => {
+      plans.clear();
+      const cookie = await s.signIn("ann@example.com");
+      return (await (await s.call("/api/browser/me", { cookie })).json()).plan;
+    };
+    return { ...s, sign, send, record, planOfAnn };
+  }
+  /** A Pro subscription for Ann, as Stripe sends it on a recent API version. */
+  const subscription = (fields: Record<string, unknown>) => ({
+    id: "sub_1",
+    object: "subscription",
+    customer: "cus_1",
+    status: "active",
+    cancel_at_period_end: false,
+    metadata: { email: "ann@example.com" },
+    items: { data: [{ quantity: 1, current_period_end: 1_900_000_000 }] },
+    ...fields,
+  });
+  const completed = {
+    id: "evt_checkout",
+    type: "checkout.session.completed",
+    created: 1_800_000_000,
+    data: {
+      object: {
+        object: "checkout.session",
+        mode: "subscription",
+        customer: "cus_1",
+        subscription: "sub_1",
+        client_reference_id: "ann@example.com",
+        payment_status: "paid",
+      },
+    },
+  };
+  const updated = (id: string, created: number, fields = {}) => ({
+    id,
+    type: "customer.subscription.updated",
+    created,
+    data: { object: subscription(fields) },
+  });
+
+  it("refuses an event without Stripe's signature", async () => {
+    const { send, sign, record } = billing();
+    expect((await send(completed, () => "")).status).toBe(400);
+    expect((await send(completed, () => "t=1,v1=00")).status).toBe(400);
+    // Signed with another secret, or long ago.
+    const other = (payload: string) => {
+      const at = Math.floor(Date.now() / 1000);
+      return `t=${at},v1=${createHmac("sha256", "whsec_other").update(`${at}.${payload}`).digest("hex")}`;
+    };
+    expect((await send(completed, other)).status).toBe(400);
+    const stale = (payload: string) =>
+      sign(payload, Math.floor(Date.now() / 1000) - 600);
+    expect((await send(completed, stale)).status).toBe(400);
+    expect(record()).toBeNull();
+    // Any v1 may match, as while a rolled secret is still valid.
+    const rolled = (payload: string) => `${sign(payload)},v1=${"0".repeat(64)}`;
+    expect((await send(completed, rolled)).status).toBe(200);
+  });
+
+  it("puts a paid checkout on Pro, and follows the subscription after", async () => {
+    const { send, record, planOfAnn, kv } = billing();
+    expect((await planOfAnn()).plan).toBe("free");
+    expect((await send(completed)).status).toBe(200);
+    expect(stripeCalls.map((call) => call.path)).toEqual([
+      "/subscriptions/sub_1",
+    ]);
+    expect(record()).toMatchObject({
+      plan: "pro",
+      status: "active",
+      customerId: "cus_1",
+      subscriptionId: "sub_1",
+      currentPeriodEnd: 1_900_000_000_000,
+      seats: 1,
+    });
+    expect(kv.data.get("stripe-customer:cus_1")).toBe("ann@example.com");
+    expect(await planOfAnn()).toMatchObject({
+      plan: "pro",
+      source: "stripe",
+      manageable: true,
+    });
+    // Cancelled in the portal: Pro until the period ends.
+    await send(
+      updated("evt_cancel", 1_800_000_100, { cancel_at_period_end: true }),
+    );
+    expect(await planOfAnn()).toMatchObject({
+      plan: "pro",
+      cancelAtPeriodEnd: true,
+    });
+    // A card that stops paying, by the customer alone (no metadata).
+    await send(
+      updated("evt_unpaid", 1_800_000_200, { status: "unpaid", metadata: {} }),
+    );
+    expect((await planOfAnn()).plan).toBe("free");
+    await send(updated("evt_back", 1_800_000_300));
+    expect((await planOfAnn()).plan).toBe("pro");
+    await send({
+      ...updated("evt_deleted", 1_800_000_400),
+      type: "customer.subscription.deleted",
+    });
+    expect(record().status).toBe("canceled");
+    expect((await planOfAnn()).plan).toBe("free");
+  });
+
+  it("applies each event once, and ignores one that arrives late", async () => {
+    const { send, record } = billing();
+    await send(completed);
+    await send(updated("evt_unpaid", 1_800_000_200, { status: "unpaid" }));
+    // Stripe delivers again: acknowledged, nothing changes.
+    const again = await send(completed);
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ duplicate: true });
+    expect(record().status).toBe("unpaid");
+    // An older event, delivered after a newer one, changes nothing either.
+    await send(updated("evt_old", 1_800_000_100, { status: "active" }));
+    expect(record().status).toBe("unpaid");
+  });
+
+  it("doesn't let an old subscription's end touch a newer one", async () => {
+    const { send, record } = billing();
+    await send(completed);
+    await send({
+      ...updated("evt_old_sub", 1_800_000_500, { id: "sub_0" }),
+      type: "customer.subscription.deleted",
+    });
+    expect(record()).toMatchObject({
+      subscriptionId: "sub_1",
+      status: "active",
+    });
+  });
+});
+
+describe("upgrading", () => {
+  it("says Pro is coming soon without Stripe", async () => {
+    const s = setup();
+    const cookie = await s.signIn("ann@example.com");
+    const response = await s.call("/billing/checkout", {
+      method: "POST",
+      cookie,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Pro is coming soon");
+    const pricing = await s.call("/pricing", { cookie });
+    expect(await pricing.text()).toContain("Pro is coming soon.");
+  });
+
+  it("sends a Free user to Stripe Checkout, and a subscriber to the portal", async () => {
+    const s = setup();
+    Object.assign(s.env, {
+      STRIPE_SECRET_KEY: "sk_test",
+      STRIPE_PRICE_PRO: "price_pro",
+    });
+    stripeCalls.length = 0;
+    stripeApi = (path) => Response.json({ url: `https://stripe.test${path}` });
+    const cookie = await s.signIn("ann@example.com");
+    const checkout = await s.call("/billing/checkout", {
+      method: "POST",
+      cookie,
+    });
+    expect(checkout.status).toBe(303);
+    expect(checkout.headers.get("location")).toBe(
+      "https://stripe.test/checkout/sessions",
+    );
+    expect(Object.fromEntries(stripeCalls[0]!.form)).toMatchObject({
+      mode: "subscription",
+      "line_items[0][price]": "price_pro",
+      "line_items[0][quantity]": "1",
+      client_reference_id: "ann@example.com",
+      customer_email: "ann@example.com",
+      "subscription_data[metadata][email]": "ann@example.com",
+      success_url: `${ORIGIN}/pricing?checkout=done`,
+    });
+    // Another site can't start one.
+    const forged = await s.call("/billing/checkout", {
+      method: "POST",
+      cookie,
+      headers: { "sec-fetch-site": "cross-site" },
+    });
+    expect(forged.status).toBe(403);
+    await updatePlan(s.env, "ann@example.com", (record) => ({
+      ...record,
+      plan: "pro",
+      status: "active",
+      customerId: "cus_1",
+    }));
+    const portal = await s.call("/billing/portal", { method: "POST", cookie });
+    expect(portal.headers.get("location")).toBe(
+      "https://stripe.test/billing_portal/sessions",
+    );
+    expect(stripeCalls.at(-1)!.form.get("customer")).toBe("cus_1");
+  });
+
+  it("shows the plans to anyone, linked from sign-in", async () => {
+    const s = setup();
+    const signedOut = await s.call("/pricing");
+    expect(signedOut.status).toBe(200);
+    const text = await signedOut.text();
+    for (const words of ["Free", "$5", "a user, a month", "Sign in to upgrade"])
+      expect(text).toContain(words);
+    expect(await (await s.call("/signin")).text()).toContain('href="/pricing"');
+  });
+});
+
+describe("comping a plan on /admin", () => {
+  const form = (fields: Record<string, string>) => ({
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(fields).toString(),
+  });
+
+  it("shows each plan and lets an admin grant or end Pro", async () => {
+    const s = setup();
+    const admin = await s.signIn("admin@example.com");
+    const ann = await s.signIn("ann@example.com");
+    expect(await (await s.call("/admin", { cookie: admin })).text()).toMatch(
+      /ann@example\.com.*<td>Free<\/td>/,
+    );
+    const granted = await s.call("/admin/plan", {
+      ...form({ email: "ann@example.com", plan: "pro" }),
+      cookie: admin,
+    });
+    expect(granted.status).toBe(303);
+    const me = await (await s.call("/api/browser/me", { cookie: ann })).json();
+    expect(me.plan).toMatchObject({ plan: "pro", source: "comp" });
+    expect(await (await s.call("/admin", { cookie: admin })).text()).toContain(
+      "End comp",
+    );
+    await s.call("/admin/plan", {
+      ...form({ email: "ann@example.com", plan: "none" }),
+      cookie: admin,
+    });
+    const after = await (
+      await s.call("/api/browser/me", { cookie: ann })
+    ).json();
+    expect(after.plan.plan).toBe("free");
+  });
+
+  it("is not found for anyone else, and refuses another site's form", async () => {
+    const s = setup();
+    const ann = await s.signIn("ann@example.com");
+    const admin = await s.signIn("admin@example.com");
+    const fields = form({ email: "ann@example.com", plan: "pro" });
+    expect(
+      (await s.call("/admin/plan", { ...fields, cookie: ann })).status,
+    ).toBe(404);
+    const forged = await s.call("/admin/plan", {
+      ...fields,
+      cookie: admin,
+      headers: { ...fields.headers, "sec-fetch-site": "cross-site" },
+    });
+    expect(forged.status).toBe(403);
+    expect(s.kv.data.has("plan:ann@example.com")).toBe(false);
   });
 });
