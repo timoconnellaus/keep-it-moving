@@ -22,6 +22,8 @@ export interface Env {
   VAPID_PRIVATE_JWK?: string;
   /** Limits sign-in and client registration per IP; see wrangler.jsonc. */
   AUTH_LIMITER?: RateLimit;
+  /** Comma-separated emails that may open /admin. A secret; without it, nobody can. */
+  ADMIN_EMAILS?: string;
   /** Local development only: skips Google and signs in as this address on localhost. */
   DEV_EMAIL?: string;
 }

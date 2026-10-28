@@ -13,7 +13,8 @@ import { KEY_PREFIX, sha256, VIA_KEY_HEADER } from "../server/keys.js";
 import { ASSIGNED_BY_HEADER, RESPONDENT_HEADER } from "../server/hub.js";
 import type { Env } from "./env.js";
 import { hubFor } from "./hubs.js";
-import { escapeHtml, page, signInPage } from "./pages.js";
+import { isAdmin, listUsers } from "./users.js";
+import { adminPage, escapeHtml, page, signInPage } from "./pages.js";
 import {
   forgetShare,
   interviewToken,
@@ -167,6 +168,11 @@ const site: ExportedHandler<Env> = {
     }
     if (url.pathname === "/authorize") return authorize(request, env, user);
     if (url.pathname === "/api/browser/me") return Response.json(user);
+    // Not found, not forbidden: no hint that it exists.
+    if (url.pathname === "/admin")
+      return isAdmin(env, user.email)
+        ? adminPage(await listUsers(env))
+        : new Response("Not found", { status: 404 });
     if (url.pathname === "/api/browser/shared")
       return Response.json({ interviews: await sharedWith(env, user.email) });
     // An interview someone else assigned to this user lives in their hub.

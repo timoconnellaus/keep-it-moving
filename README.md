@@ -22,6 +22,8 @@ The code is at https://github.com/timoconnellaus/keep-it-moving. Sign in at http
 
 ## Deploy your own
 
+The license is the [Functional Source License](LICENSE) (FSL-1.1-MIT): use it, change it and run your own copy for yourself or your company, but don't sell it, or a service built on it, as a competing product. Each version becomes MIT two years after it's released.
+
 You need a Cloudflare account with a domain on it, and a Google Cloud project for the sign-in.
 
 1. In `wrangler.jsonc`, set `account_id` to yours, `routes` to your domain, and `PUBLIC_URL` to its origin. Create a KV namespace (`npx wrangler kv namespace create OAUTH_KV`) and put its id in `kv_namespaces`.
@@ -53,6 +55,8 @@ The browser signs in with Google; anyone with a Google account can, and each use
 1. In Google Cloud Console, create an OAuth client of type **Web application** with the redirect URI `https://keep-it-moving.zerobsai.com/auth/google/callback` (that is, `PUBLIC_URL` + `/auth/google/callback`).
 2. Run `npx wrangler secret put GOOGLE_CLIENT_ID` and paste its client ID.
 3. Run `npx wrangler secret put GOOGLE_CLIENT_SECRET` and paste its secret.
+
+`ADMIN_EMAILS`, a comma-separated secret, says who may open `/admin`: a list of everyone who has signed in, with when they were first and last seen (to the day). Anyone else gets a 404 there, and without the secret nobody does.
 
 The optional `OWNER_EMAIL` secret (`npx wrangler secret put OWNER_EMAIL`) names the deployment's owner: their workspace is the one from before there were other users. Leave it out on a new deployment. These stay out of `wrangler.jsonc` so a copy of the repo doesn't deploy with someone else's.
 

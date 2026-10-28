@@ -1,7 +1,9 @@
+import type { UserRecord } from "./users.js";
+
 export const REPO_URL = "https://github.com/timoconnellaus/keep-it-moving";
 
 /** The Worker's own pages: sign-in and errors, in the app's colours, light or dark. */
-const shell = (body: string) => `<!doctype html>
+const shell = (body: string, className = "") => `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -40,6 +42,13 @@ const shell = (body: string) => `<!doctype html>
     color: var(--ink); font-weight: 500; text-decoration: none;
   }
   .google:hover { border-color: var(--muted); }
+  main.wide { width: min(960px, 100%); text-align: left; }
+  .wide h1 { margin-top: 0; }
+  .table { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+  th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+  td.when { white-space: nowrap; color: var(--muted); }
   .setup {
     margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line);
     text-align: left;
@@ -55,7 +64,7 @@ const shell = (body: string) => `<!doctype html>
     font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 </style>
-<main>
+<main class="${className}">
 <img src="/icons/icon.svg" alt="" width="40" height="40">
 ${body}
 </main>
@@ -85,7 +94,7 @@ Sign in with Google</a>
 kim skill install
 kim login</pre>
 <p><code>kim skill install</code> asks which agents get the skill: Claude Code, Codex, Cursor, Gemini CLI, Copilot, OpenCode and more. Then ask your agent to interview you about something, such as “interview me about this feature”.</p>
-<p>Or run your own: the code is open source at <a href="${REPO_URL}">github.com/timoconnellaus/keep-it-moving</a>, with how to deploy it to your Cloudflare account.</p>
+<p>Or run your own: the source is available at <a href="${REPO_URL}">github.com/timoconnellaus/keep-it-moving</a>, with how to deploy it to your Cloudflare account.</p>
 </section>`),
     {
       status: 200,
@@ -98,3 +107,32 @@ kim login</pre>
 
 export const escapeHtml = (text: string) =>
   text.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
+
+const day = (ms?: number) =>
+  ms === undefined ? "—" : new Date(ms).toISOString().slice(0, 10);
+
+/** Who has signed up, for ADMIN_EMAILS only. */
+export const adminPage = (users: UserRecord[]) =>
+  new Response(
+    shell(
+      `<h1>Signed up</h1>
+<p>${users.length} ${users.length === 1 ? "person" : "people"}. “Last seen” is accurate to a day; people who signed in before 29 October 2026 have no dates until they come back.</p>
+<div class="table"><table>
+<thead><tr><th>Email</th><th>Name</th><th>First seen</th><th>Last seen</th></tr></thead>
+<tbody>
+${users
+  .map(
+    (user) =>
+      `<tr><td>${escapeHtml(user.email)}</td><td>${escapeHtml(user.name ?? "")}</td><td class="when">${day(user.first)}</td><td class="when">${day(user.last)}</td></tr>`,
+  )
+  .join("\n")}
+</tbody></table></div>`,
+      "wide",
+    ),
+    {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    },
+  );

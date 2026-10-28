@@ -68,6 +68,12 @@ function memoryKv() {
       const kind = typeof type === "string" ? type : type?.type;
       return value !== null && kind === "json" ? JSON.parse(value) : value;
     },
+    async getWithMetadata(key: string) {
+      return {
+        value: data.get(key) ?? null,
+        metadata: metadata.get(key) ?? null,
+      };
+    },
     async put(key: string, value: string, options?: { metadata?: unknown }) {
       data.set(key, value);
       metadata.set(key, options?.metadata);
@@ -101,6 +107,7 @@ function setup() {
     OWNER_EMAIL: OWNER,
     GOOGLE_CLIENT_ID: CLIENT_ID,
     GOOGLE_CLIENT_SECRET: "secret",
+    ADMIN_EMAILS: "Admin@Example.com, other@example.com",
     OAUTH_KV: kv,
     ASSETS: {
       fetch: async (request: Request) =>
@@ -345,6 +352,29 @@ describe("Google sign-in", () => {
     });
     expect(out.status).toBe(403);
     expect((await call("/api/browser/me", { cookie })).status).toBe(200);
+  });
+});
+
+describe("the admin page", () => {
+  it("lists who signed up for ADMIN_EMAILS, and is not found for anyone else", async () => {
+    const { kv, call, signIn } = setup();
+    // Signed in before records began: a profile, no dates.
+    await kv.put("profile:early@example.com", "Early");
+    const ann = await signIn("ann@example.com");
+    const admin = await signIn("admin@example.com");
+
+    expect((await call("/admin", { cookie: ann })).status).toBe(404);
+    const page = await call("/admin", { cookie: admin });
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    for (const email of [
+      "ann@example.com",
+      "admin@example.com",
+      "early@example.com",
+    ])
+      expect(html).toContain(`<td>${email}</td>`);
+    expect(html).toContain("3 people");
+    expect((await call("/admin")).status).toBe(302);
   });
 });
 

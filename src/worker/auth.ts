@@ -4,6 +4,7 @@ import { ttlCache } from "./cache.js";
 import type { Env } from "./env.js";
 import { page } from "./pages.js";
 import { saveProfile } from "./shares.js";
+import { recordUser } from "./users.js";
 
 /** Who is signed in to the browser, as Google told us at sign-in. */
 export interface User {
@@ -46,7 +47,8 @@ export async function currentUser(
   if (!stored) return null;
   const { refreshed, ...user } = stored;
   // Sliding expiry: a session lasts while it keeps being used.
-  if (Date.now() - refreshed > REFRESH_MS) await saveSession(env, id, user);
+  if (Date.now() - refreshed > REFRESH_MS)
+    await Promise.all([saveSession(env, id, user), recordUser(env, user)]);
   return user;
 }
 
@@ -126,6 +128,7 @@ export async function googleCallback(request: Request, env: Env) {
   const id = random();
   await saveSession(env, id, user);
   if (user.name) await saveProfile(env, user.email, user.name);
+  await recordUser(env, user);
   return redirect(flow.next, [
     setCookie(SESSION_COOKIE, id, SESSION_TTL),
     setCookie(FLOW_COOKIE, "", 0),
