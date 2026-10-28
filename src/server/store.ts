@@ -1,5 +1,6 @@
 import {
   AnswerInputSchema,
+  ARTIFACT_MAX_BYTES,
   ArtifactInputSchema,
   ChatInputSchema,
   ArtifactPatchSchema,
@@ -83,6 +84,8 @@ export const LIMITS = {
   questions: 200,
   artifacts: 50,
   chatMessages: 2_000,
+  /** The newest devices keep notifications; older ones drop off. */
+  pushDevices: 20,
 } as const;
 
 /** The hub answers these with 403 and the message. */
@@ -340,6 +343,8 @@ export class InterviewStore {
     } catch {
       throw new Error("A push endpoint is an https URL");
     }
+    if (endpoint.length > 2_000)
+      throw new Error("That push endpoint is too long");
     if (
       !PUSH_SERVICES.some(
         (service) => host === service || host.endsWith(`.${service}`),
@@ -347,9 +352,15 @@ export class InterviewStore {
     )
       throw new Error(`${host} is not a known push service`);
     this.sql.all(
-      "INSERT INTO push_subscriptions (endpoint, created_at) VALUES (?, ?) ON CONFLICT(endpoint) DO NOTHING",
+      "INSERT INTO push_subscriptions (endpoint, created_at) VALUES (?, ?) ON CONFLICT(endpoint) DO UPDATE SET created_at=excluded.created_at",
       endpoint,
       now(),
+    );
+    // Each test or notification pushes to every device, so keep them few.
+    this.sql.all(
+      `DELETE FROM push_subscriptions WHERE endpoint NOT IN
+        (SELECT endpoint FROM push_subscriptions ORDER BY created_at DESC, rowid DESC LIMIT ?)`,
+      LIMITS.pushDevices,
     );
   }
 
@@ -363,6 +374,10 @@ export class InterviewStore {
         `SELECT id FROM sessions ${all ? "" : "WHERE status = 'active'"} ORDER BY created_at DESC`,
       )
       .map((row) => this.getSession(String(row.id), baseUrl));
+  }
+
+  hasSession(id: string): boolean {
+    return Boolean(first(this.sql, "SELECT 1 FROM sessions WHERE id=?", id));
   }
 
   sessionIdForToken(token: string): string | null {
@@ -838,6 +853,7 @@ export class InterviewStore {
           show: parsed.show,
         });
     }
+    fitsInRow(parsed.content, parsed.source);
     if (this.count("artifacts", sessionId) >= LIMITS.artifacts)
       throw new Error(
         `${LIMIT_REACHED}: an interview holds at most ${LIMITS.artifacts} artifacts; update one instead, or start a new interview`,
@@ -880,6 +896,10 @@ export class InterviewStore {
       parsed.description !== undefined ||
       parsed.source !== undefined;
     if (changed) {
+      fitsInRow(
+        parsed.content ?? String(current.content),
+        parsed.source === undefined ? optional(current.source) : parsed.source,
+      );
       this.sql.all(
         "UPDATE artifacts SET title=?, content=?, description=?, source=?, revision=revision+1, updated_at=? WHERE id=?",
         parsed.title ?? String(current.title),
@@ -1098,6 +1118,17 @@ export class InterviewStore {
     if (!row) throw new Error("Question not found");
     return row;
   }
+}
+
+/** An artifact's content and source share a row, which holds at most 2 MB. */
+function fitsInRow(content: string, source: string | null | undefined) {
+  const encoder = new TextEncoder();
+  const bytes =
+    encoder.encode(content).length + encoder.encode(source ?? "").length;
+  if (bytes > ARTIFACT_MAX_BYTES)
+    throw new Error(
+      `${LIMIT_REACHED}: an artifact's content and source together hold at most ${(ARTIFACT_MAX_BYTES / 1e6).toFixed(1)} MB; this is ${(bytes / 1e6).toFixed(1)} MB`,
+    );
 }
 
 function mapProject(row: Row): ProjectView {

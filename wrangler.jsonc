@@ -23,14 +23,22 @@
   "kv_namespaces": [
     { "binding": "OAUTH_KV", "id": "362d9bb9c4cb4509a8d8d3a540dad73c" },
   ],
-  // Client registration (/register) and Google sign-in, per client IP. Any
-  // number unique in the account works as the namespace id; nothing to set
-  // up in the dashboard.
+  // AUTH_LIMITER: client registration, the token swap and Google sign-in
+  // per client IP, and KV writes (assigning, making keys) per user.
+  // API_LIMITER: everything a signed-in user does, per user, well above what
+  // a few tabs and agents need. Any number unique in the account works as
+  // the namespace id; nothing to set up in the dashboard. Limits are
+  // approximate and counted per Cloudflare location.
   "ratelimits": [
     {
       "name": "AUTH_LIMITER",
       "namespace_id": "1001",
       "simple": { "limit": 20, "period": 60 },
+    },
+    {
+      "name": "API_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 1200, "period": 60 },
     },
   ],
   "vars": {

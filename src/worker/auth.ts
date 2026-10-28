@@ -151,10 +151,17 @@ export async function logout(request: Request, env: Env) {
 export const signInUrl = (url: URL, start = false) =>
   `${start ? "/auth/google/start" : "/signin"}?next=${encodeURIComponent(url.pathname + url.search)}`;
 
-/** Only a path on this site, so sign-in can't bounce the browser elsewhere. */
+/**
+ * Only a path on this site, so sign-in can't bounce the browser elsewhere.
+ * Browsers drop tabs and newlines from a URL, so `/\t/evil.example` would
+ * become `//evil.example`: resolve it as they do and keep the path alone.
+ */
 export function safeNext(next: string | null): string {
-  if (!next || !next.startsWith("/") || /^\/[/\\]/.test(next)) return "/";
-  return next;
+  if (!next || !next.startsWith("/")) return "/";
+  const base = "https://kim.invalid";
+  const url = new URL(next, base);
+  if (url.origin !== base) return "/";
+  return url.pathname + url.search + url.hash;
 }
 
 export function isLoopback(hostname: string): boolean {

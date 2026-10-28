@@ -83,6 +83,37 @@ describe("workspace limits", () => {
     ).toBe(2);
   });
 
+  it("keeps an artifact's content and source within one SQLite row", () => {
+    const { store } = setup();
+    const session = store.createSession("", {});
+    const mb = (n: number) => "x".repeat(n * 1_000_000);
+    expect(() =>
+      store.addArtifact(session.id, {
+        kind: "mockup",
+        title: "Big",
+        content: mb(1.2),
+        source: mb(0.8),
+      }),
+    ).toThrow(/together hold at most 1.9 MB; this is 2.0 MB/);
+    // Multi-byte characters count as the bytes they take.
+    expect(() =>
+      store.addArtifact(session.id, {
+        kind: "document",
+        title: "Wide",
+        content: "é".repeat(1_000_000),
+      }),
+    ).toThrow(/at most 1.9 MB/);
+    const fits = store.addArtifact(session.id, {
+      kind: "mockup",
+      title: "Fits",
+      content: mb(1),
+      source: mb(0.5),
+    });
+    expect(() =>
+      store.updateArtifact(session.id, fits.id, { source: mb(1) }),
+    ).toThrow(/at most 1.9 MB/);
+  });
+
   it("caps chat messages per interview", () => {
     const { store, sql } = setup();
     const session = store.createSession("", {});

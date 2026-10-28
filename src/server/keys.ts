@@ -1,11 +1,18 @@
 import { Hono, type Context } from "hono";
 import { first, type Sql } from "./sql.js";
+import { LIMIT_REACHED } from "./store.js";
 
 /** Agent keys start with this, so the Worker knows to check them here. */
 export const KEY_PREFIX = "kim_";
 
 /** The header the Worker sets on requests a key (not OAuth) authenticated. */
 export const VIA_KEY_HEADER = "x-kim-via-key";
+
+/**
+ * Each key records its owner in KV, so making them is capped: live keys,
+ * and every key ever made, since revoked ones keep their rows.
+ */
+export const KEY_LIMITS = { live: 50, total: 500 } as const;
 
 /** last_used_at is written at most this often, to keep reports cheap. */
 const TOUCH_MS = 60_000;
@@ -88,6 +95,18 @@ export function agentKeys(sql: Sql): {
       )
     )
       throw new Error(`A live key is already named "${name}"`);
+    const { live, total } = first(
+      sql,
+      "SELECT COUNT(*) total, COUNT(*) FILTER (WHERE revoked_at IS NULL) live FROM agent_keys",
+    )!;
+    if (Number(live) >= KEY_LIMITS.live)
+      throw new Error(
+        `${LIMIT_REACHED}: at most ${KEY_LIMITS.live} live keys; revoke one you no longer use`,
+      );
+    if (Number(total) >= KEY_LIMITS.total)
+      throw new Error(
+        `${LIMIT_REACHED}: a workspace can make at most ${KEY_LIMITS.total} keys`,
+      );
     const key = newKey();
     const id = crypto.randomUUID();
     sql.all(

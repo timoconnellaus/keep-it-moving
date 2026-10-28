@@ -301,6 +301,32 @@ describe("Google sign-in", () => {
     expect(back.headers.get("location")).toBe("/");
   });
 
+  it("won't be tricked off-site by characters browsers drop or flip", async () => {
+    const { startAndReturn, call } = setup();
+    for (const next of [
+      "/\t/evil.example/x",
+      "/\n/evil.example",
+      "/\\evil.example",
+    ]) {
+      const back = await startAndReturn(
+        { email: "ann@example.com", email_verified: true },
+        { next },
+      );
+      expect(new URL(back.headers.get("location")!, ORIGIN).origin).toBe(
+        ORIGIN,
+      );
+      const signin = await call(`/signin?next=${encodeURIComponent(next)}`, {
+        cookie: cookiesOf(back),
+      });
+      expect(new URL(signin.headers.get("location")!).origin).toBe(ORIGIN);
+    }
+    const kept = await startAndReturn(
+      { email: "ann@example.com", email_verified: true },
+      { next: "/s/abc?x=1" },
+    );
+    expect(kept.headers.get("location")).toBe("/s/abc?x=1");
+  });
+
   it("rejects a callback whose state isn't ours", async () => {
     const { call, startAndReturn } = setup();
     const back = await startAndReturn(
@@ -488,6 +514,13 @@ describe("agent keys", () => {
     ).sessions.map((session) => session.title);
     expect(titles).toEqual(["From Ann's cloud"]);
     expect(s.hubs.has("interviews")).toBe(false);
+    // Its owner is read from KV at most once in a while, not per request.
+    const get = vi.spyOn(s.kv, "get");
+    await s.call("/api/sessions", s.bearer(key));
+    await s.call("/api/sessions", s.bearer(key));
+    expect(get.mock.calls.filter(([k]) => k.startsWith("agent-key:"))).toEqual(
+      [],
+    );
   });
 
   it("keeps the owner's keys from before working, and refuses unknown keys", async () => {
@@ -509,6 +542,10 @@ describe("agent keys", () => {
     expect((await s.call("/api/sessions", s.bearer(legacy.key))).status).toBe(
       200,
     );
+    // Now it has a record, like any newer key.
+    expect(
+      [...s.kv.data.entries()].filter(([k]) => k.startsWith("agent-key:")),
+    ).toEqual([[expect.any(String), OWNER]]);
     expect(
       (await s.call("/api/sessions", s.bearer("kim_not-a-real-key"))).status,
     ).toBe(401);
@@ -781,6 +818,93 @@ describe("rate limits", () => {
     expect((await s.call("/health", from("1.1.1.1"))).status).toBe(200);
     expect(binding.limit).toHaveBeenCalledTimes(5);
   });
+
+  it("limits the token swap per IP too", async () => {
+    const s = setup();
+    Object.assign(s.env, { AUTH_LIMITER: limiter(1) });
+    const swap = () =>
+      s.call("/token", {
+        method: "POST",
+        headers: {
+          "cf-connecting-ip": "1.1.1.1",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: "grant_type=refresh_token&refresh_token=x&client_id=y",
+      });
+    expect((await swap()).status).not.toBe(429);
+    expect((await swap()).status).toBe(429);
+  });
+
+  it("limits each signed-in user's requests, whichever way they come", async () => {
+    const s = setup();
+    const ann = await s.signIn("ann@example.com");
+    const bob = await s.signIn("bob@example.com");
+    const token = await s.cliToken(ann);
+    const api = limiter(2);
+    Object.assign(s.env, { API_LIMITER: api });
+    expect(
+      (await s.call("/api/browser/overview", { cookie: ann })).status,
+    ).toBe(200);
+    expect((await s.call("/api/sessions", s.bearer(token))).status).toBe(200);
+    const refused = await s.call("/api/browser/overview", { cookie: ann });
+    expect(refused.status).toBe(429);
+    expect((await s.call("/api/sessions", s.bearer(token))).status).toBe(429);
+    // Someone else, and signing in, carry on.
+    expect(
+      (await s.call("/api/browser/overview", { cookie: bob })).status,
+    ).toBe(200);
+    expect((await s.call("/api/browser/me", { cookie: ann })).status).toBe(200);
+  });
+
+  it("limits a user's KV writes more tightly: assigning and making keys", async () => {
+    const s = setup();
+    const ann = await s.signIn("ann@example.com");
+    const token = await s.cliToken(ann);
+    const session = (await (
+      await s.call("/api/sessions", { method: "POST", ...s.bearer(token) })
+    ).json()) as { id: string };
+    Object.assign(s.env, { AUTH_LIMITER: limiter(1) });
+    const assign = () =>
+      s.call(`/api/sessions/${session.id}/assign`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ email: "bob@example.com" }),
+      });
+    expect((await assign()).status).toBe(200);
+    expect((await assign()).status).toBe(429);
+    const key = await s.call("/api/sessions/kim/keys", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ name: "cloud" }),
+    });
+    expect(key.status).toBe(429);
+    // Reading isn't a write.
+    expect((await s.call("/api/sessions", s.bearer(token))).status).toBe(200);
+  });
+
+  it("limits made-up agent keys per IP before they reach the owner's hub", async () => {
+    const s = setup();
+    const binding = limiter(1);
+    Object.assign(s.env, { AUTH_LIMITER: binding });
+    const guess = () =>
+      s.call("/api/sessions", {
+        headers: {
+          authorization: "Bearer kim_guess",
+          "cf-connecting-ip": "1.1.1.1",
+        },
+      });
+    expect((await guess()).status).toBe(401);
+    const verify = vi.spyOn(s.hubs.get("interviews")!.app, "fetch");
+    expect((await guess()).status).toBe(401);
+    expect(binding.limit).toHaveBeenLastCalledWith({ key: "key:1.1.1.1" });
+    expect(verify).not.toHaveBeenCalled();
+  });
 });
 
 describe("KV reads", () => {
@@ -800,5 +924,34 @@ describe("KV reads", () => {
     const keys = get.mock.calls.map(([key]) => key.split(":")[0]);
     expect(keys.filter((key) => key === "session")).toHaveLength(0);
     expect(keys.filter((key) => key === "share")).toHaveLength(1);
+  });
+
+  it("lists Shared with you from KV once, and again after an assignment", async () => {
+    const s = setup();
+    const ann = await s.signIn("ann@example.com");
+    const cara = await s.signIn("cara@example.com");
+    const token = await s.cliToken(ann);
+    const list = vi.spyOn(s.kv, "list");
+    const shared = async () =>
+      (
+        (await (
+          await s.call("/api/browser/shared", { cookie: cara })
+        ).json()) as { interviews: unknown[] }
+      ).interviews;
+    expect(await shared()).toEqual([]);
+    expect(await shared()).toEqual([]);
+    expect(list).toHaveBeenCalledTimes(1);
+    const session = (await (
+      await s.call("/api/sessions", { method: "POST", ...s.bearer(token) })
+    ).json()) as { id: string };
+    await s.call(`/api/sessions/${session.id}/assign`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ email: "cara@example.com" }),
+    });
+    expect(await shared()).toHaveLength(1);
   });
 });
