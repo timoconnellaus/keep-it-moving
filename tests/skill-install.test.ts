@@ -178,6 +178,15 @@ describe("skill install", () => {
   });
 });
 
+describe("agent folders", () => {
+  it("links Amp into ~/.config/agents/skills, not its config folder", () => {
+    const paths = setup();
+    installSkill(paths, ["amp"]);
+    const link = join(paths.home, ".config", "agents", "skills", "interviewer");
+    expect(readlinkSync(link)).toBe(canonicalSkill(paths.home));
+  });
+});
+
 describe("kim skill install", () => {
   const kim = async (home: string, ...args: string[]) => {
     const { stdout, stderr } = await exec(
@@ -200,6 +209,13 @@ describe("kim skill install", () => {
     const again = await kim(home, "skill", "install");
     expect(again.result.agents).toEqual(["claude", "codex"]);
     expect(again.stderr).toBe("");
+
+    // --all is every agent found here, and makes no folders for the rest.
+    mkdirSync(join(home, ".cursor"));
+    const all = await kim(home, "skill", "install", "--all");
+    expect(all.result.agents).toEqual(["claude", "codex", "cursor"]);
+    expect(existsSync(join(home, ".gemini"))).toBe(false);
+    await kim(home, "skill", "install", "--agents", "claude,codex");
 
     const removed = await kim(home, "skill", "uninstall");
     expect(removed.result.removed).toEqual([

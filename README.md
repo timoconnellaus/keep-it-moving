@@ -12,9 +12,9 @@ kim skill install
 kim login
 ```
 
-`skill install` asks which agents get the interviewer skill (Claude Code, Codex, Pi). Then ask Claude to interview you about something, such as "interview me about this feature", and answer in the browser. Diagrams also need the [archify](https://github.com/tt-a1i/archify) skill.
+`skill install` asks which agents get the interviewer skill: Claude Code, Codex, Pi, Cursor, Gemini CLI, GitHub Copilot, OpenCode, Amp, Factory Droid, Windsurf, Antigravity, Goose, Kiro CLI, Roo Code, Kilo Code or Qwen Code, with the ones on this machine listed first and ticked. Agents that read `~/.agents/skills` themselves, such as Cline, Warp and Zed, get it without being picked. Then ask Claude to interview you about something, such as "interview me about this feature", and answer in the browser. Diagrams also need the [archify](https://github.com/tt-a1i/archify) skill.
 
-The skill lives in `~/.agents/skills/interviewer`, a copy kim made (marked by `.installed-by-kim`), and each chosen agent's skills folder links to it. Every `kim` run refreshes that copy when the CLI's bundled skill has changed, so the agents stay current. Outside a terminal, pick agents with `--agents claude,codex,pi` or `--all`; without either it uses the last choice, or Claude Code. It never replaces a link or folder it didn't make, such as a dev checkout's links, unless `--force`. `kim skill uninstall` removes what it made.
+The skill lives in `~/.agents/skills/interviewer`, a copy kim made (marked by `.installed-by-kim`), and each chosen agent's skills folder links to it. Every `kim` run refreshes that copy when the CLI's bundled skill has changed, so the agents stay current. Outside a terminal, pick agents with `--agents claude,codex,cursor` (`kim skill agents` lists the ids and folders) or `--all` for every agent found on the machine; without either it uses the last choice, or Claude Code. It never replaces a link or folder it didn't make, such as a dev checkout's links, unless `--force`. `kim skill uninstall` removes what it made.
 
 `kim update` reinstalls the CLI from the site and refreshes the skill. Once a day, `kim` checks the site's `/cli-version.json` (the build `npm run pack:cli` stamped into the package, a static file) and says on stderr when a newer one is out.
 

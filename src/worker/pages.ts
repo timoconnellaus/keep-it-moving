@@ -84,7 +84,7 @@ Sign in with Google</a>
 <pre>npm install -g ${escapeHtml(origin)}/cli.tgz
 kim skill install
 kim login</pre>
-<p><code>kim skill install</code> asks which agents get the skill (Claude Code, Codex, pi). Then ask your agent to interview you about something, such as “interview me about this feature”.</p>
+<p><code>kim skill install</code> asks which agents get the skill: Claude Code, Codex, Cursor, Gemini CLI, Copilot, OpenCode and more. Then ask your agent to interview you about something, such as “interview me about this feature”.</p>
 <p>Or run your own: the code is open source at <a href="${REPO_URL}">github.com/timoconnellaus/keep-it-moving</a>, with how to deploy it to your Cloudflare account.</p>
 </section>`),
     {

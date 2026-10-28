@@ -21,12 +21,43 @@ import { dirname, join, relative, resolve } from "node:path";
  * copy updates them all. It only ever replaces or removes what it made.
  */
 
-/** The agents a skill can be linked into, by the folder in ~ that shows they're installed. */
+/**
+ * The agents a skill can be linked into: `home` is the folder in ~ that shows
+ * they're installed, and their skills folder is `home`/skills unless `skills`
+ * says otherwise. Paths follow the agents' docs, as collected in
+ * github.com/vercel-labs/skills (docs/agents.md). Agents that read
+ * ~/.agents/skills themselves, such as Cline, Warp and Zed, see the canonical
+ * copy without a link.
+ */
+interface SkillAgent {
+  readonly id: string;
+  readonly name: string;
+  readonly home: string;
+  readonly skills?: string;
+}
 export const SKILL_AGENTS = [
   { id: "claude", name: "Claude Code", home: ".claude" },
   { id: "codex", name: "Codex", home: ".codex" },
   { id: "pi", name: "Pi", home: ".pi/agent" },
-] as const;
+  { id: "cursor", name: "Cursor", home: ".cursor" },
+  { id: "gemini", name: "Gemini CLI", home: ".gemini" },
+  { id: "copilot", name: "GitHub Copilot", home: ".copilot" },
+  { id: "opencode", name: "OpenCode", home: ".config/opencode" },
+  {
+    id: "amp",
+    name: "Amp",
+    home: ".config/amp",
+    skills: ".config/agents/skills",
+  },
+  { id: "droid", name: "Factory Droid", home: ".factory" },
+  { id: "windsurf", name: "Windsurf", home: ".codeium/windsurf" },
+  { id: "antigravity", name: "Antigravity", home: ".gemini/antigravity" },
+  { id: "goose", name: "Goose", home: ".config/goose" },
+  { id: "kiro", name: "Kiro CLI", home: ".kiro" },
+  { id: "roo", name: "Roo Code", home: ".roo" },
+  { id: "kilo", name: "Kilo Code", home: ".kilo" },
+  { id: "qwen", name: "Qwen Code", home: ".qwen" },
+] as const satisfies readonly SkillAgent[];
 export type AgentId = (typeof SKILL_AGENTS)[number]["id"];
 
 /** Marks the canonical copy as ours, and holds the hash of what was copied. */
@@ -43,8 +74,11 @@ export interface SkillPaths {
 
 export const canonicalSkill = (home: string) =>
   join(home, ".agents", "skills", "interviewer");
-const agentSkill = (home: string, agent: (typeof SKILL_AGENTS)[number]) =>
-  join(home, agent.home, "skills", "interviewer");
+/** The agent's skills folder, relative to ~. */
+export const skillsFolder = (agent: SkillAgent) =>
+  agent.skills ?? join(agent.home, "skills");
+const agentSkill = (home: string, agent: SkillAgent) =>
+  join(home, skillsFolder(agent), "interviewer");
 
 /** The agents whose folder exists, so they're probably installed. */
 export function installedAgents(home: string): AgentId[] {

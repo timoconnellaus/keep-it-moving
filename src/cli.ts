@@ -30,6 +30,7 @@ import {
   rememberedAgents,
   SKILL_AGENTS,
   type SkillPaths,
+  skillsFolder,
   uninstallSkill,
 } from "./skill.js";
 import { checkForUpdate, readBuild } from "./update.js";
@@ -952,7 +953,8 @@ const skillPaths = (): SkillPaths => ({
 /**
  * `skill install` copies the bundled skill to ~/.agents/skills and links it
  * into the chosen agents' skills folders: picked from a checklist in a
- * terminal, else `--agents claude,codex` or `--all`, else the agents chosen
+ * terminal, else `--agents claude,codex` or `--all` (every agent found
+ * here), else the agents chosen
  * last time, else Claude Code. `skill uninstall` removes only what it made;
  * `skill refresh` brings the copy up to date, as every run does.
  */
@@ -967,6 +969,17 @@ async function skillCommand(action: string | undefined, args: string[]) {
     return;
   }
   if (action === "uninstall") return output(uninstallSkill(paths));
+  if (action === "agents") {
+    const present = installedAgents(paths.home);
+    return output({
+      agents: SKILL_AGENTS.map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        skills: `~/${skillsFolder(agent)}`,
+        found: present.includes(agent.id),
+      })),
+    });
+  }
   if (action === "refresh")
     return output({
       canonical: canonicalSkill(paths.home),
@@ -979,26 +992,33 @@ async function chooseAgents(
   args: string[],
   paths: SkillPaths,
 ): Promise<AgentId[] | null> {
-  if (args.includes("--all")) return SKILL_AGENTS.map((agent) => agent.id);
+  const present = installedAgents(paths.home);
+  // Every agent found here, not every one known: no folders for absent ones.
+  if (args.includes("--all"))
+    return present.length ? present : (["claude"] as AgentId[]);
   const list = flag(args, "--agents");
   if (list) return parseAgents(list);
   const remembered = rememberedAgents(paths.choiceFile);
   if (process.stdin.isTTY && process.stderr.isTTY) {
-    const present = installedAgents(paths.home);
     const preselected =
       remembered ?? (present.length ? present : (["claude"] as AgentId[]));
+    // The ones on this machine first.
+    const agents = [
+      ...SKILL_AGENTS.filter((agent) => present.includes(agent.id)),
+      ...SKILL_AGENTS.filter((agent) => !present.includes(agent.id)),
+    ];
     return checkbox(
       "Install the interviewer skill for which agents?",
-      SKILL_AGENTS.map((agent) => ({
+      agents.map((agent) => ({
         value: agent.id,
-        label: `${agent.name} (~/${agent.home}/skills)`,
+        label: `${agent.name} (~/${skillsFolder(agent)})`,
         checked: preselected.includes(agent.id),
       })),
     );
   }
   if (remembered) return remembered;
   process.stderr.write(
-    "Installing for Claude Code only. Run `kim skill install` in a terminal to choose, or pass --agents claude,codex,pi or --all.\n",
+    "Installing for Claude Code only. Run `kim skill install` in a terminal to choose, or pass --agents claude,codex,cursor (see `kim skill agents`) or --all for every agent found here.\n",
   );
   return ["claude"];
 }
@@ -1376,10 +1396,12 @@ Cloud sessions (claude.ai/code):
     access, environment variables and setup script, ready to paste
 
 Setup:
-  skill install [--agents claude,codex,pi | --all] [--force]
+  skill install [--agents claude,codex,cursor | --all] [--force]
     copy the interviewer skill to ~/.agents/skills and link it into each agent's
     skills folder; asks which agents in a terminal, and remembers the choice.
-    It never replaces a link or folder it didn't make unless --force
+    --all means every agent found on this machine. It never replaces a link
+    or folder it didn't make unless --force
+  skill agents      the agents it can link into, their ids and skills folders
   skill uninstall   remove the links and copy skill install made
   skill refresh     bring the skill copy up to date (every run does this)
   update   reinstall kim from this site, then refresh the skill
