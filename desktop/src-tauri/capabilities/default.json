@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the hosted site may do from inside the desktop app: notify, badge the dock, open links outside, and open its own pages in new windows.",
+  "windows": ["main", "page-*"],
+  "remote": {
+    "urls": [
+      "https://keep-it-moving.zerobsai.com/*",
+      "https://interviewer.zerobsai.com/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-badge-count",
+    "core:webview:allow-create-webview-window",
+    "notification:default",
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
+  ]
+}
