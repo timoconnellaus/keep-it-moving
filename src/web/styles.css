@@ -978,6 +978,22 @@ h1 {
   opacity: 0.5;
   cursor: default;
 }
+/* On desktop the open chat takes its own column instead of covering the questions. */
+@media (min-width: 961px) {
+  body:has(.shell.chat-open) {
+    padding-right: 400px;
+  }
+}
+/* Too narrow for the workspace beside the questions once the chat takes its 400px. */
+@media (min-width: 961px) and (max-width: 1360px) {
+  .shell.chat-open .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell.chat-open .stage {
+    position: static;
+    height: 60vh;
+  }
+}
 @media (max-width: 960px) {
   .workspace {
     grid-template-columns: minmax(0, 1fr);

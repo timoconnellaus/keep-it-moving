@@ -175,7 +175,9 @@ export function App() {
   );
   const workspaceOpen = session.stageVisible && session.artifacts.length > 0;
   return (
-    <main className={`shell ${workspaceOpen ? "with-workspace" : ""}`}>
+    <main
+      className={`shell ${workspaceOpen ? "with-workspace" : ""} ${chat.open ? "chat-open" : ""}`}
+    >
       <header className="topbar">
         {session.respondent ? (
           <div className="respondent-title">
