@@ -5,7 +5,7 @@ import type {
   InterviewEvent,
   SessionView,
 } from "../shared/schema.js";
-import { ARTIFACT_VIEW_HEADERS } from "./artifactView.js";
+import { ARTIFACT_VIEW_HEADERS, opensAsPage } from "./artifactView.js";
 import { agentKeys, VIA_KEY_HEADER } from "./keys.js";
 import type { Sql } from "./sql.js";
 import { LIMIT_REACHED, type InterviewStore } from "./store.js";
@@ -711,6 +711,8 @@ export function createHub(options: HubOptions) {
     c.json(assign(c, tokenSession(c.req.param("token")), await body(c))),
   );
   app.get("/api/browser/:token/artifacts/:artifactId/view", (c) => {
+    if (opensAsPage(c.req.raw))
+      return c.text("Open this from its interview's page.", 403);
     const { format, content } = store.artifactContent(
       tokenSession(c.req.param("token")),
       c.req.param("artifactId"),

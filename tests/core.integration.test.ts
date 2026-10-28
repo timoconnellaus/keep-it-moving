@@ -469,8 +469,22 @@ describe("interview HTTP seam", () => {
       url: `/api/browser/${session.token}/artifacts/${diagram.id}/view?embed=1`,
     });
     expect(view.headers["content-security-policy"]).toBe(
-      "sandbox allow-scripts",
+      "sandbox allow-scripts; frame-ancestors 'self'",
     );
+    // Framed by the page, never a page of its own on this site.
+    const asPage = await app.inject({
+      method: "GET",
+      url: `/api/browser/${session.token}/artifacts/${diagram.id}/view`,
+      headers: { "sec-fetch-dest": "document" },
+    });
+    expect(asPage.statusCode).toBe(403);
+    expect(asPage.body).not.toContain("<svg>");
+    const framed = await app.inject({
+      method: "GET",
+      url: `/api/browser/${session.token}/artifacts/${diagram.id}/view`,
+      headers: { "sec-fetch-dest": "iframe" },
+    });
+    expect(framed.statusCode).toBe(200);
     expect(view.headers["referrer-policy"]).toBe("no-referrer");
     expect(view.body).toBe(
       "<!doctype html><html><body><svg></svg></body></html>",
