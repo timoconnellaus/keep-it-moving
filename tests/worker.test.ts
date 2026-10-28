@@ -301,6 +301,32 @@ describe("Google sign-in", () => {
     expect(back.headers.get("location")).toBe("/");
   });
 
+  it("won't be tricked off-site by characters browsers drop or flip", async () => {
+    const { startAndReturn, call } = setup();
+    for (const next of [
+      "/\t/evil.example/x",
+      "/\n/evil.example",
+      "/\\evil.example",
+    ]) {
+      const back = await startAndReturn(
+        { email: "ann@example.com", email_verified: true },
+        { next },
+      );
+      expect(new URL(back.headers.get("location")!, ORIGIN).origin).toBe(
+        ORIGIN,
+      );
+      const signin = await call(`/signin?next=${encodeURIComponent(next)}`, {
+        cookie: cookiesOf(back),
+      });
+      expect(new URL(signin.headers.get("location")!).origin).toBe(ORIGIN);
+    }
+    const kept = await startAndReturn(
+      { email: "ann@example.com", email_verified: true },
+      { next: "/s/abc?x=1" },
+    );
+    expect(kept.headers.get("location")).toBe("/s/abc?x=1");
+  });
+
   it("rejects a callback whose state isn't ours", async () => {
     const { call, startAndReturn } = setup();
     const back = await startAndReturn(
