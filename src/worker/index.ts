@@ -96,6 +96,8 @@ const agentApi: ExportedHandler<Env> = {
     ).props;
     const email = props?.email;
     if (!email) return Response.json({ error: "Not allowed" }, { status: 403 });
+    const limited = await userLimited(env, email, request);
+    if (limited) return limited;
     // The CLI package, for a cloud setup script holding the environment's
     // agent key: behind the token, so nothing new is public.
     const path = new URL(request.url).pathname;
@@ -173,6 +175,9 @@ const site: ExportedHandler<Env> = {
       return isAdmin(env, user.email)
         ? adminPage(await listUsers(env))
         : new Response("Not found", { status: 404 });
+    // Everything past here reaches a Durable Object or KV for this user.
+    const limited = await userLimited(env, user.email, request);
+    if (limited) return limited;
     if (url.pathname === "/api/browser/shared")
       return Response.json({ interviews: await sharedWith(env, user.email) });
     // An interview someone else assigned to this user lives in their hub.
@@ -242,9 +247,38 @@ async function authorize(request: Request, env: Env, user: User) {
 
 /**
  * Routes anyone can call that write KV or start a sign-in: the CLI's client
- * registration and Google sign-in. A `kim login` calls each once.
+ * registration, authorization and token swap, and Google sign-in. A
+ * `kim login` calls each once or twice; a CLI refreshes its token hourly.
  */
-const RATE_LIMITED = /^\/(register|auth\/google\/(start|callback))$/;
+const RATE_LIMITED =
+  /^\/(register|authorize|token|auth\/google\/(start|callback))$/;
+
+/** Requests a signed-in user makes that write KV: assigning, making a key. */
+const KV_WRITES =
+  /^\/api\/(sessions|browser)\/[^/]+\/assign$|^\/api\/sessions\/kim\/keys$/;
+
+/**
+ * A 429 once a signed-in user has made too many requests: any at all past
+ * API_LIMITER's generous allowance, or the few that write KV past
+ * AUTH_LIMITER's. Keyed by email, so one account can't run up the bill
+ * from many addresses.
+ */
+async function userLimited(env: Env, email: string, request: Request) {
+  const key = email.toLowerCase();
+  const writes =
+    request.method === "POST" && KV_WRITES.test(new URL(request.url).pathname);
+  for (const [limiter, scoped] of [
+    [env.API_LIMITER, key],
+    [writes ? env.AUTH_LIMITER : undefined, `write:${key}`],
+  ] as const) {
+    if (limiter && !(await limiter.limit({ key: scoped })).success)
+      return Response.json(
+        { error: "Too many requests; try again in a minute" },
+        { status: 429, headers: { "retry-after": "60" } },
+      );
+  }
+  return null;
+}
 
 /** A 429 once a client IP has called the rate-limited routes too often. */
 async function rateLimited(request: Request, env: Env) {
@@ -278,12 +312,21 @@ export default {
       // through a browser, such as a cloud session's environment. Keys
       // made before there were other users have no owner recorded: they
       // are the owner's.
-      resolveExternalToken: async ({ token, env }) => {
+      resolveExternalToken: async ({ token, env, request }) => {
         if (!token.startsWith(KEY_PREFIX)) return null;
-        const email =
-          (await env.OAUTH_KV.get(keyOwner(await sha256(token)))) ??
-          env.OWNER_EMAIL;
+        const hash = await sha256(token);
+        const recorded = await env.OAUTH_KV.get(keyOwner(hash));
+        const email = recorded ?? env.OWNER_EMAIL;
         if (!email) return null;
+        // Made-up keys all land here, on the owner's hub: limit them per
+        // address, as sign-in is, so they can't flood it.
+        if (!recorded && env.AUTH_LIMITER) {
+          const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+          const { success } = await env.AUTH_LIMITER.limit({
+            key: `key:${ip}`,
+          });
+          if (!success) return null;
+        }
         const verdict = (await hubFor(env, email)
           .fetch("https://hub/internal/keys/verify", {
             method: "POST",
@@ -291,6 +334,9 @@ export default {
           })
           .then((response) => response.json())) as { ok?: boolean };
         if (!verdict.ok) return null;
+        // An owner's key from before owners were recorded gets its record,
+        // so it never takes the limited path again.
+        if (!recorded) await env.OAUTH_KV.put(keyOwner(hash), email);
         return {
           props: { email, via: "key" },
           audience: `${env.PUBLIC_URL}/api/sessions`,

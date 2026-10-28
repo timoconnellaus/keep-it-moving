@@ -46,6 +46,13 @@ export const interviewToken = (path: string) =>
  */
 const shares = ttlCache<Share | null>(30_000);
 
+/**
+ * "Shared with you" lists read lately: a KV list call costs as much as a
+ * write, and the home page asks on every load. Assigning updates this
+ * isolate's copy; other isolates catch up within the TTL.
+ */
+const lists = ttlCache<SharedInterview[]>(30_000);
+
 export const shareFor = (env: Env, token: string) =>
   shares.get(token, () => env.OAUTH_KV.get<Share>(shareKey(token), "json"));
 
@@ -54,6 +61,8 @@ export async function recordAssignment(
   owner: string,
   change: Assignment,
 ): Promise<void> {
+  for (const email of [change.previous, change.assignee])
+    if (email) lists.delete(email);
   if (change.previous && change.previous !== change.assignee)
     await env.OAUTH_KV.delete(assignedKey(change.previous, change.token));
   if (!change.assignee) {
@@ -81,24 +90,27 @@ export async function forgetShare(
 ): Promise<void> {
   shares.set(token, null);
   await env.OAUTH_KV.delete(shareKey(token));
-  if (assignee) await env.OAUTH_KV.delete(assignedKey(assignee, token));
+  if (!assignee) return;
+  lists.delete(assignee);
+  await env.OAUTH_KV.delete(assignedKey(assignee, token));
 }
 
 /** Interviews other people have assigned to this email. */
-export async function sharedWith(
+export const sharedWith = (
   env: Env,
   email: string,
-): Promise<SharedInterview[]> {
-  const prefix = assignedKey(email.toLowerCase(), "");
-  const { keys } = await env.OAUTH_KV.list<Omit<SharedInterview, "token">>({
-    prefix,
+): Promise<SharedInterview[]> =>
+  lists.get(email.toLowerCase(), async () => {
+    const prefix = assignedKey(email.toLowerCase(), "");
+    const { keys } = await env.OAUTH_KV.list<Omit<SharedInterview, "token">>({
+      prefix,
+    });
+    return keys.map((key) => ({
+      token: key.name.slice(prefix.length),
+      title: key.metadata?.title ?? "Interview",
+      from: key.metadata?.from ?? "",
+    }));
   });
-  return keys.map((key) => ({
-    token: key.name.slice(prefix.length),
-    title: key.metadata?.title ?? "Interview",
-    from: key.metadata?.from ?? "",
-  }));
-}
 
 /** The name Google gave at sign-in, for the CLI, which only knows the email. */
 export const saveProfile = (env: Env, email: string, name: string) =>
