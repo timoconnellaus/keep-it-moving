@@ -96,6 +96,8 @@ interface Watcher {
  * otherwise hold the lease until its request timed out.
  */
 const REPLACED = "Replaced by a newer watcher on this interview";
+/** An agent socket's last message when its interview is gone. */
+const DELETED = { type: "deleted", message: "Session not found" };
 
 /** The interview API: agent routes under /api/sessions, browser routes under /api/browser/:token. */
 export function createHub(options: HubOptions) {
@@ -172,6 +174,11 @@ export function createHub(options: HubOptions) {
    */
   const review = (socket: AgentSocket, now: number): number | null => {
     const { sessionId: id, mode, idle, deadline } = socket.watch;
+    // Its interview went while it waited, and a timer found it first.
+    if (!store.hasSession(id)) {
+      endSocket(socket, DELETED, AGENT_CLOSE.deleted);
+      return null;
+    }
     if (mode === "attach") return null;
     if (mode === "next") {
       if (now < deadline) return deadline;
@@ -446,11 +453,7 @@ export function createHub(options: HubOptions) {
     store.deleteSession(id);
     sockets.closeSession?.(id);
     for (const socket of agentSockets?.list(id) ?? [])
-      endSocket(
-        socket,
-        { type: "deleted", message: "Session not found" },
-        AGENT_CLOSE.deleted,
-      );
+      endSocket(socket, DELETED, AGENT_CLOSE.deleted);
     // The Worker forgets the share when there was one.
     return c.json({ ok: true, id, title, token, assignee });
   });

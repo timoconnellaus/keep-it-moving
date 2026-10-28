@@ -204,6 +204,16 @@ describe("agent socket watchers", () => {
     expect(socket.closed?.code).toBe(4404);
   });
 
+  it("ends a socket whose interview went without the delete route, rather than throwing", async () => {
+    const { open, store, answer, one, session } = setup();
+    const { socket } = await open("mode=wait");
+    answer(one.id, "Yes");
+    store.deleteSession(session.id);
+    await vi.runAllTimersAsync();
+    expect(socket.closed?.code).toBe(4404);
+    expect(socket.messages().at(-1)).toMatchObject({ type: "deleted" });
+  });
+
   it("refuses an unknown interview or a plain request before upgrading", async () => {
     const { open, app, session } = setup();
     expect((await open("mode=wait", "missing")).response.status).toBe(404);

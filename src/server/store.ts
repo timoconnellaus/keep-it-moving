@@ -365,6 +365,10 @@ export class InterviewStore {
       .map((row) => this.getSession(String(row.id), baseUrl));
   }
 
+  hasSession(id: string): boolean {
+    return Boolean(first(this.sql, "SELECT 1 FROM sessions WHERE id=?", id));
+  }
+
   sessionIdForToken(token: string): string | null {
     const row = first(
       this.sql,
