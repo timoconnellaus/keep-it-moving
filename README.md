@@ -18,9 +18,20 @@ The skill lives in `~/.agents/skills/interviewer`, a copy kim made (marked by `.
 
 `kim update` reinstalls the CLI from the site and refreshes the skill. Once a day, `kim` checks the site's `/cli-version.json` (the build `npm run pack:cli` stamped into the package, a static file) and says on stderr when a newer one is out.
 
-## Develop
+The code is at https://github.com/timoconnellaus/keep-it-moving. Sign in at https://keep-it-moving.zerobsai.com and use it as is, or deploy your own copy.
 
-Deploying needs the Cloudflare account that owns `zerobsai.com`.
+## Deploy your own
+
+You need a Cloudflare account with a domain on it, and a Google Cloud project for the sign-in.
+
+1. In `wrangler.jsonc`, set `account_id` to yours, `routes` to your domain, and `PUBLIC_URL` to its origin. Create a KV namespace (`npx wrangler kv namespace create OAUTH_KV`) and put its id in `kv_namespaces`.
+2. Create the Google OAuth client and set its secrets, as in [Sign-in and secrets](#sign-in-and-secrets). Leave `OWNER_EMAIL` out.
+3. For phone notifications, generate a VAPID key pair: put the public key in `VAPID_PUBLIC_KEY` and the private JWK in the `VAPID_PRIVATE_JWK` secret. Without them, notifications are off.
+4. `npm install && npm run deploy`.
+
+Your deployment serves its own CLI at `<your origin>/cli.tgz`. The CLI talks to keep-it-moving.zerobsai.com unless told otherwise, so set `KEEP_IT_MOVING_URL=<your origin>` in your shell profile before `kim login`.
+
+## Develop
 
 ```sh
 npm install

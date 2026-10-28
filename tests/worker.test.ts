@@ -239,6 +239,9 @@ describe("Google sign-in", () => {
     expect(signinHtml).toContain('href="/auth/google/start?next=%2Fs%2Fabc"');
     // How to get the CLI and skill, from this deployment.
     expect(signinHtml).toContain(`npm install -g ${ORIGIN}/cli.tgz`);
+    expect(signinHtml).toContain(
+      'href="https://github.com/timoconnellaus/keep-it-moving"',
+    );
     expect((await call("/api/browser/overview")).status).toBe(401);
     expect((await call("/ws/overview")).status).toBe(401);
     // Install files stay public.

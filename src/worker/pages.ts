@@ -1,3 +1,5 @@
+export const REPO_URL = "https://github.com/timoconnellaus/keep-it-moving";
+
 /** The Worker's own pages: sign-in and errors, in the app's colours, light or dark. */
 const shell = (body: string) => `<!doctype html>
 <html lang="en">
@@ -44,7 +46,8 @@ const shell = (body: string) => `<!doctype html>
   }
   .setup h2 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
   .setup p { margin: 0 0 10px; font-size: 14px; }
-  .setup p:last-child { margin: 10px 0 0; }
+  .setup pre + p { margin-top: 10px; }
+  .setup p:last-child { margin-bottom: 0; }
   .setup pre {
     margin: 0; padding: 10px 12px; border-radius: 8px;
     white-space: pre-wrap; overflow-wrap: anywhere;
@@ -82,6 +85,7 @@ Sign in with Google</a>
 kim skill install
 kim login</pre>
 <p><code>kim skill install</code> asks which agents get the skill (Claude Code, Codex, pi). Then ask your agent to interview you about something, such as “interview me about this feature”.</p>
+<p>Or run your own: the code is open source at <a href="${REPO_URL}">github.com/timoconnellaus/keep-it-moving</a>, with how to deploy it to your Cloudflare account.</p>
 </section>`),
     {
       status: 200,
