@@ -140,13 +140,18 @@ export class InterviewHub extends DurableObject<Env> {
       } catch {
         return new Response("Session not found", { status: 404 });
       }
+    // Tabs are few; a script opening thousands only costs us.
+    const tag = respondent === null ? sessionId : respondentTag(sessionId);
+    if (
+      this.ctx.getWebSockets(tag).length >= SOCKETS_PER_PAGE ||
+      this.ctx.getWebSockets().length >= SOCKETS_PER_HUB
+    )
+      return new Response("Too many open pages", { status: 429 });
     const [client, server] = Object.values(new WebSocketPair()) as [
       WebSocket,
       WebSocket,
     ];
-    this.ctx.acceptWebSocket(server, [
-      respondent === null ? sessionId : respondentTag(sessionId),
-    ]);
+    this.ctx.acceptWebSocket(server, [tag]);
     if (sessionId !== "overview")
       server.send(this.hub.stateMessage(sessionId, respondent !== null));
     return new Response(null, { status: 101, webSocket: client });
@@ -175,6 +180,13 @@ export class InterviewHub extends DurableObject<Env> {
     if (agent) this.hub.agentSocketClosed(agent.slice(AGENT.length));
   }
 }
+
+/**
+ * Open sockets on one interview's page (or the list) as one viewer, and on
+ * the whole workspace, agents' included.
+ */
+const SOCKETS_PER_PAGE = 50;
+const SOCKETS_PER_HUB = 1_000;
 
 const respondentTag = (sessionId: string) => `respondent:${sessionId}`;
 const AGENT = "agent:";

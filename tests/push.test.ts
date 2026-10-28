@@ -91,6 +91,26 @@ describe("push notifications", () => {
     expect(sent).toEqual(["https://fcm.googleapis.com/fcm/send/phone"]);
     sql.close();
   });
+
+  it("keeps the newest devices, and refuses an oversized endpoint", async () => {
+    const { app, store, sql } = harness();
+    const subscribe = (endpoint: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/browser/push/subscribe",
+        payload: { endpoint },
+      });
+    const device = (n: number) => `https://fcm.googleapis.com/fcm/send/${n}`;
+    for (let n = 0; n < 25; n++) await subscribe(device(n));
+    const kept = store.pushSubscriptions();
+    expect(kept).toHaveLength(20);
+    expect(kept).not.toContain(device(0));
+    expect(kept).toContain(device(24));
+    expect((await subscribe(device(0) + "x".repeat(5_000))).statusCode).toBe(
+      400,
+    );
+    sql.close();
+  });
 });
 
 describe("cross-site requests", () => {

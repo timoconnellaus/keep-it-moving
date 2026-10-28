@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { VIA_KEY_HEADER } from "../src/server/keys.js";
+import { KEY_LIMITS, VIA_KEY_HEADER } from "../src/server/keys.js";
 import { hubHarness } from "./helpers/harness.js";
 
 const closers: Array<() => void> = [];
@@ -137,6 +137,34 @@ describe("what a key may do", () => {
     ).json().revoked;
     expect(revoked).toHaveLength(2);
     expect((await verify(first.key)).ok).toBe(false);
+  });
+
+  it("caps live keys, and keys ever made", async () => {
+    const { app, sql } = harness();
+    const create = (name: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/sessions/kim/keys",
+        payload: { name },
+      });
+    for (let index = 0; index < KEY_LIMITS.live; index++)
+      expect((await create(`k${index}`)).statusCode).toBe(200);
+    const full = await create("one more");
+    expect(full.statusCode).toBe(403);
+    expect(full.json().error).toMatch(/at most 50 live keys/);
+    await app.inject({ method: "DELETE", url: "/api/sessions/kim/keys/k0" });
+    expect((await create("one more")).statusCode).toBe(200);
+    for (let index = 0; index < KEY_LIMITS.total; index++)
+      sql.all(
+        "INSERT INTO agent_keys (id,name,hash,created_at,revoked_at) VALUES (?,?,?,?,?)",
+        `old${index}`,
+        "old",
+        `h${index}`,
+        "2026-01-01",
+        "2026-01-02",
+      );
+    await app.inject({ method: "DELETE", url: "/api/sessions/kim/keys/k1" });
+    expect((await create("again")).json().error).toMatch(/at most 500 keys/);
   });
 
   it("lets a key do what a cloud session needs", async () => {
