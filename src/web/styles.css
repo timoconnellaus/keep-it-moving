@@ -1369,6 +1369,34 @@ h1 {
   color: var(--muted);
   overflow-wrap: anywhere;
 }
+.account-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.account-links-head,
+.account-links [role="alert"] {
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.account-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 8px;
+}
+.account-link span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.account-menu .account-link button {
+  width: auto;
+  color: var(--muted);
+}
 .account-menu form {
   margin: 4px 0 0;
 }

@@ -1,5 +1,6 @@
 import { ttlCache } from "./cache.js";
 import type { Env } from "./env.js";
+import { linkedEmails } from "./links.js";
 
 /**
  * The share directory: which owner's workspace holds an interview assigned
@@ -17,6 +18,8 @@ export interface SharedInterview {
   token: string;
   title: string;
   from: string;
+  /** The linked account it was sent to, when not the signed-in one. */
+  to?: string;
 }
 
 /** The hub's reply to an assign: what changed, for the directory. */
@@ -32,6 +35,7 @@ const shareKey = (token: string) => `share:${token}`;
 const assignedKey = (email: string, token: string) =>
   `assigned:${email}:${token}`;
 const profileKey = (email: string) => `profile:${email.toLowerCase()}`;
+const ownerKey = (token: string) => `owner:${token}`;
 
 /** A browser token in an interview's page, socket or API path. */
 const TOKEN_PATH = /^\/(?:s|ws|api\/browser)\/([A-Za-z0-9_-]{32})(?:\/|$)/;
@@ -82,6 +86,22 @@ export async function recordAssignment(
   });
 }
 
+/**
+ * Whose workspace each interview is in, by token, so a page opened from
+ * the wrong account can say so instead of looking deleted. Written when an
+ * interview is made; older interviews get theirs the first time their
+ * owner opens them.
+ */
+const owners = ttlCache<string | null>(30_000);
+
+export const ownerOf = (env: Env, token: string) =>
+  owners.get(token, () => env.OAUTH_KV.get(ownerKey(token)));
+
+export async function recordOwner(env: Env, token: string, owner: string) {
+  owners.set(token, owner.toLowerCase());
+  await env.OAUTH_KV.put(ownerKey(token), owner.toLowerCase());
+}
+
 /** A deleted interview leaves nothing behind. */
 export async function forgetShare(
   env: Env,
@@ -89,22 +109,38 @@ export async function forgetShare(
   assignee: string | null,
 ): Promise<void> {
   shares.set(token, null);
+  owners.set(token, null);
   await env.OAUTH_KV.delete(shareKey(token));
+  await env.OAUTH_KV.delete(ownerKey(token));
   if (!assignee) return;
   lists.delete(assignee);
   await env.OAUTH_KV.delete(assignedKey(assignee, token));
 }
 
-/** Interviews other people have assigned to this email. */
-export const sharedWith = (
+/** Interviews other people have assigned to this email, or one linked to it. */
+export async function sharedWith(
   env: Env,
   email: string,
-): Promise<SharedInterview[]> =>
+): Promise<SharedInterview[]> {
+  const [self, ...linked] = await linkedEmails(env, email);
+  const lists = await Promise.all(
+    [self!, ...linked].map(async (to) =>
+      (await assignedTo(env, to)).map((interview) => ({
+        ...interview,
+        ...(to === self ? {} : { to }),
+      })),
+    ),
+  );
+  return lists.flat();
+}
+
+/** Interviews assigned to exactly this address. */
+const assignedTo = (env: Env, email: string): Promise<SharedInterview[]> =>
   lists.get(email.toLowerCase(), async () => {
     const prefix = assignedKey(email.toLowerCase(), "");
-    const { keys } = await env.OAUTH_KV.list<Omit<SharedInterview, "token">>({
-      prefix,
-    });
+    const { keys } = await env.OAUTH_KV.list<
+      Omit<SharedInterview, "token" | "to">
+    >({ prefix });
     return keys.map((key) => ({
       token: key.name.slice(prefix.length),
       title: key.metadata?.title ?? "Interview",

@@ -62,7 +62,11 @@ export function App() {
   const refresh = useCallback(async () => {
     const response = await fetch(`/api/browser/${token}/session`);
     if (!response.ok) {
-      setError("This interview is unavailable.");
+      // The Worker says why when it's in another account.
+      const { error } = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      setError(error ?? "This interview is unavailable.");
       return;
     }
     const next = (await response.json()) as SessionView;

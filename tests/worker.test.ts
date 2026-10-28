@@ -477,9 +477,12 @@ describe("one workspace per user", () => {
       ).sessions.map((session) => session.title);
     expect(await titles(ann)).toEqual(["Ann's plan"]);
     expect(await titles(bob)).toEqual([]);
-    expect(
-      (await call(`/api/browser/${token}/session`, { cookie: bob })).status,
-    ).toBe(404);
+    // It's in Ann's account, which Bob is told (masked), not shown.
+    const refused = await call(`/api/browser/${token}/session`, {
+      cookie: bob,
+    });
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: "other-account" });
     expect(
       (await call(`/api/browser/${token}/session`, { cookie: ann })).status,
     ).toBe(200);
@@ -726,9 +729,10 @@ describe("assigning an interview to someone else", () => {
     expect(kv.data.has(`assigned:bob@example.com:${session.token}`)).toBe(
       false,
     );
-    expect((await asBob(`/api/browser/${session.token}/session`)).status).toBe(
-      404,
-    );
+    // Now it's simply in Ann's account.
+    const unassigned = await asBob(`/api/browser/${session.token}/session`);
+    expect(unassigned.status).toBe(403);
+    expect(await unassigned.json()).toMatchObject({ code: "other-account" });
     // A stale directory entry, as another isolate may have cached it, still
     // reaches the owner's hub, which says no.
     kv.data.set(`share:${session.token}`, share);
@@ -779,6 +783,463 @@ describe("assigning an interview to someone else", () => {
   });
 });
 
+describe("linked accounts", () => {
+  /**
+   * Fresh addresses per test: this isolate caches groups by email, as it
+   * would in production, so tests mustn't share any.
+   */
+  let people = 0;
+  const person = (name: string) => `${name}.${++people}@example.com`;
+  const sameOrigin = { "sec-fetch-site": "same-origin" };
+
+  async function linking() {
+    const s = setup();
+    /**
+     * Signed in as `cookie`, "Link another Google account", then Google
+     * comes back as `claims`, to the browser holding `returnCookie`.
+     */
+    const link = async (
+      cookie: string,
+      claims: JWTPayload,
+      options: { next?: string; returnCookie?: string } = {},
+    ) => {
+      const start = await s.call("/auth/google/link", {
+        method: "POST",
+        cookie,
+        headers: sameOrigin,
+        body: new URLSearchParams({ next: options.next ?? "/" }),
+      });
+      expect(start.status).toBe(303);
+      const google = new URL(start.headers.get("location")!);
+      expect(google.searchParams.get("prompt")).toBe("select_account");
+      nextClaims = { nonce: google.searchParams.get("nonce")!, ...claims };
+      return s.call(
+        `/auth/google/callback?code=good-code&state=${google.searchParams.get("state")}`,
+        {
+          cookie: `${options.returnCookie ?? cookie}; ${cookiesOf(start)}`,
+        },
+      );
+    };
+    const linkedTo = async (cookie: string) =>
+      (
+        (await (await s.call("/api/browser/links", { cookie })).json()) as {
+          linked: string[];
+        }
+      ).linked;
+    /** An interview from Ann, assigned to `assignee`. */
+    const assignTo = async (assignee: string) => {
+      const ann = await s.signIn(person("ann"));
+      const token = await s.cliToken(ann);
+      const agent = (path: string, init: RequestInit = {}) =>
+        s.call(path, {
+          ...init,
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+        });
+      const session = (await (
+        await agent("/api/sessions", {
+          method: "POST",
+          body: JSON.stringify({ title: "Venue survey" }),
+        })
+      ).json()) as { id: string; token: string };
+      const { questions } = (await (
+        await agent(`/api/sessions/${session.id}/questions`, {
+          method: "POST",
+          body: JSON.stringify([{ prompt: "Which room?" }]),
+        })
+      ).json()) as { questions: Array<{ id: string }> };
+      await agent(`/api/sessions/${session.id}/assign`, {
+        method: "POST",
+        body: JSON.stringify({ email: assignee }),
+      });
+      return { agent, session, questions };
+    };
+    return { ...s, link, linkedTo, assignTo };
+  }
+
+  it("links a second Google account and stays signed in as the first", async () => {
+    const { call, signIn, link, linkedTo, kv } = await linking();
+    const work = person("work");
+    const home = person("home");
+    const cookie = await signIn(work);
+    const back = await link(
+      cookie,
+      { email: home, email_verified: true },
+      { next: "/s/abc" },
+    );
+    expect(back.status).toBe(302);
+    expect(back.headers.get("location")).toBe("/s/abc");
+    // No new session: the only cookie it sets clears the flow.
+    expect(cookiesOf(back)).toBe("");
+    expect(await (await call("/api/browser/me", { cookie })).json()).toEqual({
+      email: work,
+    });
+    expect(await linkedTo(cookie)).toEqual([home]);
+    expect(await linkedTo(await signIn(home))).toEqual([work]);
+    // Transitive: linking a third to the second joins all three.
+    const phone = person("phone");
+    const homeCookie = await signIn(home);
+    await link(homeCookie, { email: phone, email_verified: true });
+    expect((await linkedTo(cookie)).sort()).toEqual([home, phone].sort());
+    expect(
+      [...kv.data.keys()].filter((key) => key.startsWith("links:")),
+    ).toHaveLength(1);
+  });
+
+  it("links nothing when the browser's session changed mid-flow", async () => {
+    const { signIn, link, linkedTo } = await linking();
+    const work = person("work");
+    const home = person("home");
+    const cookie = await signIn(work);
+    // Signed out and back in as the same account: a new session.
+    for (const returnCookie of [
+      await signIn(work),
+      await signIn(person("other")),
+      "",
+    ]) {
+      const back = await link(
+        cookie,
+        { email: home, email_verified: true },
+        { returnCookie },
+      );
+      expect(back.status).toBe(403);
+    }
+    expect(await linkedTo(cookie)).toEqual([]);
+  });
+
+  it("refuses an unverified email, or the signed-in account itself", async () => {
+    const { signIn, link, linkedTo } = await linking();
+    const work = person("work");
+    const cookie = await signIn(work);
+    const unverified = await link(cookie, {
+      email: person("victim"),
+      email_verified: false,
+    });
+    expect(unverified.status).toBe(403);
+    const self = await link(cookie, { email: work, email_verified: true });
+    expect(self.status).toBe(400);
+    expect(await linkedTo(cookie)).toEqual([]);
+  });
+
+  it("only starts from our own page's post", async () => {
+    const { call, signIn } = await linking();
+    const cookie = await signIn(person("work"));
+    for (const headers of [
+      { "sec-fetch-site": "cross-site" },
+      { origin: "https://evil.test" },
+    ]) {
+      const refused = await call("/auth/google/link", {
+        method: "POST",
+        cookie,
+        headers,
+        body: new URLSearchParams({ next: "/" }),
+      });
+      expect(refused.status).toBe(403);
+      expect(refused.headers.get("location")).toBeNull();
+    }
+    // A link or image another site embeds is a GET, which starts nothing.
+    const get = await call("/auth/google/link", { cookie });
+    expect(get.headers.get("location")).toBeNull();
+    expect(get.headers.getSetCookie()).toEqual([]);
+    // Signed out, it's a trip to sign in, not to Google.
+    const out = await call("/auth/google/link", {
+      method: "POST",
+      headers: sameOrigin,
+    });
+    expect(out.headers.get("location")).toContain("/signin");
+  });
+
+  it("caps a group at ten addresses", async () => {
+    const { call, signIn, link, linkedTo } = await linking();
+    const first = await signIn(person("main"));
+    for (let index = 0; index < 9; index++)
+      expect(
+        (await link(first, { email: person("alt"), email_verified: true }))
+          .status,
+      ).toBe(302);
+    expect(await linkedTo(first)).toHaveLength(9);
+    const full = await call("/auth/google/link", {
+      method: "POST",
+      cookie: first,
+      headers: sameOrigin,
+      body: new URLSearchParams({ next: "/" }),
+    });
+    expect(full.status).toBe(409);
+    // Two groups that together would pass ten aren't merged either.
+    const other = await signIn(person("other"));
+    const otherAlt = person("alt");
+    await link(other, { email: otherAlt, email_verified: true });
+    const merge = await link(other, {
+      email: (await linkedTo(first))[0]!,
+      email_verified: true,
+    });
+    expect(merge.status).toBe(409);
+    expect(await linkedTo(other)).toEqual([otherAlt]);
+    expect(await linkedTo(first)).toHaveLength(9);
+  });
+
+  it("opens an interview sent to a linked account, attributing answers to that address", async () => {
+    const { call, signIn, link, assignTo } = await linking();
+    const personal = person("personal");
+    const { agent, session, questions } = await assignTo(personal);
+    const work = await signIn(person("work"));
+    const base = `/api/browser/${session.token}`;
+    expect((await call(base + "/session", { cookie: work })).status).toBe(403);
+    await link(work, { email: personal, email_verified: true });
+    expect((await call(`/s/${session.token}`, { cookie: work })).status).toBe(
+      200,
+    );
+    expect(
+      await (await call(`${base}/session`, { cookie: work })).json(),
+    ).toMatchObject({ respondent: true, assignee: personal });
+    await call(`${base}/questions/${questions[0]!.id}/answer`, {
+      method: "POST",
+      cookie: work,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answer: "The big one" }),
+    });
+    const batch = await (
+      await agent(`/api/sessions/${session.id}/wait?idle=0&timeout=5000`)
+    ).json();
+    expect(batch.answers).toEqual([
+      expect.objectContaining({ answer: "The big one", answeredBy: personal }),
+    ]);
+  });
+
+  it("still refuses an account that isn't linked, and offers to link it", async () => {
+    const { call, signIn, assignTo } = await linking();
+    const personal = person("tim");
+    const { session } = await assignTo(personal);
+    const stranger = await signIn(person("stranger"));
+    const page = await call(`/s/${session.token}`, { cookie: stranger });
+    expect(page.status).toBe(403);
+    const text = await page.text();
+    expect(text).toContain(`Link t•••@example.com to this account`);
+    expect(text).toContain('action="/auth/google/link"');
+    expect(text).toContain(`value="/s/${session.token}"`);
+    expect(text).toContain("Switch account");
+    expect(text).not.toContain(personal);
+  });
+
+  it("unlinks, which shuts the other account out again", async () => {
+    const { call, signIn, link, linkedTo, assignTo, kv } = await linking();
+    const personal = person("personal");
+    const { session } = await assignTo(personal);
+    const work = await signIn(person("work"));
+    await link(work, { email: personal, email_verified: true });
+    const path = `/api/browser/${session.token}/session`;
+    expect((await call(path, { cookie: work })).status).toBe(200);
+    const unlink = (headers: Record<string, string>, email = personal) =>
+      call("/api/browser/links/unlink", {
+        method: "POST",
+        cookie: work,
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify({ email }),
+      });
+    expect((await unlink({ "sec-fetch-site": "cross-site" })).status).toBe(403);
+    expect((await unlink(sameOrigin, person("never"))).status).toBe(400);
+    const done = await unlink(sameOrigin);
+    expect(done.status).toBe(200);
+    expect(await done.json()).toMatchObject({ linked: [] });
+    expect(await linkedTo(work)).toEqual([]);
+    expect((await call(path, { cookie: work })).status).toBe(403);
+    // A group of one is no group: nothing is left behind.
+    expect([...kv.data.keys()].filter((key) => key.startsWith("link"))).toEqual(
+      [],
+    );
+  });
+
+  it("lists interviews sent to every linked account under Shared with you", async () => {
+    const { call, signIn, link, assignTo } = await linking();
+    const personal = person("personal");
+    const workEmail = person("work");
+    const toPersonal = await assignTo(personal);
+    const toWork = await assignTo(workEmail);
+    const work = await signIn(workEmail);
+    await link(work, { email: personal, email_verified: true });
+    const shared = (await (
+      await call("/api/browser/shared", { cookie: work })
+    ).json()) as { interviews: Array<{ token: string; to?: string }> };
+    expect(shared.interviews).toHaveLength(2);
+    expect(shared.interviews).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ token: toWork.session.token }),
+        expect.objectContaining({
+          token: toPersonal.session.token,
+          to: personal,
+        }),
+      ]),
+    );
+    expect(
+      shared.interviews.find(({ token }) => token === toWork.session.token),
+    ).not.toHaveProperty("to");
+  });
+
+  it("never shows either account the other's own interviews", async () => {
+    const { call, signIn, link, cliToken, bearer } = await linking();
+    const workEmail = person("work");
+    const homeEmail = person("home");
+    const work = await signIn(workEmail);
+    const home = await signIn(homeEmail);
+    await link(work, { email: homeEmail, email_verified: true });
+    const own = async (cookie: string, title: string) => {
+      const { headers } = bearer(await cliToken(cookie));
+      const created = await call("/api/sessions", {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      return (await created.json()) as { id: string; token: string };
+    };
+    const workOwn = await own(work, "Work plan");
+    const homeOwn = await own(home, "Home plan");
+    for (const [cookie, mine, theirs] of [
+      [work, workOwn, homeOwn],
+      [home, homeOwn, workOwn],
+    ] as const) {
+      const overview = await (
+        await call("/api/browser/overview", { cookie })
+      ).json();
+      expect(overview.sessions.map((item: { id: string }) => item.id)).toEqual([
+        mine.id,
+      ]);
+      const other = await call(`/api/browser/${theirs.token}/session`, {
+        cookie,
+      });
+      expect(other.status).toBe(403);
+      expect(await other.json()).toMatchObject({ code: "other-account" });
+      expect(
+        await (await call("/api/browser/shared", { cookie })).json(),
+      ).toEqual({ interviews: [] });
+    }
+  });
+
+  it("rate-limits starting a link and unlinking", async () => {
+    const s = await linking();
+    const limit = vi.fn(async () => ({ success: false }));
+    const cookie = await s.signIn(person("work"));
+    Object.assign(s.env, { AUTH_LIMITER: { limit } });
+    for (const path of ["/auth/google/link", "/api/browser/links/unlink"])
+      expect(
+        (await s.call(path, { method: "POST", cookie, headers: sameOrigin }))
+          .status,
+      ).toBe(429);
+    expect(limit).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("an interview opened from the wrong account", () => {
+  let people = 0;
+  const person = (name: string) => `${name}.${++people}@example.com`;
+
+  /** Tim's interview, made by his CLI, which indexes it under his account. */
+  async function opened() {
+    const s = setup();
+    const timEmail = person("tim");
+    const tim = await s.signIn(timEmail);
+    const work = await s.signIn(person("work"));
+    const { headers } = s.bearer(await s.cliToken(tim));
+    const agent = (path: string, init: RequestInit = {}) =>
+      s.call(path, {
+        ...init,
+        headers: { ...headers, "content-type": "application/json" },
+      });
+    const session = (await (
+      await agent("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ title: "Plan" }),
+      })
+    ).json()) as { id: string; token: string };
+    expect(s.kv.data.get(`owner:${session.token}`)).toBe(timEmail);
+    return { ...s, timEmail, tim, work, agent, session };
+  }
+
+  it("says it was sent to another address, offering to link it", async () => {
+    const { call, agent, work, session } = await opened();
+    await agent(`/api/sessions/${session.id}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ email: "tim.personal@gmail.com" }),
+    });
+    const page = await call(`/s/${session.token}`, { cookie: work });
+    expect(page.status).toBe(403);
+    const text = await page.text();
+    expect(text).toContain("This interview was sent to t•••@gmail.com.");
+    expect(text).toContain("Link t•••@gmail.com to this account");
+    expect(text).toContain("Switch account");
+    expect(text).not.toContain("tim.personal");
+    const api = await call(`/api/browser/${session.token}/session`, {
+      cookie: work,
+    });
+    expect(api.status).toBe(403);
+    expect(await api.json()).toMatchObject({ code: "sent-elsewhere" });
+  });
+
+  it("says it's in another account when it isn't shared", async () => {
+    const { call, work, timEmail, session } = await opened();
+    const page = await call(`/s/${session.token}`, { cookie: work });
+    expect(page.status).toBe(403);
+    const text = await page.text();
+    expect(text).toContain(
+      "This interview is in another account (t•••@example.com).",
+    );
+    expect(text).toContain("Switch account");
+    expect(text).not.toContain(timEmail);
+    expect(text).not.toContain("Link ");
+    for (const path of [
+      `/api/browser/${session.token}/session`,
+      `/ws/${session.token}`,
+    ]) {
+      const api = await call(path, { cookie: work });
+      expect(api.status).toBe(403);
+      expect(await api.json()).toMatchObject({ code: "other-account" });
+    }
+  });
+
+  it("says it isn't in this account when nothing says whose it is", async () => {
+    const { call, kv, tim, work, session } = await opened();
+    // As for an interview from before the index.
+    kv.data.delete(`owner:${session.token}`);
+    const later = Date.now() + 31_000;
+    vi.spyOn(Date, "now").mockReturnValue(later);
+    const page = await call(`/s/${session.token}`, { cookie: work });
+    expect(page.status).toBe(404);
+    const text = await page.text();
+    expect(text).toContain("This interview isn&#39;t in work.");
+    expect(text).toContain(
+      "It may be in another Google account you use, or it was deleted.",
+    );
+    expect(text).toContain("Switch account");
+    // Its owner still opens it, and that indexes it again.
+    expect((await call(`/s/${session.token}`, { cookie: tim })).status).toBe(
+      200,
+    );
+    expect(kv.data.has(`owner:${session.token}`)).toBe(true);
+    vi.mocked(Date.now).mockRestore();
+  });
+
+  it("keeps 'deleted' for an interview deleted while its page is open", async () => {
+    const { call, agent, kv, tim, session } = await opened();
+    expect(
+      (await call(`/api/browser/${session.token}/session`, { cookie: tim }))
+        .status,
+    ).toBe(200);
+    await agent(`/api/sessions/${session.id}`, { method: "DELETE" });
+    expect(kv.data.has(`owner:${session.token}`)).toBe(false);
+    // The open page's probe gets the owner's own hub's 404: deleted.
+    const probe = await call(`/api/browser/${session.token}/session`, {
+      cookie: tim,
+    });
+    expect(probe.status).toBe(404);
+    expect(await probe.json()).not.toHaveProperty("code");
+    // Reloaded, it can't tell a deletion from another account.
+    const page = await call(`/s/${session.token}`, { cookie: tim });
+    expect(page.status).toBe(404);
+    expect(await page.text()).toContain("or it was deleted.");
+  });
+});
+
 describe("agent sockets through the Worker", () => {
   it("reaches the user's hub with a token, and refuses without one", async () => {
     const s = setup();
@@ -793,6 +1254,8 @@ describe("agent sockets through the Worker", () => {
     expect(accepted.headers.get(ACCEPTED_SOCKET)).toBe("1");
     const hub = s.hubs.get("user:ann@example.com")!;
     expect(hub.agents.list(session.id)).toHaveLength(1);
+    // Gone before the database closes, so no late delivery finds it shut.
+    hub.agents.list(session.id)[0]!.disconnect();
     const refused = await s.call(`/api/sessions/${session.id}/socket`, {
       headers: upgrade,
     });

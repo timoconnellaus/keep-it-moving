@@ -18,6 +18,8 @@ interface SharedInterview {
   token: string;
   title: string;
   from: string;
+  /** The linked account it was sent to, when not the signed-in one. */
+  to?: string;
 }
 
 /**
@@ -99,6 +101,7 @@ export function Home() {
                   <span className="home-row-title">{interview.title}</span>
                   <span className="home-row-meta">
                     From {interview.from || "someone"}
+                    {interview.to && `, sent to ${interview.to}`}
                   </span>
                 </span>
                 <span className="state-badge state-you">For you to answer</span>
