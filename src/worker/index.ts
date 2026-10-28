@@ -12,6 +12,7 @@ import {
 import { KEY_PREFIX, sha256, VIA_KEY_HEADER } from "../server/keys.js";
 import { ASSIGNED_BY_HEADER, RESPONDENT_HEADER } from "../server/hub.js";
 import type { Env } from "./env.js";
+import { ttlCache } from "./cache.js";
 import { hubFor } from "./hubs.js";
 import { isAdmin, listUsers } from "./users.js";
 import { adminPage, escapeHtml, page, signInPage } from "./pages.js";
@@ -37,6 +38,12 @@ const CLI_PACKAGE_PATH = "/api/sessions/kim/cli.tgz";
 
 /** Which user an agent key belongs to, by the key's hash. */
 const keyOwner = (hash: string) => `agent-key:${hash}`;
+
+/**
+ * Key owners read lately. A key's owner never changes, so only its hub's
+ * verdict, asked on every request, decides whether it still works.
+ */
+const keyOwners = ttlCache<string | null>(5 * 60_000);
 
 const AGENT_ASSIGN = /^\/api\/sessions\/[^/]+\/assign$/;
 const AGENT_DELETE = /^\/api\/sessions\/(?!kim(?:\/|$))[^/]+$/;
@@ -128,7 +135,11 @@ const agentApi: ExportedHandler<Env> = {
       response.ok
     ) {
       const { key } = (await response.clone().json()) as { key?: string };
-      if (key) await env.OAUTH_KV.put(keyOwner(await sha256(key)), email);
+      if (key) {
+        const hash = await sha256(key);
+        keyOwners.set(hash, email);
+        await env.OAUTH_KV.put(keyOwner(hash), email);
+      }
     }
     return response;
   },
@@ -315,7 +326,9 @@ export default {
       resolveExternalToken: async ({ token, env, request }) => {
         if (!token.startsWith(KEY_PREFIX)) return null;
         const hash = await sha256(token);
-        const recorded = await env.OAUTH_KV.get(keyOwner(hash));
+        const recorded = await keyOwners.get(hash, () =>
+          env.OAUTH_KV.get(keyOwner(hash)),
+        );
         const email = recorded ?? env.OWNER_EMAIL;
         if (!email) return null;
         // Made-up keys all land here, on the owner's hub: limit them per
@@ -336,7 +349,10 @@ export default {
         if (!verdict.ok) return null;
         // An owner's key from before owners were recorded gets its record,
         // so it never takes the limited path again.
-        if (!recorded) await env.OAUTH_KV.put(keyOwner(hash), email);
+        if (!recorded) {
+          keyOwners.set(hash, email);
+          await env.OAUTH_KV.put(keyOwner(hash), email);
+        }
         return {
           props: { email, via: "key" },
           audience: `${env.PUBLIC_URL}/api/sessions`,

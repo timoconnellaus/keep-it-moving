@@ -514,6 +514,13 @@ describe("agent keys", () => {
     ).sessions.map((session) => session.title);
     expect(titles).toEqual(["From Ann's cloud"]);
     expect(s.hubs.has("interviews")).toBe(false);
+    // Its owner is read from KV at most once in a while, not per request.
+    const get = vi.spyOn(s.kv, "get");
+    await s.call("/api/sessions", s.bearer(key));
+    await s.call("/api/sessions", s.bearer(key));
+    expect(get.mock.calls.filter(([k]) => k.startsWith("agent-key:"))).toEqual(
+      [],
+    );
   });
 
   it("keeps the owner's keys from before working, and refuses unknown keys", async () => {
