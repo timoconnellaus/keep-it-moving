@@ -238,6 +238,7 @@ export function QuestionCard({
           <h2>{question.prompt}</h2>
           <span
             className={`answer-summary ${question.answer.skipped ? "skipped" : ""}`}
+            title={question.answer.skipped ? undefined : question.answer.text}
           >
             <span className="answer-text">
               {question.answer.skipped ? "Skipped" : question.answer.text}
@@ -250,7 +251,8 @@ export function QuestionCard({
               <span className="tag">by {question.answer.answeredBy}</span>
             )}
           </span>
-          {actions}
+          {/* Over the end of the row on hover or focus, so the answer gets the room. */}
+          <span className="row-actions">{actions}</span>
         </div>
       ) : (
         <>

@@ -97,9 +97,20 @@ export function Switcher({
             {session.project.name}
           </span>
         )}
-        <span className="switcher-caret" aria-hidden="true">
-          ▾
-        </span>
+        <svg
+          className="switcher-caret"
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M3 4.5 6 7.5 9 4.5" />
+        </svg>
         {waiting > 0 && (
           <span
             className="waiting-dot"
@@ -116,7 +127,19 @@ export function Switcher({
           aria-label="Switch interview"
         >
           <label className="switcher-search">
-            <span aria-hidden="true">⌕</span>
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="m10.5 10.5 3 3" />
+            </svg>
             <input
               // On a phone, focusing would open the keyboard over the list.
               autoFocus={!touchScreen()}

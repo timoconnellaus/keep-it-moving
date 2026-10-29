@@ -218,6 +218,9 @@ const site: ExportedHandler<Env> = {
           )
         : signInPage(safeNext(url.searchParams.get("next")), env.PUBLIC_URL);
     if (!user) {
+      // Signed out, the front door is the marketing page (landing.html, built from docs/marketing).
+      if (url.pathname === "/")
+        return env.ASSETS.fetch(new Request(new URL("/landing", url)));
       // The CLI's login was started on purpose, so go straight to Google.
       if (url.pathname === "/authorize")
         return Response.redirect(

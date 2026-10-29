@@ -50,7 +50,7 @@ For local development, put `DEV_EMAIL=<your email>` and `PUBLIC_URL=http://local
 
 ### Sign-in and secrets
 
-The browser signs in with Google; anyone with a Google account can, and each user gets a private workspace of their own. The Worker runs the sign-in itself (OpenID Connect with PKCE, checking Google's ID token and its verified email), so it needs a Google OAuth client:
+The browser signs in with Google; anyone with a Google account can, and each user gets a private workspace of their own. Signed out, the site root shows the marketing page, built from `docs/marketing/keep-it-moving.html` (see `docs/marketing/demo/README.md`); signed in, it's the app. The Worker runs the sign-in itself (OpenID Connect with PKCE, checking Google's ID token and its verified email), so it needs a Google OAuth client:
 
 1. In Google Cloud Console, create an OAuth client of type **Web application** with the redirect URI `https://keep-it-moving.zerobsai.com/auth/google/callback` (that is, `PUBLIC_URL` + `/auth/google/callback`).
 2. Run `npx wrangler secret put GOOGLE_CLIENT_ID` and paste its client ID.

@@ -94,10 +94,26 @@ h3 {
 }
 .shell-message {
   margin: auto;
-  padding: 24px;
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  width: min(420px, calc(100% - 32px));
+  padding: 36px 28px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--panel);
   color: var(--muted);
   font-size: 15px;
   text-align: center;
+}
+.shell-message p {
+  margin: 0;
+  color: var(--ink);
+  font: 500 18px/1.4 var(--display);
+}
+.shell-message a {
+  color: var(--blue);
+  font-weight: 600;
 }
 .topbar {
   flex: none;
@@ -282,8 +298,9 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 18px;
+  padding: 18px 18px 28px;
   border-right: 1px solid var(--line);
+  container-type: inline-size;
 }
 /* With no workspace the questions take the space, in a readable column. */
 .workspace:not(.with-stage) .questions {
@@ -293,7 +310,7 @@ h3 {
   position: sticky;
   bottom: 12px;
   z-index: 1;
-  align-self: center;
+  align-self: flex-end;
   margin-top: auto;
   padding: 8px 16px;
   border: 0;
@@ -368,7 +385,8 @@ h3 {
 
 /* Answered: one ticked row */
 .question.done {
-  padding: 10px 12px 10px 14px;
+  position: relative;
+  padding: 10px 14px;
   background: var(--panel);
   border-radius: 12px;
 }
@@ -379,7 +397,7 @@ h3 {
   min-width: 0;
 }
 .question.done h2 {
-  flex: 1 1 50%;
+  flex: 1 1 40%;
   min-width: 0;
   margin: 0;
   font: 500 14px/1.4 var(--body);
@@ -390,7 +408,7 @@ h3 {
 }
 .answer-summary {
   flex: 0 1 auto;
-  max-width: 45%;
+  max-width: 55%;
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -468,13 +486,61 @@ h3 {
   background: var(--blue-soft);
   color: var(--blue);
 }
-/* On answered rows, Ask shows on hover or while the row has focus. */
-.question.done .ask {
-  display: none;
+/* On answered rows, Ask and Edit cover the end of the row on hover or focus. */
+.row-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 0 28px;
+  border-radius: 0 12px 12px 0;
+  background: linear-gradient(to right, transparent, var(--panel) 24px);
+  opacity: 0;
+  transition: opacity 0.15s;
 }
-.question.done:hover .ask,
-.question.done:focus-within .ask {
-  display: grid;
+.question.done:hover .row-actions,
+.question.done:focus-within .row-actions {
+  opacity: 1;
+}
+/* In a narrow column the answer goes under the question, so neither is cut short. */
+@container (max-width: 400px) {
+  .question.done .question-heading {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .question.done h2 {
+    flex-basis: calc(100% - 28px);
+  }
+  .question.done .answer-summary {
+    flex: 1 1 0;
+    max-width: none;
+    margin-left: 28px;
+  }
+}
+/* Without hover (touch), the actions stay in view, beside the answer under the question. */
+@media (hover: none) {
+  .question.done .question-heading {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .question.done h2 {
+    flex-basis: calc(100% - 28px);
+  }
+  .question.done .answer-summary {
+    flex: 1 1 0;
+    max-width: none;
+    margin-left: 28px;
+  }
+  .row-actions {
+    position: static;
+    margin-left: auto;
+    padding: 0;
+    background: none;
+    opacity: 1;
+  }
 }
 .artifact-link {
   flex: none;
@@ -610,7 +676,7 @@ h3 {
 /* Options that are workspace items: thumbnail cards */
 .choice-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 10px;
 }
 .choice-card {
@@ -646,9 +712,10 @@ h3 {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 4px;
   font-size: 13px;
   font-weight: 600;
-  white-space: nowrap;
 }
 .choice-card-label .default-mark {
   padding: 1px 7px;
@@ -1324,8 +1391,7 @@ h3 {
 }
 .switcher-caret {
   flex: none;
-  color: var(--faint);
-  font-size: 11px;
+  color: var(--muted);
 }
 .waiting-dot {
   flex: none;
@@ -1343,7 +1409,7 @@ h3 {
   position: absolute;
   z-index: 20;
   top: calc(100% + 8px);
-  left: -8px;
+  left: 0;
   width: min(560px, calc(100vw - 24px));
   max-height: min(70vh, 620px);
   display: flex;
@@ -1357,7 +1423,7 @@ h3 {
 .switcher-search {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
   color: var(--faint);
@@ -1372,7 +1438,7 @@ h3 {
   font-size: 15px;
 }
 .switcher-search kbd,
-.switcher-foot span {
+.switcher-foot span:not(.spacer) {
   padding: 1px 6px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -1491,6 +1557,9 @@ h3 {
   border-radius: 3px;
   background: var(--line);
   overflow: hidden;
+}
+.empty-progress {
+  color: var(--faint);
 }
 .mini-progress .progress-bar > span {
   display: block;
@@ -1827,6 +1896,7 @@ h3 {
   margin: 0;
   font-size: 24px;
   font-weight: 600;
+  line-height: 1.2;
 }
 .get-started-dismiss {
   border: 0;
@@ -2068,13 +2138,6 @@ h3 {
   .question.open {
     padding: 14px;
   }
-  .choice-cards {
-    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  }
-  .choice-card-label {
-    flex-wrap: wrap;
-    white-space: normal;
-  }
   .choice-card-label .default-mark {
     margin-left: 0;
   }
@@ -2143,6 +2206,17 @@ h3 {
   }
   .get-started {
     padding: 18px;
+  }
+  /* The copy button moves beside the short last line, so the commands get the width. */
+  .get-started-commands pre {
+    padding: 14px 16px;
+    font-size: 12.5px;
+    white-space: pre;
+    overflow-wrap: normal;
+  }
+  .get-started-commands button {
+    top: auto;
+    bottom: 10px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

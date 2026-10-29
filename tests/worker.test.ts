@@ -275,6 +275,8 @@ describe("Google sign-in", () => {
     expect(signinHtml).toContain(
       'href="https://github.com/timoconnellaus/keep-it-moving"',
     );
+    // Signed out, the root is the landing page; signed in, it's the app.
+    expect(await (await call("/")).text()).toBe("asset /landing");
     expect((await call("/api/browser/overview")).status).toBe(401);
     expect((await call("/ws/overview")).status).toBe(401);
     // Install files stay public.

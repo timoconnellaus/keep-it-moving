@@ -182,7 +182,7 @@ function CloudIcon() {
   );
 }
 
-/** "3/5" and a bar; `long` spells it out as "3 of 5 answered". */
+/** "3/5" and a bar; `long` spells it out as "3 of 5 answered". None at all says so. */
 export function Progress({
   answered,
   total,
@@ -192,6 +192,8 @@ export function Progress({
   total: number;
   long?: boolean;
 }) {
+  if (total === 0)
+    return <span className="mini-progress empty-progress">No questions</span>;
   return (
     <span
       className="mini-progress"

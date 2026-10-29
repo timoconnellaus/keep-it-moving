@@ -9,6 +9,7 @@ import { useOverview } from "./overview.js";
 import { QuestionCard } from "./QuestionCard.js";
 import { MoreBelow, QuestionProgress } from "./QuestionNav.js";
 import { liveSocket, probeStatus, STOP_MESSAGES } from "./liveSocket.js";
+import { Logo } from "./Logo.js";
 import { Stage } from "./Stage.js";
 import { Switcher } from "./Switcher.js";
 
@@ -140,7 +141,11 @@ export function App() {
   if (!session)
     return (
       <main className="shell">
-        <p className="shell-message">{error || "Loading interview…"}</p>
+        <div className="shell-message">
+          <Logo size={28} />
+          <p>{error || "Loading interview…"}</p>
+          {error && <a href="/">Your interviews</a>}
+        </div>
       </main>
     );
   const unanswered = session.questions.find((question) => !question.answer)?.id;
