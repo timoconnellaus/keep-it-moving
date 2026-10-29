@@ -1080,12 +1080,13 @@ describe("linked accounts", () => {
     ).not.toHaveProperty("to");
   });
 
-  it("never shows either account the other's own interviews", async () => {
-    const { call, signIn, link, cliToken, bearer } = await linking();
+  it("opens either account's own interviews from the other, but lists each in its own home", async () => {
+    const { call, signIn, link, cliToken, bearer, kv } = await linking();
     const workEmail = person("work");
     const homeEmail = person("home");
     const work = await signIn(workEmail);
     const home = await signIn(homeEmail);
+    const stranger = await signIn(person("stranger"));
     await link(work, { email: homeEmail, email_verified: true });
     const own = async (cookie: string, title: string) => {
       const { headers } = bearer(await cliToken(cookie));
@@ -1098,9 +1099,9 @@ describe("linked accounts", () => {
     };
     const workOwn = await own(work, "Work plan");
     const homeOwn = await own(home, "Home plan");
-    for (const [cookie, mine, theirs] of [
-      [work, workOwn, homeOwn],
-      [home, homeOwn, workOwn],
+    for (const [cookie, mine, theirs, title] of [
+      [work, workOwn, homeOwn, "Home plan"],
+      [home, homeOwn, workOwn, "Work plan"],
     ] as const) {
       const overview = await (
         await call("/api/browser/overview", { cookie })
@@ -1111,12 +1112,26 @@ describe("linked accounts", () => {
       const other = await call(`/api/browser/${theirs.token}/session`, {
         cookie,
       });
-      expect(other.status).toBe(403);
-      expect(await other.json()).toMatchObject({ code: "other-account" });
-      expect(
-        await (await call("/api/browser/shared", { cookie })).json(),
-      ).toEqual({ interviews: [] });
+      expect(other.status).toBe(200);
+      expect(await other.json()).toMatchObject({ title });
     }
+    // Someone not linked is still told whose it is.
+    const refused = await call(`/api/browser/${homeOwn.token}/session`, {
+      cookie: stranger,
+    });
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: "other-account" });
+    // An interview from before the owner index is found in the linked
+    // account's workspace, and indexed for next time.
+    await kv.delete(`owner:${homeOwn.token}`);
+    // Past the 30-second cache of what the index said.
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 60_000);
+    expect((await call(`/s/${homeOwn.token}`, { cookie: work })).status).toBe(
+      200,
+    );
+    expect(kv.data.get(`owner:${homeOwn.token}`)).toBe(homeEmail);
+    vi.restoreAllMocks();
   });
 
   it("rate-limits starting a link and unlinking", async () => {

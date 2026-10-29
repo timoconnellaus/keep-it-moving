@@ -30,7 +30,12 @@ import {
 } from "./pages.js";
 import { listPlans, planOf, planView, resolvePlan, setComp } from "./plans.js";
 import { checkout, portal, stripeWebhook } from "./stripe.js";
-import { linksResponse, samePerson, unlinkAccount } from "./links.js";
+import {
+  linkedEmails,
+  linksResponse,
+  samePerson,
+  unlinkAccount,
+} from "./links.js";
 import {
   forgetShare,
   interviewToken,
@@ -251,16 +256,23 @@ const site: ExportedHandler<Env> = {
     // An interview someone else assigned to this user lives in their hub.
     const token = interviewToken(url.pathname);
     const share = token ? await shareFor(env, token) : null;
-    if (share && share.owner !== user.email.toLowerCase())
-      return respond(request, env, user, share);
+    // Whose workspace this request works in: the user's own, or, for an
+    // interview of an account linked to theirs, that account's.
+    let workspace = user.email.toLowerCase();
+    if (share && share.owner !== workspace) {
+      if (await samePerson(env, workspace, share.owner))
+        workspace = share.owner;
+      else return respond(request, env, user, share);
+    }
     if (token && !share) {
-      const elsewhere = await notHere(request, env, user, token);
-      if (elsewhere) return elsewhere;
+      const where = await notHere(request, env, user, token);
+      if (where instanceof Response) return where;
+      if (where) workspace = where;
     }
     if (request.method === "POST" && BROWSER_ASSIGN.test(url.pathname))
       return assign(
         env,
-        user.email,
+        workspace,
         user.name ?? user.email,
         forwardable(request),
       );
@@ -268,7 +280,7 @@ const site: ExportedHandler<Env> = {
       url.pathname.startsWith("/api/browser/") ||
       url.pathname.startsWith("/ws/")
     )
-      return toHub(env, user.email, forwardable(request));
+      return toHub(env, workspace, forwardable(request));
     // The interview list and each interview are the same app.
     if (url.pathname === "/" || url.pathname.startsWith("/s/"))
       return env.ASSETS.fetch(new Request(new URL("/index.html", url)));
@@ -343,11 +355,18 @@ async function respond(request: Request, env: Env, user: User, share: Share) {
  * someone holding the private link), or that it isn't here. Null when it
  * is the user's own.
  */
-async function notHere(request: Request, env: Env, user: User, token: string) {
+async function notHere(
+  request: Request,
+  env: Env,
+  user: User,
+  token: string,
+): Promise<Response | string | null> {
   const url = new URL(request.url);
   const me = user.email.toLowerCase();
   const owner = await ownerOf(env, token);
   if (owner === me) return null;
+  // Linked accounts are one person: open it in the other account's workspace.
+  if (owner && (await samePerson(env, me, owner))) return owner;
   if (owner)
     return elsewhereResponse(
       url,
@@ -356,15 +375,17 @@ async function notHere(request: Request, env: Env, user: User, token: string) {
       `This interview is in another account (${maskEmail(owner)}). You're signed in as ${user.email}.`,
     );
   // Not indexed: from before the index, or deleted. A page asks the user's
-  // own workspace, and remembers the answer when it's there; other calls go
-  // there anyway, which answers for itself.
+  // own workspace, then any linked account's, and remembers where it found
+  // it; other calls go to the user's own, which answers for itself.
   if (!url.pathname.startsWith("/s/")) return null;
-  const found = await hubFor(env, me).fetch(
-    new Request(new URL(`/api/browser/${token}/session`, url)),
-  );
-  if (found.ok) {
-    await recordOwner(env, token, me);
-    return null;
+  // The user's own workspace first, then any linked account's.
+  for (const email of await linkedEmails(env, me)) {
+    const found = await hubFor(env, email).fetch(
+      new Request(new URL(`/api/browser/${token}/session`, url)),
+    );
+    if (!found.ok) continue;
+    await recordOwner(env, token, email);
+    return email === me ? null : email;
   }
   return elsewhereResponse(
     url,
