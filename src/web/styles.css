@@ -261,15 +261,15 @@ h3 {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(260px, 22vw, 300px);
+  grid-template-columns: minmax(0, 1fr) clamp(312px, 26vw, 360px);
 }
 .workspace.with-stage {
   grid-template-columns:
     clamp(340px, 30vw, 420px) minmax(0, 1fr)
-    clamp(260px, 22vw, 300px);
+    clamp(312px, 26vw, 360px);
 }
 .workspace.expanded {
-  grid-template-columns: minmax(0, 1fr) clamp(260px, 22vw, 300px);
+  grid-template-columns: minmax(0, 1fr) clamp(312px, 26vw, 360px);
 }
 .workspace.expanded > .questions {
   display: none;
