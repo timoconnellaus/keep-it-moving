@@ -8,13 +8,13 @@ const LOGO = `<svg class="logo" width="22" height="22" viewBox="0 0 24 24" aria-
 
 /**
  * The Worker's own pages (sign-in, errors, plans, admin) in the app's brand
- * (docs/design/reference.html), light or dark.
+ * (docs/design/reference.html). Light only, like the app.
  */
 const shell = (body: string, className = "") => `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="light">
 <title>Keep it moving</title>
 <link rel="icon" href="/icons/icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -29,13 +29,6 @@ const shell = (body: string, className = "") => `<!doctype html>
     --display: "Outfit", "Avenir Next", ui-sans-serif, system-ui, sans-serif;
     --body: "Figtree", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --ground: #0b0b0c; --panel: #121214; --card: #19191c; --ink: #f2f3f5;
-      --muted: #a3a6ad; --line: #2b2b30; --blue-soft: #16264a;
-      --night: #000; --night-card: #121214;
-    }
   }
   * { box-sizing: border-box; }
   body {
