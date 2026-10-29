@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { defaultAnswerText } from "../shared/answers.js";
 import type { SessionView } from "../shared/schema.js";
 import { shownArtifact } from "../shared/workspace.js";
+import { Account } from "./Account.js";
 import { Assign } from "./Assign.js";
 import { Chat, useChat } from "./Chat.js";
 import { useOverview } from "./overview.js";
@@ -12,6 +13,39 @@ import { Stage } from "./Stage.js";
 import { Switcher } from "./Switcher.js";
 
 const token = window.location.pathname.split("/").filter(Boolean).at(-1) ?? "";
+
+/** An agent that left a quarter of an hour ago is no longer "working". */
+const STALE_MS = 15 * 60_000;
+
+/**
+ * What the agent is doing, as far as the page can tell: replying to a chat
+ * message it has picked up, or working on answers it has collected while it
+ * isn't waiting on the interview. Null when it's waiting, or nothing says.
+ */
+function agentActivity(
+  session: SessionView,
+): { label: string; busy: boolean } | null {
+  if (session.status !== "active") return null;
+  const last = session.chat.at(-1);
+  const times = [
+    session.updatedAt,
+    last?.createdAt,
+    ...session.questions.map((question) => question.answer?.updatedAt),
+  ]
+    .map((time) => Date.parse(time ?? ""))
+    .filter(Number.isFinite);
+  const busy = times.length > 0 && Date.now() - Math.max(...times) < STALE_MS;
+  if (last?.author === "user" && last.delivered)
+    return busy
+      ? { label: "Agent is replying…", busy }
+      : { label: "Waiting on the agent", busy };
+  if (session.agentWatching || session.questions.length === 0) return null;
+  if (session.questions.every((question) => question.answer?.delivered))
+    return busy
+      ? { label: "Agent is working on your answers…", busy }
+      : { label: "Waiting on the agent", busy };
+  return null;
+}
 
 export function App() {
   const [session, setSession] = useState<SessionView | null>(null);
@@ -106,7 +140,7 @@ export function App() {
   if (!session)
     return (
       <main className="shell">
-        <p>{error || "Loading interview…"}</p>
+        <p className="shell-message">{error || "Loading interview…"}</p>
       </main>
     );
   const unanswered = session.questions.find((question) => !question.answer)?.id;
@@ -161,6 +195,7 @@ export function App() {
           token={token}
           question={question}
           number={index + 1}
+          total={session.questions.length}
           emphasized={question.id === focused}
           disabled={!active || acceptingAll}
           onSaved={refresh}
@@ -178,10 +213,9 @@ export function App() {
     </section>
   );
   const workspaceOpen = session.stageVisible && session.artifacts.length > 0;
+  const activity = agentActivity(session);
   return (
-    <main
-      className={`shell ${workspaceOpen ? "with-workspace" : ""} ${chat.open ? "chat-open" : ""}`}
-    >
+    <main className="shell">
       <header className="topbar">
         {session.respondent ? (
           <div className="respondent-title">
@@ -191,6 +225,15 @@ export function App() {
         ) : (
           <Switcher session={session} sessions={sessions} />
         )}
+        {activity && (
+          <span
+            className={`agent-status ${activity.busy ? "busy" : ""}`}
+            role="status"
+          >
+            {activity.label}
+          </span>
+        )}
+        <span className="topbar-spacer" />
         <QuestionProgress questions={session.questions} />
         {active && acceptable.length > 0 && (
           <button
@@ -224,6 +267,7 @@ export function App() {
         {!session.respondent && (
           <Assign token={token} session={session} onChanged={refresh} />
         )}
+        <Account />
       </header>
       {error && (
         <div className="notice" role="status">
@@ -235,8 +279,12 @@ export function App() {
           This interview is finished. Answers are available to review.
         </div>
       )}
-      {workspaceOpen ? (
-        <div className={`workspace ${stageExpanded ? "expanded" : ""}`}>
+      {/* Questions on the left, the workspace in the middle, the chat on the right. */}
+      <div
+        className={`workspace ${workspaceOpen ? "with-stage" : ""} ${workspaceOpen && stageExpanded ? "expanded" : ""}`}
+      >
+        {questions}
+        {workspaceOpen && (
           <Stage
             token={token}
             session={session}
@@ -245,12 +293,9 @@ export function App() {
             onToggleExpanded={() => setStageExpanded((value) => !value)}
             onClose={() => void setStageVisible(false)}
           />
-          {questions}
-        </div>
-      ) : (
-        questions
-      )}
-      <Chat token={token} session={session} chat={chat} onSent={refresh} />
+        )}
+        <Chat token={token} session={session} chat={chat} onSent={refresh} />
+      </div>
     </main>
   );
 }

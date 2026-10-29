@@ -90,13 +90,13 @@ export function Switcher({
         onClick={() => setOpen((value) => !value)}
         title="Switch interview (⌘K)"
       >
-        <ProjectChip project={session.project} size={24} />
-        <span className="switcher-titles">
-          {session.project && (
-            <span className="switcher-project">{session.project.name}</span>
-          )}
-          <h1>{session.title}</h1>
-        </span>
+        <h1>{session.title}</h1>
+        {session.project && (
+          <span className="switcher-project">
+            <ProjectChip project={session.project} size={14} />
+            {session.project.name}
+          </span>
+        )}
         <span className="switcher-caret" aria-hidden="true">
           ▾
         </span>

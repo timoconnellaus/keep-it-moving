@@ -7,6 +7,7 @@ import {
   render,
   screen,
   fireEvent,
+  within,
 } from "@testing-library/react";
 import { App } from "../src/web/App.js";
 import type { SessionSummary, SessionView } from "../src/shared/schema.js";
@@ -209,7 +210,11 @@ describe("assigning on the Free plan", () => {
     expect(
       screen.getByRole("link", { name: "Upgrade to Pro" }),
     ).toHaveAttribute("href", "/pricing");
-    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(
+      within(screen.getByRole("dialog", { name: "Assign" })).getByRole(
+        "textbox",
+      ),
+    ).toBeDisabled();
   });
 });
 
@@ -361,17 +366,16 @@ describe("questionnaire UI seam", () => {
     render(<App />);
     await screen.findByText("Choose a direction");
 
-    expect(screen.getByRole("button", { name: "A default" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: "A Recommended" }),
+    ).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "B" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
     // Re-picking a default in a different order still matches it.
-    fireEvent.click(screen.getByRole("button", { name: "A default" }));
-    fireEvent.click(screen.getByRole("button", { name: "A default" }));
+    fireEvent.click(screen.getByRole("button", { name: "A Recommended" }));
+    fireEvent.click(screen.getByRole("button", { name: "A Recommended" }));
     fireEvent.click(screen.getByRole("button", { name: "Accept default" }));
 
     await vi.waitFor(() =>
@@ -402,10 +406,9 @@ describe("questionnaire UI seam", () => {
     fireEvent.change(screen.getByLabelText("Other answer or note"), {
       target: { value: "only for now" },
     });
-    expect(screen.getByRole("button", { name: "A default" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    expect(
+      screen.getByRole("button", { name: "A Recommended" }),
+    ).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await vi.waitFor(() =>
@@ -737,7 +740,7 @@ describe("questionnaire UI seam", () => {
 
       expect(container.querySelectorAll(".choice-card iframe")).toHaveLength(2);
       expect(
-        screen.getByRole("button", { name: "Sidebar default" }),
+        screen.getByRole("button", { name: "Sidebar Recommended" }),
       ).toHaveAttribute("aria-pressed", "true");
       fireEvent.click(screen.getByRole("button", { name: "Board" }));
       expect(screen.getByRole("button", { name: "Board" })).toHaveAttribute(

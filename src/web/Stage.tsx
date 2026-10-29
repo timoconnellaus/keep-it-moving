@@ -61,14 +61,14 @@ export function Stage({
               className={artifact.id === shown?.id ? "active" : ""}
               onClick={() => onShow(artifact.id)}
             >
-              <span className="kind">{KIND_LABEL[artifact.kind]}</span>
+              {/* A coloured dot on screen; the name still says the kind. */}
+              <span className="kind" data-kind={artifact.kind}>
+                {KIND_LABEL[artifact.kind]}
+              </span>
               {artifact.title}
             </button>
           ))}
         </div>
-        {source && source !== "user" && (
-          <span className="stage-source">via agent</span>
-        )}
         <button
           type="button"
           className="stage-expand"
@@ -89,8 +89,16 @@ export function Stage({
       </div>
       {shown && (
         <div className="stage-body" role="tabpanel" aria-label={shown.title}>
-          {shown.description && shown.kind !== "plan" && (
-            <p className="stage-description">{shown.description}</p>
+          {shown.kind !== "plan" && (
+            <div className="stage-pane-bar">
+              <span className="stage-description">
+                {shown.description ?? shown.title}
+              </span>
+              {source && source !== "user" && (
+                <span className="stage-source">via agent</span>
+              )}
+              <span className="stage-kind">{KIND_LABEL[shown.kind]}</span>
+            </div>
           )}
           {shown.format === "html" ? (
             <iframe

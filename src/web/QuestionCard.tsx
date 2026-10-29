@@ -70,6 +70,7 @@ export function QuestionCard({
   token,
   question,
   number,
+  total,
   emphasized,
   disabled,
   onSaved,
@@ -82,6 +83,8 @@ export function QuestionCard({
   token: string;
   question: QuestionView;
   number: number;
+  /** How many questions the interview has, for "Question 2 of 5". */
+  total: number;
   emphasized: boolean;
   disabled: boolean;
   onSaved(): Promise<void>;
@@ -169,51 +172,52 @@ export function QuestionCard({
     );
   const hint = question.type === "number" ? numberHint(question) : "";
 
+  const done = question.answer !== null && !open;
+  const actions = (
+    <>
+      {linked && (
+        <button
+          type="button"
+          className={`artifact-link ${linked.id === shownArtifactId ? "on-stage" : ""}`}
+          onClick={() => onShowArtifact(linked.id)}
+          title="Show in the workspace"
+        >
+          {linked.title}
+        </button>
+      )}
+      {onAsk && (
+        <button
+          type="button"
+          className="ask"
+          onClick={onAsk}
+          aria-label="Ask about this"
+          title="Ask the agent about this question"
+        >
+          <ChatIcon />
+        </button>
+      )}
+      {question.answer && (
+        <button
+          className="edit"
+          onClick={() => {
+            if (open) reset();
+            setOpen((value) => !value);
+          }}
+          disabled={disabled}
+        >
+          {open ? "Cancel" : "Edit"}
+        </button>
+      )}
+    </>
+  );
+
   return (
     <article
       data-question-id={question.id}
-      className={`question ${open ? "open" : ""} ${emphasized ? "emphasized" : ""} ${question.answer?.delivered ? "received" : ""}`}
+      className={`question ${open ? "open" : ""} ${done ? "done" : ""} ${emphasized ? "emphasized" : ""} ${question.answer?.delivered ? "received" : ""}`}
     >
-      <div className="question-heading">
-        <span className="number">{String(number).padStart(2, "0")}</span>
-        <h2>{question.prompt}</h2>
-        {linked && (
-          <button
-            type="button"
-            className={`artifact-link ${linked.id === shownArtifactId ? "on-stage" : ""}`}
-            onClick={() => onShowArtifact(linked.id)}
-            title="Show in the workspace"
-          >
-            {linked.title}
-          </button>
-        )}
-        {onAsk && (
-          <button
-            type="button"
-            className="edit ask"
-            onClick={onAsk}
-            title="Ask the agent about this question"
-          >
-            Ask about this
-          </button>
-        )}
-        {question.answer && (
-          <button
-            className="edit"
-            onClick={() => {
-              if (open) reset();
-              setOpen((value) => !value);
-            }}
-            disabled={disabled}
-          >
-            {open ? "Cancel" : "Edit"}
-          </button>
-        )}
-      </div>
-      {question.answer && !open && (
-        <div
-          className={`answer-summary ${question.answer.skipped ? "skipped" : ""}`}
-        >
+      {done && question.answer ? (
+        <div className="question-heading">
           {question.answer.skipped ? (
             <span
               className="status-icon skip-icon"
@@ -226,27 +230,41 @@ export function QuestionCard({
             <span
               className="status-icon saved"
               aria-label="Saved"
-              title="Saved"
+              title={question.answer.delivered ? "Sent to the agent" : "Saved"}
             >
-              ✓
+              <TickIcon />
             </span>
           )}
-          <span className="answer-text">
-            {question.answer.skipped ? "Skipped" : question.answer.text}
+          <h2>{question.prompt}</h2>
+          <span
+            className={`answer-summary ${question.answer.skipped ? "skipped" : ""}`}
+          >
+            <span className="answer-text">
+              {question.answer.skipped ? "Skipped" : question.answer.text}
+            </span>
+            {!question.answer.skipped &&
+              question.answer.text === defaultText && (
+                <span className="tag">default</span>
+              )}
+            {question.answer.answeredBy && (
+              <span className="tag">by {question.answer.answeredBy}</span>
+            )}
           </span>
-          {!question.answer.skipped && question.answer.text === defaultText && (
-            <span className="tag">default</span>
-          )}
-          {question.answer.answeredBy && (
-            <span className="tag">by {question.answer.answeredBy}</span>
-          )}
+          {actions}
         </div>
+      ) : (
+        <>
+          <div className="question-meta">
+            <span className="number">
+              Question {number} of {total}
+            </span>
+            {actions}
+          </div>
+          <h2>{question.prompt}</h2>
+        </>
       )}
       {open && (
         <div className="answer-form">
-          {question.recommendation && (
-            <Recommendation markdown={question.recommendation} />
-          )}
           {choices.length > 0 &&
             (choices.some((option) =>
               artifactFor(question.optionArtifacts[option]),
@@ -278,7 +296,7 @@ export function QuestionCard({
                         <span className="choice-card-label">
                           {option}
                           {isDefaultOption && (
-                            <span className="default-mark">default</span>
+                            <span className="default-mark">Recommended</span>
                           )}
                         </span>
                       </button>
@@ -298,7 +316,7 @@ export function QuestionCard({
               </div>
             ) : (
               <div
-                className="choices"
+                className={`choices ${multiple ? "multiple" : ""}`}
                 role="group"
                 aria-label={multiple ? "Choose any" : "Choose one"}
               >
@@ -312,15 +330,19 @@ export function QuestionCard({
                       type="button"
                       aria-pressed={selected.includes(option)}
                     >
-                      {option}
+                      <span className="choice-mark" aria-hidden="true" />
+                      <span className="choice-label">{option}</span>
                       {isDefaultOption && (
-                        <span className="default-mark">default</span>
+                        <span className="default-mark">Recommended</span>
                       )}
                     </button>
                   );
                 })}
               </div>
             ))}
+          {question.recommendation && (
+            <Recommendation markdown={question.recommendation} />
+          )}
           <div className="answer-row">
             {question.type === "text" ? (
               <textarea
@@ -358,20 +380,20 @@ export function QuestionCard({
             )}
             <div className="actions">
               <button
-                className="skip"
-                type="button"
-                disabled={saving || disabled}
-                onClick={() => void save("", true)}
-              >
-                Skip
-              </button>
-              <button
                 className={`submit ${isDefault ? "accept" : ""}`}
                 type="button"
                 disabled={!canSave}
                 onClick={submit}
               >
                 {saving ? "Saving…" : isDefault ? "Accept default" : "Save"}
+              </button>
+              <button
+                className="skip"
+                type="button"
+                disabled={saving || disabled}
+                onClick={() => void save("", true)}
+              >
+                Skip
               </button>
             </div>
           </div>
@@ -383,6 +405,30 @@ export function QuestionCard({
         </div>
       )}
     </article>
+  );
+}
+
+const icon = {
+  viewBox: "0 0 16 16",
+  fill: "none",
+  stroke: "currentColor",
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  "aria-hidden": true,
+};
+function TickIcon() {
+  return (
+    <svg {...icon} width="10" height="10" strokeWidth="2.4">
+      <path d="M3.5 8.3 6.6 11.4 12.5 5" />
+    </svg>
+  );
+}
+function ChatIcon() {
+  return (
+    <svg {...icon} width="15" height="15" strokeWidth="1.6">
+      <path d="M3 3.5h10a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H7l-3 2.5v-2.5H3A1.5 1.5 0 0 1 1.5 11V5A1.5 1.5 0 0 1 3 3.5z" />
+      <path d="M6.5 6.6a1.6 1.6 0 1 1 2.2 1.5c-.5.2-.7.5-.7 1M8 10.6v.1" />
+    </svg>
   );
 }
 

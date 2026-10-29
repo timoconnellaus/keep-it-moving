@@ -19,7 +19,9 @@ export type ChatState = ReturnType<typeof useChat>;
 /**
  * One chat with the agent for the whole interview: clarifications about the
  * interview or a question, and directions. The agent answers when its `wait`
- * returns, so the thread says whether anyone is watching.
+ * returns, so the thread says whether anyone is watching. On desktop the
+ * stylesheet keeps it open as the right-hand column; on smaller screens it's
+ * a sheet behind the launcher, open while `chat.open`.
  */
 export function Chat({
   token,
@@ -48,8 +50,7 @@ export function Chat({
     if (chat.open) setSeen(replies);
   }, [chat.open, replies]);
   useEffect(() => {
-    if (chat.open && list.current)
-      list.current.scrollTop = list.current.scrollHeight;
+    if (list.current) list.current.scrollTop = list.current.scrollHeight;
   }, [chat.open, session.chat.length]);
   useEffect(() => {
     if (chat.open) input.current?.focus();
@@ -91,136 +92,151 @@ export function Chat({
     }
   };
 
-  if (!chat.open)
-    return active || session.chat.length ? (
-      <button
-        type="button"
-        className="chat-launcher"
-        onClick={() => chat.ask(null)}
-        title="Ask the agent a question, or give it a direction"
-      >
-        Ask the agent
-        {replies > seen && (
-          <span className="chat-unread" aria-label="New reply" />
-        )}
-      </button>
-    ) : null;
-
   const last = session.chat.at(-1);
   const pending = last?.author === "user" ? last : null;
-  return (
-    <aside
-      className="chat"
-      aria-label="Chat with the agent"
-      onKeyDown={(event) => {
-        if (event.key === "Escape") chat.close();
-      }}
+  const launcher = !chat.open && (active || session.chat.length > 0) && (
+    <button
+      type="button"
+      className="chat-launcher"
+      onClick={() => chat.ask(null)}
+      title="Ask the agent a question, or give it a direction"
     >
-      <header className="chat-header">
-        <div>
-          <h2>Chat with the agent</h2>
+      Ask the agent
+      {replies > seen && (
+        <span className="chat-unread" aria-label="New reply" />
+      )}
+    </button>
+  );
+  return (
+    <>
+      {launcher}
+      <aside
+        className={`chat ${chat.open ? "open" : ""}`}
+        aria-label="Chat with the agent"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") chat.close();
+        }}
+      >
+        <header className="chat-header">
+          <h2>Chat</h2>
           <span
             className={`chat-presence ${session.agentWatching ? "on" : ""}`}
           >
             {session.agentWatching ? "Agent is watching" : "Agent is away"}
           </span>
-        </div>
-        <button
-          type="button"
-          className="chat-close"
-          onClick={chat.close}
-          aria-label="Close chat"
-        >
-          ×
-        </button>
-      </header>
-      <div className="chat-messages" ref={list}>
-        {session.chat.length === 0 && (
-          <p className="chat-empty">
-            Ask about the interview or a question, or tell the agent to change
-            direction. It replies here.
-          </p>
-        )}
-        {session.chat.map((message) => (
-          <Message
-            key={message.id}
-            message={message}
-            about={message.questionId ? numbered(message.questionId) : null}
-            quoted={
-              message.replyTo &&
-              message.replyTo !== previousUser(session.chat, message)?.id
-                ? session.chat.find((other) => other.id === message.replyTo)
-                : undefined
-            }
-          />
-        ))}
-        {pending && (
-          <p className="chat-pending" role="status">
-            {pending.delivered
-              ? "The agent has it. Waiting for a reply…"
-              : session.agentWatching
-                ? "Waiting for the agent…"
-                : "No agent is watching right now. It will see this when it next checks in."}
-          </p>
-        )}
-      </div>
-      {active ? (
-        <form
-          className="chat-compose"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void send();
-          }}
-        >
-          {chat.about && (
-            <span className="chat-chip">
-              <span>
-                {attached
-                  ? `Q${attached.number} · ${attached.prompt}`
-                  : "A removed question"}
-              </span>
-              <button
-                type="button"
-                onClick={() => chat.setAbout(null)}
-                aria-label="Remove the attached question"
-              >
-                ×
-              </button>
-            </span>
-          )}
-          <div className="chat-input-row">
-            <textarea
-              ref={input}
-              rows={2}
-              value={text}
-              placeholder={
-                chat.about
-                  ? "Ask about this question…"
-                  : "Ask a question, or give the agent a direction…"
-              }
-              aria-label="Message to the agent"
-              onChange={(event) => setText(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void send();
-                }
-              }}
-            />
-            <button type="submit" disabled={sending || !text.trim()}>
-              {sending ? "Sending…" : "Send"}
-            </button>
-          </div>
-          {error && (
-            <p className="save-error" role="alert">
-              {error}
+          <button
+            type="button"
+            className="chat-close"
+            onClick={chat.close}
+            aria-label="Close chat"
+          >
+            ×
+          </button>
+        </header>
+        <div className="chat-messages" ref={list}>
+          {session.chat.length === 0 && (
+            <p className="chat-empty">
+              Ask about the interview or a question, or tell the agent to change
+              direction. It replies here.
             </p>
           )}
-        </form>
-      ) : (
-        <p className="chat-closed">This interview is finished.</p>
-      )}
-    </aside>
+          {session.chat.map((message) => (
+            <Message
+              key={message.id}
+              message={message}
+              about={message.questionId ? numbered(message.questionId) : null}
+              quoted={
+                message.replyTo &&
+                message.replyTo !== previousUser(session.chat, message)?.id
+                  ? session.chat.find((other) => other.id === message.replyTo)
+                  : undefined
+              }
+            />
+          ))}
+          {pending && (
+            <p className="chat-pending" role="status">
+              {pending.delivered
+                ? "The agent has it. Waiting for a reply…"
+                : session.agentWatching
+                  ? "Waiting for the agent…"
+                  : "No agent is watching right now. It will see this when it next checks in."}
+            </p>
+          )}
+        </div>
+        {active ? (
+          <form
+            className="chat-compose"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void send();
+            }}
+          >
+            {chat.about && (
+              <span className="chat-chip">
+                <span>
+                  {attached
+                    ? `Q${attached.number} · ${attached.prompt}`
+                    : "A removed question"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => chat.setAbout(null)}
+                  aria-label="Remove the attached question"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            <div className="chat-input-row">
+              <textarea
+                ref={input}
+                rows={2}
+                value={text}
+                placeholder={
+                  chat.about ? "Ask about this question…" : "Ask the agent…"
+                }
+                aria-label="Message to the agent"
+                onChange={(event) => setText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void send();
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                className="chat-send"
+                disabled={sending || !text.trim()}
+                aria-label={sending ? "Sending…" : "Send"}
+                title="Send (↵)"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M2 7h9M7.5 3.5 11 7l-3.5 3.5" />
+                </svg>
+              </button>
+            </div>
+            {error && (
+              <p className="save-error" role="alert">
+                {error}
+              </p>
+            )}
+          </form>
+        ) : (
+          <p className="chat-closed">This interview is finished.</p>
+        )}
+      </aside>
+    </>
   );
 }
 
