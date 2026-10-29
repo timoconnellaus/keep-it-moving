@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Account } from "./Account.js";
 import { GetStarted } from "./GetStarted.js";
 import { liveSocket, probeStatus, STOP_MESSAGES } from "./liveSocket.js";
+import { Logo } from "./Logo.js";
 import { NotifyToggle } from "./Notify.js";
 import {
   homeOrder,
@@ -66,6 +67,7 @@ export function Home() {
     <div className="home-page">
       <header className="top-bar">
         <a href="/" className="top-bar-brand">
+          <Logo />
           Keep it moving
         </a>
         <span className="spacer" />
