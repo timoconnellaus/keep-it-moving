@@ -21,7 +21,7 @@
     "dev": "npm run build && wrangler dev",
     "dev:web": "vite",
     "build:cli": "tsc -p tsconfig.cli.json",
-    "build:web": "vite build",
+    "build:web": "vite build && node scripts/build-landing.mjs",
     "build": "npm run build:cli && npm run build:web && npm run pack:cli",
     "pack:cli": "node scripts/pack-cli.mjs",
     "deploy": "npm run build && wrangler deploy",

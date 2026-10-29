@@ -9,7 +9,10 @@
   const fit = () => {
     const scale = frame.clientWidth / W;
     stage.style.transform = `scale(${scale})`;
-    frame.style.height = `${H * scale}px`;
+    // The frame's height counts its 1px borders.
+    frame.style.height = `${H * scale + 2}px`;
+    // 24 of the app's pixels: under the browser bar's 44, and clear of the app's own 12px insets at the bottom.
+    frame.style.setProperty("--demo-radius", `${Math.max(5, Math.round(24 * scale))}px`);
   };
   fit();
   new ResizeObserver(fit).observe(frame);

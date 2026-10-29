@@ -125,7 +125,7 @@ const shell = (body: string, className = "") => `<!doctype html>
     margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line);
     text-align: left;
   }
-  .setup h2 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
+  .setup h2 { margin: 0 0 8px; font-size: 20px; font-weight: 600; line-height: 1.25; }
   .setup p { margin: 0 0 12px; font-size: 15px; }
   .setup pre + p { margin-top: 12px; }
   .setup p:last-child { margin-bottom: 0; }
