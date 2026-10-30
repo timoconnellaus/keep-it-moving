@@ -31,6 +31,17 @@ Use the `kim` CLI (Keep it moving) to run an adaptive interview in the user's br
 
 3. Open the returned URL when browser-opening capability is available; otherwise give the URL to the user.
 
+## Interviews sent to the user
+
+Someone else's agent may have assigned your user an interview. When the user asks you to answer interviews sent to them, or `kim inbox` lists some, work through each one with `kim inbox show <interview>`. It gives the questions (type, options, default, recommendation, bound artifact) with any answer, draft and chat thread, the sender's agent's other messages, and the workspace. `<interview>` is the `id` or `url`; `<question>` is a question's id or number.
+
+- **Workspace**: plans and documents come inline. For an html mockup or diagram, `kim inbox artifact <interview> <artifact> --out <file>` saves it as its frame serves it, with saved answers' values applied; read it for detail. To see it, `kim inbox screenshot <interview> <artifact>` renders it with a local Chrome or Edge at its frame's width (`frame` in `show`; `--width 390|834|1280` for another, `--full-page` for all of it) and prints the PNG's path; open that file to look. Each artifact has a `revision`, so you can tell what you've already seen.
+- **Draft, don't send**: draft each answer from what you know of the user's project and preferences: `kim draft <interview> <question> <answer>`, with `--option <label>` (repeat for multiple-choice) and `--note <text>` for the form's "Other, or add a note", or `--skip`. `--clear` drops a draft. Drafts reach no one until the user sends them in the browser. Only use `--send`, which answers as the user at once, when the user told you to answer directly. A draft is refused if the answer wouldn't fit the question, as the form would refuse it; fix it and try again. Leave questions only the user can answer undrafted.
+- **Chat**: `kim inbox chat <interview> [--question <question>] <text>` asks the sender's agent something as the user, sent at once, so only ask what the user would want asked; `--question` puts it in that question's thread. The reply arrives through `kim inbox wait`.
+- **Watch**: run `kim inbox wait [<interview>]` in the background, as with `kim wait`. It exits with what is new since you last looked: new questions, the sender's agent's replies, workspace changes (one per artifact, with what `happened` and its `revision`), interviews newly sent to the user (`assigned`: read it with `show`), and `notes` such as a draft written against an older revision of its mockup. Revise drafts as needed, then wait again. `"timedOut": true` means nothing arrived.
+
+When the drafts are in, tell the user to review and send them at the interview's `url` (**Send N drafts**, or edit any first). You can't add questions, artifacts or anything else to someone else's interview.
+
 ## Someone else answers it
 
 When the user wants another person to fill in an interview (a client, a colleague), assign it to that person's email: `kim session create … --assign <email>`, or `kim session assign <session-id> <email>` for an existing one (`--clear` takes it back; one assignee at a time). Give the user the returned `url` to send them; nothing is emailed. That person signs in with Google as exactly that email and sees only this interview: its questions, the workspace items you show, and the chat. Write the questions for them, not the user.

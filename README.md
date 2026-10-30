@@ -68,6 +68,25 @@ An interview can be assigned to someone else's email, for them to answer: `kim s
 
 The interview stays in the owner's workspace. The Worker keeps a directory in `OAUTH_KV` (`share:<token>` → owner and assignee, `assigned:<email>:<token>` for the list) to route the assignee there, marked with a header only the Worker sets; the owner's hub then allows that header on the one interview's page routes only, and only while the interview is still assigned to that email, so clearing the assignment locks them out at once, before KV catches up. Deleting the interview removes the entries.
 
+### Answering with your agent
+
+An interview sent to you can also be worked on by your own agent, signed in to `kim` as you (or as an account linked to yours; agent keys can't):
+
+```sh
+kim inbox                                    # sent to you and still open: id, url, sender, open and drafted counts
+kim inbox show <interview>                   # questions with answers, drafts and chat threads; the chat; the workspace
+kim inbox artifact <interview> <artifact> --out layout.html   # as its frame serves it, saved answers applied
+kim inbox screenshot <interview> <artifact> [--width 390] [--full-page]   # a PNG, with a local Chrome or Edge
+kim draft <interview> 3 --option "Two steps" --note "fewer fields on mobile"
+kim draft <interview> 4 --clear
+kim inbox chat <interview> --question 2 "Is the order summary sticky on mobile?"
+kim inbox wait [<interview>]                 # blocks until something new arrives
+```
+
+`<interview>` is the interview's token or URL, and `<question>` its id or number. Drafts are checked as the answer form checks an answer (options must be the question's, numbers in range), then stored per question in the owner's hub with whose agent wrote them, apart from answers: they make no event, so the owner's agent, hooks and pages never see them. The assignee's page shows each draft prefilled with "Drafted by your agent", and **Send N drafts** in the top bar sends every one they haven't edited; saving a card sends that one. Either way it is an ordinary answer from the assignee's address, with nothing to say an agent drafted it. `kim draft … --send` answers at once instead, for when the user has said to, and `kim inbox chat` posts as the assignee, as if they'd typed it.
+
+`kim inbox wait` holds a socket in your own hub. The owner's hub tells it (and your linked accounts' hubs) when it adds a question, its agent replies in the chat, it adds, revises, removes or shows an artifact, or it assigns you an interview. The CLI then takes what changed: questions, replies with the question whose thread they're in, one entry per artifact however many edits it had (with its revision), and a note for any draft written against an older revision of its question's artifact. What it prints counts as delivered, as does reading the interview with `inbox show`; each interview keeps that mark, so the next wait brings only what is newer. With hooks installed, an agent session that has worked on an interview sent to you gets the same changes between its steps. Screenshots use the browser's own `--headless --screenshot` on a temporary copy of the page, so the agent's token never reaches the browser; set `CHROME_PATH` to choose the browser.
+
 ### Linked accounts
 
 People often have more than one Google account, and an interview can be assigned to one while the browser is signed in as another. Linking makes them count as one person: an interview opens in any of them, whether it was sent to one of them or is one of their own. While signed in as one account, **Link another Google account** in the Account menu (or **Link t•••@gmail.com to this account** on the page an interview sent to another address shows) goes through Google's sign-in, with the account chooser, as the other account. When Google comes back, the two are linked and the browser is still signed in as the first. Links are symmetric and transitive: link A to B and B to C, and all three are linked. A group holds at most 10 addresses. The Account menu lists the others and unlinks any of them.

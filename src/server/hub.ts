@@ -1,11 +1,14 @@
 import { Hono, type Context } from "hono";
-import { defaultAnswerText } from "../shared/answers.js";
+import { composeParts, defaultAnswerText } from "../shared/answers.js";
 import { artifactValues, isBound, savedValues } from "../shared/bindings.js";
 import type {
   ArtifactView,
+  ChatMessageView,
+  DraftView,
   InterviewEvent,
   SessionView,
 } from "../shared/schema.js";
+import { frameSize } from "../shared/workspace.js";
 import {
   ARTIFACT_VIEW_HEADERS,
   opensAsPage,
@@ -23,7 +26,12 @@ import {
   type LiveInterview,
 } from "./plans.js";
 import type { Sql } from "./sql.js";
-import { LIMIT_REACHED, type InterviewStore } from "./store.js";
+import {
+  hasInboxNews,
+  LIMIT_REACHED,
+  type InboxChanges,
+  type InterviewStore,
+} from "./store.js";
 
 /**
  * The header the Worker sets, to the signed-in email, on a request from an
@@ -33,6 +41,12 @@ import { LIMIT_REACHED, type InterviewStore } from "./store.js";
 export const RESPONDENT_HEADER = "x-kim-respondent";
 /** Who is assigning an interview, by name, as the assignee will see it. */
 export const ASSIGNED_BY_HEADER = "x-kim-assigned-by";
+/**
+ * The signed-in email whose agent made an inbox request (`kim inbox`,
+ * `kim draft`) for the assignee: them, or an account linked to theirs.
+ * The Worker sets it with the respondent header; inbox routes need both.
+ */
+export const DRAFTER_HEADER = "x-kim-drafter";
 
 /** Where browser state updates go: hibernating WebSockets in production. */
 export interface BrowserSockets {
@@ -97,6 +111,19 @@ export interface HubOptions {
   agentSockets?: AgentSockets | undefined;
   /** Web Push to the user's devices; absent when no VAPID key is configured. */
   push?: { publicKey: string; send: PushSender } | undefined;
+  /** This user's agents waiting in `kim inbox wait`, on interviews sent to them. */
+  inboxSockets?: InboxSockets | undefined;
+  /**
+   * Tells the assignee's agents (their hub and their linked accounts') that
+   * an interview sent to them changed; they come and take the changes.
+   */
+  pingInbox?: ((assignee: string, token: string) => void) | undefined;
+}
+
+/** Hibernating sockets for `kim inbox wait`; each hears which interview changed. */
+export interface InboxSockets {
+  accept(): Response;
+  send(data: string): void;
 }
 
 interface Watcher {
@@ -309,13 +336,21 @@ export function createHub(options: HubOptions) {
     ...forBrowser(store.getSession(sessionId, baseUrl)),
     agentWatching: watching(sessionId),
   });
+  /** The assignee's page: the interview, and their agent's drafts. */
+  const respondentView = (sessionId: string): SessionView => ({
+    ...forRespondent(browserView(sessionId)),
+    drafts: store.drafts(sessionId),
+  });
   const stateMessage = (sessionId: string, respondent = false) =>
     JSON.stringify({
       type: "state",
-      session: respondent
-        ? forRespondent(browserView(sessionId))
-        : browserView(sessionId),
+      session: respondent ? respondentView(sessionId) : browserView(sessionId),
     });
+  /** A draft changed: only the assignee's pages show drafts. */
+  const draftsChanged = (sessionId: string) =>
+    later(() =>
+      sockets.sendRespondent?.(sessionId, stateMessage(sessionId, true)),
+    );
   const broadcast = (sessionId: string) => {
     let body;
     try {
@@ -389,6 +424,15 @@ export function createHub(options: HubOptions) {
         void notify();
       }, PUSH_SETTLE_MS);
     }
+    // Something for the assignee's agent: tell it to come and look.
+    if (
+      options.pingInbox &&
+      INBOX_EVENTS.has(event.type) &&
+      (event.type !== "stage.changed" || event.payload.source === "agent")
+    ) {
+      const assigned = store.assignment(event.sessionId);
+      if (assigned) options.pingInbox(assigned.assignee, assigned.token);
+    }
     later(() => {
       const watcher = watchers.get(event.sessionId);
       if (watcher?.write(event)) store.markDelivered(event.sessionId, event.id);
@@ -446,6 +490,17 @@ export function createHub(options: HubOptions) {
   app.use("/api/browser/*", async (c, next) => {
     if (c.req.method !== "GET" && !sameSite(c.req.raw))
       return c.json({ error: "Cross-site request refused" }, 403);
+    await next();
+  });
+
+  // The assignee's agent, through the Worker, which names both the
+  // assignee and whose agent it is. Nothing else reaches these routes.
+  app.use("/api/inbox/*", async (c, next) => {
+    if (
+      c.req.header(RESPONDENT_HEADER) === undefined ||
+      !c.req.header(DRAFTER_HEADER)
+    )
+      return c.json({ error: "Not shared with you" }, 403);
     await next();
   });
 
@@ -795,8 +850,32 @@ export function createHub(options: HubOptions) {
   });
   // The rest are addressed by the session's secret token.
   app.get("/api/browser/:token/session", (c) => {
-    const view = browserView(tokenSession(c.req.param("token")));
-    return c.json(respondentOf(c) ? forRespondent(view) : view);
+    const id = tokenSession(c.req.param("token"));
+    return c.json(respondentOf(c) ? respondentView(id) : browserView(id));
+  });
+  // "Send N drafts": the assignee sends their agent's drafts as their own answers.
+  app.post("/api/browser/:token/drafts/send", async (c) => {
+    const by = respondentOf(c);
+    if (!by) return c.json({ error: "Only the assignee has drafts" }, 403);
+    const id = tokenSession(c.req.param("token"));
+    const input = await body(c);
+    const ids = Array.isArray(input.questionIds)
+      ? input.questionIds.map(String)
+      : [];
+    const drafts = store.drafts(id);
+    let sent = 0;
+    for (const questionId of ids) {
+      const draft = drafts[questionId];
+      if (!draft) continue;
+      store.answerQuestion(
+        id,
+        questionId,
+        { answer: draft.text, skipped: draft.skipped },
+        by,
+      );
+      sent++;
+    }
+    return c.json({ sent });
   });
   app.post("/api/browser/:token/assign", async (c) =>
     c.json(assign(c, tokenSession(c.req.param("token")), await body(c))),
@@ -854,6 +933,154 @@ export function createHub(options: HubOptions) {
     );
     return c.json({ ok: true });
   });
+  // The assignee's agent: `kim inbox`, `kim draft`. It reads the
+  // interview and drafts answers; it changes nothing of the owner's.
+  const inboxTarget = (c: Context) => {
+    const token = c.req.param("token")!;
+    return { token, id: tokenSession(token) };
+  };
+  /** A question by its id or its number in the interview. */
+  const questionRef = (sessionId: string, ref: string) => {
+    const questions = store.getSession(sessionId, "").questions;
+    const question = /^\d+$/.test(ref)
+      ? questions[Number(ref) - 1]
+      : questions.find((item) => item.id === ref);
+    if (!question) throw new Error("Question not found");
+    return { question, number: questions.indexOf(question) + 1 };
+  };
+  app.get("/api/inbox/:token/summary", (c) => {
+    const { id } = inboxTarget(c);
+    const session = store.getSession(id, baseUrl);
+    return c.json({
+      ...inboxHeader(session),
+      openQuestions: session.questions.filter((question) => !question.answer)
+        .length,
+      drafted: Object.keys(store.drafts(id)).length,
+    });
+  });
+  // Reading it whole delivers everything so far: the next wait brings only news.
+  app.get("/api/inbox/:token", (c) => {
+    const { id } = inboxTarget(c);
+    const view = inboxView(store.getSession(id, baseUrl), store.drafts(id));
+    store.markInboxDelivered(id, store.inboxChanges(id).through);
+    return c.json(view);
+  });
+  app.post("/api/inbox/:token/take", (c) => {
+    const { id } = inboxTarget(c);
+    const changes = store.inboxChanges(id);
+    store.markInboxDelivered(id, changes.through);
+    return c.json(inboxNews(store.getSession(id, baseUrl), changes));
+  });
+  // As its frame serves it: an html artifact with saved answers' values applied.
+  app.get("/api/inbox/:token/artifacts/:artifactId", (c) => {
+    const { id } = inboxTarget(c);
+    const session = store.getSession(id, "");
+    const artifact = session.artifacts.find(
+      (item) => item.id === c.req.param("artifactId"),
+    );
+    if (!artifact) throw new Error("Artifact not found");
+    const { content } = store.artifactContent(id, artifact.id);
+    return c.json({
+      ...artifactSummary(artifact),
+      content:
+        artifact.format === "html"
+          ? renderArtifact(
+              content,
+              artifactValues(session.questions, artifact.id),
+            )
+          : content,
+      ...(artifact.source ? { source: artifact.source } : {}),
+    });
+  });
+  app.put("/api/inbox/:token/questions/:question/draft", async (c) => {
+    const { token, id } = inboxTarget(c);
+    const { question, number } = questionRef(id, c.req.param("question"));
+    const draft = store.saveDraft(
+      id,
+      question.id,
+      composeParts(question, await body(c)),
+      c.req.header(DRAFTER_HEADER)!,
+    );
+    draftsChanged(id);
+    return c.json({
+      interview: token,
+      url: store.getSession(id, baseUrl).url,
+      question: { id: question.id, number, prompt: question.prompt },
+      draft,
+    });
+  });
+  app.delete("/api/inbox/:token/questions/:question/draft", (c) => {
+    const { id } = inboxTarget(c);
+    const { question, number } = questionRef(id, c.req.param("question"));
+    const cleared = store.clearDraft(id, question.id);
+    if (cleared) draftsChanged(id);
+    return c.json({
+      question: { id: question.id, number, prompt: question.prompt },
+      cleared,
+    });
+  });
+  // --send: the user said to answer directly, as the assignee.
+  app.post("/api/inbox/:token/questions/:question/answer", async (c) => {
+    const { token, id } = inboxTarget(c);
+    const { question, number } = questionRef(id, c.req.param("question"));
+    const answer = composeParts(question, await body(c));
+    const { revision } = store.answerQuestion(
+      id,
+      question.id,
+      answer,
+      respondentOf(c),
+    );
+    return c.json({
+      interview: token,
+      url: store.getSession(id, baseUrl).url,
+      question: { id: question.id, number, prompt: question.prompt },
+      answer: { text: answer.answer, skipped: answer.skipped, revision },
+      sent: true,
+    });
+  });
+  // As if the assignee typed it in the chat, about one question or not.
+  app.post("/api/inbox/:token/chat", async (c) => {
+    const { token, id } = inboxTarget(c);
+    const input = await body(c);
+    const about =
+      input.question === undefined || input.question === null
+        ? null
+        : questionRef(id, String(input.question));
+    const message = store.addChatMessage(
+      id,
+      "user",
+      { text: input.text, questionId: about?.question.id ?? null },
+      respondentOf(c),
+    );
+    return c.json({
+      interview: token,
+      message: {
+        id: message.id,
+        text: message.text,
+        question: about
+          ? { id: about.question.id, number: about.number }
+          : null,
+      },
+    });
+  });
+
+  // `kim inbox wait`: a socket in the waiting user's own hub, which hears
+  // from the owners' hubs that something sent to them changed.
+  app.get("/internal/inbox/socket", (c) => {
+    if (!options.inboxSockets)
+      return c.json({ error: "Sockets are not available here" }, 501);
+    if (c.req.header("upgrade")?.toLowerCase() !== "websocket")
+      return c.json({ error: "Expected a WebSocket" }, 426);
+    return options.inboxSockets.accept();
+  });
+  app.post("/internal/inbox/ping", async (c) => {
+    const { token } = await body(c);
+    options.inboxSockets?.send(
+      JSON.stringify({ type: "changed", interview: String(token ?? "") }),
+    );
+    return c.json({ ok: true });
+  });
+
   // Arranging the canvas reaches the other viewers, but isn't news for the agent.
   app.post("/api/browser/:token/frames/:artifactId/position", async (c) => {
     const id = tokenSession(c.req.param("token"));
@@ -883,6 +1110,16 @@ const PUSH_SETTLE_MS = 1_500;
 export const HOOK_LIVE_MS = 15 * 60 * 1000;
 /** How long an agent between chained `wait` requests still counts as watching. */
 const WATCH_GRACE_MS = 5_000;
+/** Events the assignee's agent hears about (the stage only when the agent moved it). */
+const INBOX_EVENTS = new Set([
+  "session.assigned",
+  "question.added",
+  "chat.reply",
+  "artifact.added",
+  "artifact.updated",
+  "artifact.deleted",
+  "stage.changed",
+]);
 /** Events that change an interview's row in the list or the switcher. */
 const OVERVIEW_EVENTS = /^(session|question\.(added|deleted)|answer|chat)\./;
 
@@ -942,8 +1179,13 @@ const RESPONDENT_ALLOWED: Array<[method: string, path: RegExp]> = [
   ["GET", /^\/api\/browser\/([^/]+)\/(session|artifacts\/[^/]+\/view)$/],
   [
     "POST",
-    /^\/api\/browser\/([^/]+)\/(questions\/[^/]+\/answer|chat|stage|stage\/visibility|frames\/[^/]+\/position)$/,
+    /^\/api\/browser\/([^/]+)\/(questions\/[^/]+\/answer|chat|stage|stage\/visibility|frames\/[^/]+\/position|drafts\/send)$/,
   ],
+  // The assignee's agent, through the Worker's inbox routes.
+  ["GET", /^\/api\/inbox\/([^/]+)(?:\/(?:summary|artifacts\/[^/]+))?$/],
+  ["POST", /^\/api\/inbox\/([^/]+)\/(take|chat|questions\/[^/]+\/answer)$/],
+  ["PUT", /^\/api\/inbox\/([^/]+)\/questions\/[^/]+\/draft$/],
+  ["DELETE", /^\/api\/inbox\/([^/]+)\/questions\/[^/]+\/draft$/],
 ];
 
 /** The token a respondent's request is for, or null when it may not make it. */
@@ -1172,6 +1414,151 @@ function batchSummary(session: SessionView, events: InterviewEvent[]) {
       .length,
     stageVisible: session.stageVisible,
     status: session.status,
+  };
+}
+
+/** Which interview sent to them this is, as the assignee's agent sees it. */
+function inboxHeader(session: SessionView) {
+  return {
+    id: session.token,
+    url: session.url,
+    title: session.title,
+    from: session.assignedBy,
+    sentTo: session.assignee,
+    status: session.status,
+  };
+}
+
+/** An artifact as the assignee's agent lists it: enough to know what to fetch. */
+function artifactSummary(artifact: ArtifactView) {
+  const frame = frameSize(artifact);
+  return {
+    id: artifact.id,
+    kind: artifact.kind,
+    title: artifact.title,
+    description: artifact.description,
+    format: artifact.format,
+    size: artifact.size,
+    revision: artifact.revision,
+    frame: { width: frame.w, height: frame.h },
+  };
+}
+
+/** A chat message for the assignee's agent: who wrote it, and what. */
+function inboxMessage(message: ChatMessageView) {
+  return {
+    id: message.id,
+    from:
+      message.author === "agent" ? "agent" : (message.authorEmail ?? "sender"),
+    text: message.text,
+    at: message.createdAt,
+    ...(message.replyTo ? { replyTo: message.replyTo } : {}),
+  };
+}
+
+/**
+ * Everything the assignee's agent needs to answer: the questions with
+ * their answers, drafts and chat threads, the rest of the chat, and the
+ * workspace. Plans and documents come whole; the rest by `kim inbox artifact`.
+ */
+function inboxView(session: SessionView, drafts: Record<string, DraftView>) {
+  // A message belongs to a question's thread when it, or what it replies to, does.
+  const byId = new Map(session.chat.map((message) => [message.id, message]));
+  const threadOf = (message: ChatMessageView, depth = 0): string | null =>
+    message.questionId ??
+    (message.replyTo && depth < 50 && byId.get(message.replyTo)
+      ? threadOf(byId.get(message.replyTo)!, depth + 1)
+      : null);
+  const artifacts = new Map(
+    session.artifacts.map((artifact) => [artifact.id, artifact]),
+  );
+  return {
+    ...inboxHeader(session),
+    questions: session.questions.map((question, index) => {
+      const artifact = question.artifactId
+        ? artifacts.get(question.artifactId)
+        : undefined;
+      const draft = drafts[question.id];
+      return {
+        id: question.id,
+        number: index + 1,
+        type: question.type,
+        prompt: question.prompt,
+        ...(question.options.length ? { options: question.options } : {}),
+        default: question.default,
+        recommendation: question.recommendation,
+        ...(question.type === "number"
+          ? {
+              min: question.min,
+              max: question.max,
+              step: question.step,
+              unit: question.unit,
+            }
+          : {}),
+        artifact: artifact
+          ? {
+              id: artifact.id,
+              title: artifact.title,
+              revision: artifact.revision,
+            }
+          : null,
+        ...(Object.keys(question.optionArtifacts).length
+          ? { optionArtifacts: question.optionArtifacts }
+          : {}),
+        ...(isBound(question)
+          ? {
+              optionValues: question.optionValues,
+              control: question.control,
+            }
+          : {}),
+        answer: question.answer
+          ? {
+              text: question.answer.text,
+              skipped: question.answer.skipped,
+              answeredBy: question.answer.answeredBy,
+            }
+          : null,
+        draft: draft
+          ? {
+              ...draft,
+              // Written against an artifact that has changed since.
+              stale:
+                draft.artifactRevision !== null &&
+                (!artifact || artifact.revision > draft.artifactRevision),
+            }
+          : null,
+        thread: session.chat
+          .filter((message) => threadOf(message) === question.id)
+          .map(inboxMessage),
+      };
+    }),
+    messages: session.chat
+      .filter((message) => threadOf(message) === null)
+      .map(inboxMessage),
+    artifacts: session.artifacts.map((artifact) => ({
+      ...artifactSummary(artifact),
+      // The rest are fetched: html with `kim inbox artifact`.
+      ...(artifact.format === "markdown" || artifact.format === "text"
+        ? { content: artifact.content }
+        : {}),
+    })),
+    openQuestions: session.questions.filter((question) => !question.answer)
+      .length,
+    drafted: Object.keys(drafts).length,
+  };
+}
+
+/** What `kim inbox wait` prints for one interview: what is new since last time. */
+function inboxNews(session: SessionView, changes: InboxChanges) {
+  const { assigned, questions, messages, artifacts, notes } = changes;
+  return {
+    ...inboxHeader(session),
+    news: hasInboxNews(changes),
+    assigned,
+    questions,
+    messages,
+    artifacts,
+    notes,
   };
 }
 

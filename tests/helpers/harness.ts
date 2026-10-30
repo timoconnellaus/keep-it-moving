@@ -26,12 +26,21 @@ export function hubHarness(
   const sql = nodeSql(options.path);
   const store = new InterviewStore(sql);
   const agents = fakeAgentSockets(() => hub);
+  const inbox = fakeInboxSockets();
+  /** Who the hub told that an interview sent to them changed. */
+  const pings: Array<{ assignee: string; token: string }> = [];
   const hub = createHub({
     store,
     sql,
     baseUrl: "https://interviewer.test",
     push: options.push,
     agentSockets: agents,
+    inboxSockets: inbox,
+    // One hub stands in for the assignee's too: the ping reaches its own sockets.
+    pingInbox: (assignee, token) => {
+      pings.push({ assignee, token });
+      inbox.send(JSON.stringify({ type: "changed", interview: token }));
+    },
     sockets: options.sockets ?? {
       send: () => undefined,
       sendAll: () => undefined,
@@ -63,7 +72,15 @@ export function hubHarness(
       json: () => JSON.parse(body),
     };
   };
-  return { app: { inject, fetch: hub.app.fetch }, store, sql, hub, agents };
+  return {
+    app: { inject, fetch: hub.app.fetch },
+    store,
+    sql,
+    hub,
+    agents,
+    inbox,
+    pings,
+  };
 }
 
 /** An agent socket in memory: what the hub sent it, and whether it closed. */
@@ -80,6 +97,38 @@ export interface FakeAgentSocket extends AgentSocket {
     send(data: string): void;
     close(code: number, reason: string): void;
   }): void;
+}
+
+/** `kim inbox wait` sockets in memory, connected over a real socket by serveHarness. */
+function fakeInboxSockets() {
+  const all: Array<{
+    id: number;
+    sent: string[];
+    closed: boolean;
+    peer: { send(data: string): void } | null;
+  }> = [];
+  return {
+    all,
+    accept() {
+      const socket = {
+        id: 1_000 + all.length,
+        sent: [] as string[],
+        closed: false,
+        peer: null,
+      };
+      all.push(socket);
+      return new Response(null, {
+        headers: { [ACCEPTED_SOCKET]: String(socket.id) },
+      });
+    },
+    send(data: string) {
+      for (const socket of all)
+        if (!socket.closed) {
+          socket.sent.push(data);
+          socket.peer?.send(data);
+        }
+    },
+  };
 }
 
 /** Response header naming the socket an upgrade request was accepted as. */
