@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ControlValues } from "../shared/bindings.js";
@@ -162,6 +162,34 @@ export function Stage({
   );
 }
 
+/** The desktop size an html thumbnail renders at before it's scaled down. */
+const THUMB_FRAME_WIDTH = 1200;
+
+/**
+ * Keeps `--thumb-scale` on the thumbnail at its width over the frame's, so
+ * the whole frame fits it at any card width: set before the first paint,
+ * then whenever the card resizes.
+ */
+function useThumbScale() {
+  const observer = useRef<ResizeObserver | null>(null);
+  return useCallback((thumb: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!thumb) return;
+    const fit = (width: number) =>
+      thumb.style.setProperty(
+        "--thumb-scale",
+        String(width / THUMB_FRAME_WIDTH),
+      );
+    fit(thumb.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    observer.current = new ResizeObserver(([entry]) => {
+      if (entry) fit(entry.contentRect.width);
+    });
+    observer.current.observe(thumb);
+  }, []);
+}
+
 /** A small preview for choosing between artifacts, such as layout mockups. */
 export function ArtifactThumb({
   token,
@@ -174,9 +202,10 @@ export function ArtifactThumb({
   values?: ControlValues | undefined;
 }) {
   const frame = useFrameValues(values);
+  const thumb = useThumbScale();
   if (artifact.format === "html")
     return (
-      <div className="thumb" aria-hidden="true">
+      <div className="thumb" ref={thumb} aria-hidden="true">
         <iframe
           title=""
           tabIndex={-1}
