@@ -1848,6 +1848,9 @@ describe("comping a plan on /admin", () => {
       cookie: admin,
     });
     expect(granted.status).toBe(303);
+    expect(granted.headers.get("location")).toBe(
+      "/admin?changed=ann%40example.com",
+    );
     const me = await (await s.call("/api/browser/me", { cookie: ann })).json();
     expect(me.plan).toMatchObject({ plan: "pro", source: "comp" });
     expect(await (await s.call("/admin", { cookie: admin })).text()).toContain(

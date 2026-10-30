@@ -28,7 +28,14 @@ import {
   pricingPage,
   signInPage,
 } from "./pages.js";
-import { listPlans, planOf, planView, resolvePlan, setComp } from "./plans.js";
+import {
+  listPlans,
+  planOf,
+  planRecord,
+  planView,
+  resolvePlan,
+  setComp,
+} from "./plans.js";
 import { checkout, portal, stripeWebhook } from "./stripe.js";
 import {
   linkedEmails,
@@ -311,11 +318,22 @@ async function admin(request: Request, env: Env, user: User) {
       form.get("plan") === "pro" ? "pro" : null,
       user.email,
     );
-    return new Response(null, { status: 303, headers: { location: "/admin" } });
+    // Name who changed, so the page can show it before KV's list catches up.
+    return new Response(null, {
+      status: 303,
+      headers: { location: `/admin?changed=${encodeURIComponent(email)}` },
+    });
   }
   if (new URL(request.url).pathname !== "/admin")
     return new Response("Not found", { status: 404 });
   const [users, plans] = await Promise.all([listUsers(env), listPlans(env)]);
+  // KV's list can lag a write by a minute; read the one just changed directly.
+  const changed = new URL(request.url).searchParams.get("changed");
+  if (changed) {
+    const record = await planRecord(env, changed);
+    if (record) plans.set(changed.trim().toLowerCase(), record);
+    else plans.delete(changed.trim().toLowerCase());
+  }
   // Someone comped before they first sign in is listed too.
   for (const email of plans.keys())
     if (!users.some((listed) => listed.email === email)) users.push({ email });
