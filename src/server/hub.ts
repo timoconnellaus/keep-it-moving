@@ -13,6 +13,7 @@ import {
   FREE_LIVE_LIMIT,
   liveRefusal,
   PLAN_HEADER,
+  TAKE_ROUTE,
   WATCH_ROUTE,
   type LiveInterview,
 } from "./plans.js";
@@ -122,8 +123,9 @@ export function createHub(options: HubOptions) {
     (watchedUntil.get(id) ?? 0) > Date.now();
   /**
    * The other active interviews an agent is waiting on, counting the grace
-   * between chained waits; none when one already waits on this interview,
-   * since a new watcher there only takes its place.
+   * between chained waits and a hook that asked lately while questions are
+   * open; none when this interview is already live, since a new watcher
+   * there only takes its place.
    */
   const liveBesides = (id: string): LiveInterview[] => {
     const now = Date.now();
@@ -133,6 +135,7 @@ export function createHub(options: HubOptions) {
       ...[...watchedUntil]
         .filter(([, until]) => until > now)
         .map(([sessionId]) => sessionId),
+      ...store.hookedSessions(new Date(now - HOOK_LIVE_MS).toISOString()),
     ]);
     if (live.has(id)) return [];
     return [...live].flatMap((sessionId) => {
@@ -457,7 +460,9 @@ export function createHub(options: HubOptions) {
   // assignment back is always allowed.
   app.use("*", async (c, next) => {
     if (c.req.header(PLAN_HEADER) !== "free") return next();
-    const watch = c.req.method === "GET" && WATCH_ROUTE.exec(c.req.path);
+    const watch =
+      (c.req.method === "GET" && WATCH_ROUTE.exec(c.req.path)) ||
+      (c.req.method === "POST" && TAKE_ROUTE.exec(c.req.path));
     if (watch) {
       const live = liveBesides(watch[1]!);
       if (live.length >= FREE_LIVE_LIMIT)
@@ -683,6 +688,32 @@ export function createHub(options: HubOptions) {
     });
   });
 
+  // An agent's hook asks between its steps, without waiting: the batch when
+  // the user has done something, else an empty one. An agent waiting on the
+  // interview gets the batch instead, so nothing arrives twice.
+  app.post("/api/sessions/:id/take", (c) => {
+    const id = c.req.param("id");
+    store.getSession(id, baseUrl);
+    store.touchHook(id);
+    const waiting = watchers.has(id) || Boolean(agentSockets?.list(id).length);
+    const events = store.undeliveredEvents(id);
+    const due = batchDue(
+      events,
+      unanswered(store, id),
+      bounded(c.req.query("idle"), 0, 0, 600_000),
+    );
+    const ready = !waiting && due !== null && due <= Date.now();
+    if (ready) {
+      store.markDelivered(id, events.at(-1)!.id);
+      later(() => broadcast(id));
+    }
+    return c.json({
+      type: "batch",
+      batch: batchSummary(store.getSession(id, ""), ready ? events : []),
+      ...(waiting ? { watched: true } : {}),
+    });
+  });
+
   app.get("/api/sessions/:id/events/next", async (c) => {
     const id = c.req.param("id");
     store.getSession(id, baseUrl);
@@ -831,6 +862,8 @@ const SOCKET_WAIT_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 const OVERVIEW_PING_MS = 300;
 /** Agents add a batch of questions in a burst; notify once it has landed. */
 const PUSH_SETTLE_MS = 1_500;
+/** How long an interview with open questions stays live after its hook asked. */
+export const HOOK_LIVE_MS = 15 * 60 * 1000;
 /** How long an agent between chained `wait` requests still counts as watching. */
 const WATCH_GRACE_MS = 5_000;
 /** Events that change an interview's row in the list or the switcher. */
@@ -1117,7 +1150,7 @@ const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
   [
     "POST",
     new RegExp(
-      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat|assign)$`,
+      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat|assign|take)$`,
     ),
   ],
   ["PATCH", new RegExp(`^/api/sessions/${ID}/(questions|artifacts)/${ID}$`)],

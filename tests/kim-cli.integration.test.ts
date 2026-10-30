@@ -263,6 +263,8 @@ describe("the CLI package", () => {
       "package/build.json",
       "package/dist/checkbox.js",
       "package/dist/cli.js",
+      "package/dist/hook.js",
+      "package/dist/hooks.js",
       "package/dist/shared/remote.js",
       "package/dist/skill.js",
       "package/dist/update.js",

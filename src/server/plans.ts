@@ -71,5 +71,8 @@ export function assignRefusal(baseUrl: string): PlanRefusal {
 export const WATCH_ROUTE =
   /^\/api\/sessions\/([^/]+)\/(socket|wait|attach|events\/next)$/;
 
+/** The route an agent's hook takes answers from, without waiting (POST). */
+export const TAKE_ROUTE = /^\/api\/sessions\/([^/]+)\/take$/;
+
 /** The routes that assign an interview, by id or by browser token. */
 export const ASSIGN_ROUTE = /^\/api\/(?:sessions|browser)\/[^/]+\/assign$/;

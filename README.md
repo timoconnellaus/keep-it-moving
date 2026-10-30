@@ -16,7 +16,9 @@ kim login
 
 The skill lives in `~/.agents/skills/interviewer`, a copy kim made (marked by `.installed-by-kim`), and each chosen agent's skills folder links to it. Every `kim` run refreshes that copy when the CLI's bundled skill has changed, so the agents stay current. Outside a terminal, pick agents with `--agents claude,codex,cursor` (`kim skill agents` lists the ids and folders) or `--all` for every agent found on the machine; without either it uses the last choice, or Claude Code. It never replaces a link or folder it didn't make, such as a dev checkout's links, unless `--force`. `kim skill uninstall` removes what it made.
 
-`kim update` reinstalls the CLI from the site and refreshes the skill. Once a day, `kim` checks the site's `/cli-version.json` (the build `npm run pack:cli` stamped into the package, a static file) and says on stderr when a newer one is out.
+For Claude Code and Codex, `skill install` also offers the agent hooks (asked in a terminal, yes otherwise; `--hooks` or `--no-hooks` to say). `kim hooks install|uninstall|status` manages them on their own, with `--agents claude,codex` to pick. [Answers while the agent works](#answers-while-the-agent-works) has how they work.
+
+kim keeps itself up to date. Every six hours a `kim` run checks the site's `/cli-version.json` (the build `npm run pack:cli` stamped into the package, a static file), and when a newer build is out it says so in one line on stderr and runs `kim update` detached in the background, logging to `update.log` in kim's config folder (one at a time, under `update.lock` there). The next run refreshes the skill copy from the new CLI, as every run does. A hook can start the check too, but leaves it to a detached `kim` so the agent never waits on it. kim doesn't update itself when `KEEP_IT_MOVING_NO_AUTO_UPDATE=1`, or when it runs from a git checkout (a dev `npm link`): then, or when the install fails (npm without write access to its global folder, say), it says `kim update available: run kim update` instead. `kim update` reinstalls the CLI from the site and refreshes the skill.
 
 The code is at https://github.com/timoconnellaus/keep-it-moving. Sign in at https://keep-it-moving.zerobsai.com and use it as is, or deploy your own copy.
 
@@ -95,13 +97,13 @@ These are the Worker's own pages for `/s/<token>`. The API and socket get the sa
 
 ## Plans and billing
 
-- **Free**: an agent can wait on at most 3 interviews at once ("live": a `wait`, `attach` or `events next` connected to an active interview). Half-done interviews nobody is waiting on don't count, and there's no limit on how many exist. Free can't assign interviews to other people, though assignments made before keep working and can be taken back, and answering an interview someone assigned to you is always free.
+- **Free**: at most 3 interviews live at once. Live means an agent is waiting on an active interview (a `wait`, `attach` or `events next` connected), or its hook took answers in the last 15 minutes while it has questions open. Half-done interviews nobody is waiting on don't count, and there's no limit on how many exist. Free can't assign interviews to other people, though assignments made before keep working and can be taken back, and answering an interview someone assigned to you is always free.
 - **Pro**, $5 a month: no live limit, and assigning.
 - **Team**, $5 a user a month with shared workspaces, is next; `/pricing` lists it as coming soon.
 
 `OWNER_EMAIL` and everyone in `ADMIN_EMAILS` are always on Pro, and an admin can comp anyone Pro from `/admin`.
 
-A 4th agent starting to wait, or an assign on Free, gets HTTP 402 with `{"code": "plan_limit", "feature": "live" | "assign", "upgradeUrl", "live": [...]}`, naming the live interviews. One already waiting is never ended, and a new watcher on an interview that's already live only takes its place. `kim` prints the refusal on stderr and exits 1; for a refused socket it asks the same route over HTTP why.
+A 4th agent starting to wait or taking answers through a hook, or an assign on Free, gets HTTP 402 with `{"code": "plan_limit", "feature": "live" | "assign", "upgradeUrl", "live": [...]}`, naming the live interviews. One already waiting is never ended, and a new watcher on an interview that's already live only takes its place. `kim` prints the refusal on stderr and exits 1; for a refused socket it asks the same route over HTTP why.
 
 Each user's plan is a record in `OAUTH_KV` (`plan:<email>`: plan, Stripe status, customer and subscription ids, period end, seats, and any admin comp), read through a 30-second cache. The Worker sets the owner's plan in `x-kim-plan` on every request to their hub and strips whatever a client sent, like the respondent header; the hub enforces the limits, since it knows its own watchers (`src/server/plans.ts`).
 
@@ -154,7 +156,61 @@ kim wait <session-id>
 - no open questions remain; or
 - the user writes in the chat, which ends it after a short settle.
 
-The batch holds every queued event, the latest answer to each question it touched (with `acceptedDefault`), the open-question count, and whether the workspace is open. The agent's own edits ride along but never end a wait early. `--timeout` (default 600000) bounds the whole wait; an empty batch means nothing happened. Run it as a background process, handle the batch, then run it again.
+The batch holds every queued event, the latest answer to each question it touched (with `acceptedDefault`), the open-question count, and whether the workspace is open. The agent's own edits ride along but never end a wait early. `--timeout` (default 600000) bounds the whole wait; an empty batch means nothing happened. Run it as a background process (in Claude Code, a background Bash command, which wakes the agent when it exits), handle the batch, then run it again.
+
+### Answers while the agent works
+
+A `wait` only delivers while it runs. With the hooks installed, answers also reach an agent that is busy, idle or in a new session. Claude Code's `settings.json` (in `CLAUDE_CONFIG_DIR` when that's set) and Codex's `hooks.json` (in `CODEX_HOME`) get one entry per event, and `kim hooks uninstall` removes exactly those, leaving the rest of the file as it was:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kim hook session-start",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kim hook user-prompt-submit",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kim hook post-tool-use",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Codex runs a new hook only once it's trusted: open `/hooks` in Codex after installing.
+
+`kim hook <event>` reads the hook's JSON payload on stdin and prints its JSON response. When the agent runs a kim command that names an interview (`kim ask`, `session create`, `question add <id>`, `wait <id>`…), the PostToolUse hook binds that interview to the agent's session, in `hooks.json` in kim's config folder; `session stop` or `delete`, or an interview that turns out stopped or gone, unbinds it. Then:
+
+- **PostToolUse**, after each tool call: for the session's interviews, at most every 15 seconds each, it takes any answers and chat messages the user has given since the last delivery.
+- **UserPromptSubmit**: the same on every prompt, so typing in the terminal brings them in.
+- **SessionStart**: the same for interviews bound in this folder in the last 7 days, from any session.
+
+What it takes arrives as `hookSpecificOutput.additionalContext`: a line saying the answers arrived while the agent was working, then the batch as `wait` prints it. A take is `POST /api/sessions/<id>/take`, which returns `{"type": "batch", "batch": …}` like the socket and marks it delivered, or an empty batch; while an agent is waiting on the interview it leaves the batch to that `wait` (`"watched": true`), so nothing arrives twice. The hook never holds the agent up: a session with no interviews costs one small file read and no network, the network gets 2 seconds in all, and whatever happens it prints `{}` at worst and exits 0. It skips the skill refresh other runs do.
 
 The interview page has one chat thread with the agent. The user asks about the interview, or about one question with its "Ask about this" action, or gives a direction. Their messages arrive in the batch's `messages`, each with `about` (the question's id, number and prompt) when it is about a question, and are marked delivered the way answers are. The agent answers in Markdown:
 

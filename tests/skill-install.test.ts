@@ -26,6 +26,7 @@ import {
   uninstallSkill,
 } from "../src/skill.js";
 import { checkForUpdate, UPDATE_CHECK_INTERVAL_MS } from "../src/update.js";
+import { homeEnv } from "./helpers/home.js";
 
 const exec = promisify(execFile);
 const tsx = new URL("../node_modules/tsx/dist/cli.mjs", import.meta.url)
@@ -192,7 +193,7 @@ describe("kim skill install", () => {
     const { stdout, stderr } = await exec(
       process.execPath,
       [tsx, cli, ...args],
-      { env: { ...process.env, HOME: home, USERPROFILE: home } },
+      { env: homeEnv(home) },
     );
     return { result: JSON.parse(stdout) as Record<string, unknown>, stderr };
   };
@@ -268,7 +269,7 @@ describe("the update check", () => {
   const server = (build: string) =>
     vi.fn(async () => Response.json({ version: "0.1.0", build }));
 
-  it("hints when the site has another build, at most once a day", async () => {
+  it("finds another build on the site, at most every six hours", async () => {
     const stateFile = join(tempHome(), "update-check.json");
     const fetch = server("bbbbbbbbbbbb");
     const start = Date.parse("2026-10-27T09:00:00Z");
@@ -280,7 +281,10 @@ describe("the update check", () => {
         now,
         fetch,
       });
-    expect(await check(start)).toBe("kim update available: run kim update");
+    expect(await check(start)).toEqual({
+      version: "0.1.0",
+      build: "bbbbbbbbbbbb",
+    });
     expect(fetch).toHaveBeenCalledWith(
       "https://kim.test/cli-version.json",
       expect.anything(),
@@ -312,7 +316,7 @@ describe("the update check", () => {
         fetch: failing,
       }),
     ).toBeNull();
-    // A failed check still waits a day.
+    // A failed check still waits its turn.
     expect(
       await checkForUpdate({
         base: "https://kim.test",
