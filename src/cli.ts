@@ -16,7 +16,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { createInterface } from "node:readline/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,11 +39,14 @@ import { runHook, type HookPayload, type TakeOutcome } from "./hook.js";
 import {
   HOOK_AGENTS,
   hookEventFor,
+  forgetInstalledHooks,
   hooksStatus,
-  installHooks,
   isHookAgent,
+  refreshHooks,
+  setHooksOptOut,
   uninstallHooks,
   type HookAgentId,
+  type HookRefreshResult,
 } from "./hooks.js";
 import {
   acquireUpdateLock,
@@ -1031,10 +1033,13 @@ async function skillCommand(action: string | undefined, args: string[]) {
     if (!agents) throw new Error("Cancelled");
     const result = installSkill(paths, agents, args.includes("--force"));
     const hookAgents = agents.filter(isHookAgent);
-    const hooks =
-      hookAgents.length && (await wantHooks(args, hookAgents))
-        ? installHooksFor(hookAgents, paths.home)
-        : [];
+    // --no-hooks opts out, as `hooks uninstall` does; --hooks opts back in.
+    if (args.includes("--no-hooks") || args.includes("--hooks"))
+      setHooksOptOut(hooksStateFile(), hookAgents, args.includes("--no-hooks"));
+    const hooks = refreshHooks(hookAgents, paths.home, hooksStateFile(), {
+      force: true,
+    });
+    noteHooks(hooks);
     output({ ...result, hooks });
     if (result.skipped.length || hooks.some((hook) => "error" in hook))
       process.exitCode = 1;
@@ -1056,6 +1061,7 @@ async function skillCommand(action: string | undefined, args: string[]) {
     return output({
       canonical: canonicalSkill(paths.home),
       refreshed: refreshSkill(paths),
+      hooks: refreshChosenHooks(paths),
     });
   throw new Error(`Unknown skill action: ${action ?? ""}`);
 }
@@ -1095,42 +1101,44 @@ async function chooseAgents(
   return ["claude"];
 }
 
+/** Where kim records the hooks it installed, and the agents opted out. */
+const hooksStateFile = () => configFile("hooks-install.json");
+
 /**
- * Whether `skill install` also installs the hooks: --hooks or --no-hooks,
- * else asked in a terminal, else yes.
+ * Keeps the hooks current for the agents chosen for the skill that have
+ * them (Claude Code, Codex), unless opted out, as the skill copy is kept
+ * current. Never throws.
  */
-async function wantHooks(args: string[], agents: HookAgentId[]) {
-  if (args.includes("--no-hooks")) return false;
-  if (args.includes("--hooks") || !process.stdin.isTTY || !process.stderr.isTTY)
-    return true;
-  const names = agents
-    .map((id) => HOOK_AGENTS.find((agent) => agent.id === id)!.name)
-    .join(" and ");
-  const prompt = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
+function refreshChosenHooks(paths: SkillPaths) {
   try {
-    const answer = await prompt.question(
-      `Also install hooks, so answers reach ${names} while it works? [Y/n] `,
+    const agents = (rememberedAgents(paths.choiceFile) ?? []).filter(
+      isHookAgent,
     );
-    return !/^n/i.test(answer.trim());
-  } finally {
-    prompt.close();
+    return refreshHooks(agents, paths.home, hooksStateFile());
+  } catch {
+    return [];
   }
 }
 
-const installHooksFor = (agents: HookAgentId[], home: string) =>
-  agents.map((agent) => {
-    try {
-      return installHooks(agent, home);
-    } catch (error) {
-      return {
-        agent,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
+/** In a terminal, says which hooks `skill install` installed, and how to opt out. */
+function noteHooks(hooks: HookRefreshResult[]) {
+  if (!process.stderr.isTTY) return;
+  const names = (filter: (hook: HookRefreshResult) => boolean) =>
+    hooks
+      .filter(filter)
+      .map((hook) => HOOK_AGENTS.find((agent) => agent.id === hook.agent)!.name)
+      .join(" and ");
+  const installed = names((hook) => "events" in hook);
+  if (installed)
+    process.stderr.write(
+      `Hooks installed for ${installed}, so answers reach it while it works (kim hooks uninstall to opt out).\n`,
+    );
+  const optedOut = names((hook) => "optedOut" in hook);
+  if (optedOut)
+    process.stderr.write(
+      `No hooks for ${optedOut}: you opted out (kim hooks install to opt back in).\n`,
+    );
+}
 
 /**
  * `hooks install` adds `kim hook` to the agents' hooks (Claude Code's
@@ -1149,15 +1157,29 @@ async function hooksCommand(action: string | undefined, args: string[]) {
         ).map((agent) => agent.id);
     if (list && !agents.length)
       throw new Error("Only Claude Code and Codex have hooks kim can use");
-    const hooks = installHooksFor(agents.length ? agents : ["claude"], home);
+    const chosen: HookAgentId[] = agents.length ? agents : ["claude"];
+    setHooksOptOut(hooksStateFile(), chosen, false);
+    const hooks = refreshHooks(chosen, home, hooksStateFile(), {
+      force: true,
+    });
     output({ hooks });
     if (hooks.some((hook) => "error" in hook)) process.exitCode = 1;
     return;
   }
-  if (action === "uninstall")
-    return output({
-      hooks: HOOK_AGENTS.map((agent) => uninstallHooks(agent.id, home)),
-    });
+  if (action === "uninstall") {
+    const hooks = HOOK_AGENTS.map((agent) => uninstallHooks(agent.id, home));
+    // So the runs that keep the hooks current don't put them back.
+    setHooksOptOut(
+      hooksStateFile(),
+      HOOK_AGENTS.map((agent) => agent.id),
+      true,
+    );
+    forgetInstalledHooks(
+      hooksStateFile(),
+      hooks.map((hook) => hook.file),
+    );
+    return output({ hooks });
+  }
   if (action === "status")
     return output({
       hooks: HOOK_AGENTS.map((agent) => hooksStatus(agent.id, home)),
@@ -1325,17 +1347,21 @@ function update() {
 
 /**
  * What every run does first: refresh an installed skill copy that's out of
- * date, and every six hours look for a newer CLI, updating to it in the
- * background (or, where kim mustn't update itself, hinting on stderr).
+ * date, and the hooks of the agents chosen for it; and every six hours look
+ * for a newer CLI, updating to it in the background (or, where kim mustn't
+ * update itself, hinting on stderr).
  * None of it writes to stdout, holds up the command, or fails it.
  */
 function housekeeping(group: string | undefined) {
-  if (group !== "skill" && group !== "update")
+  if (group !== "skill" && group !== "update") {
     try {
       refreshSkill(skillPaths());
     } catch {
       // The command matters more than the skill copy.
     }
+    // `hooks` commands install or remove them themselves.
+    if (group !== "hooks") refreshChosenHooks(skillPaths());
+  }
   const current = readBuild(join(packageRoot(), "build.json"));
   if (!current || group === "update") return;
   const stateFile = configFile("update-check.json");
@@ -1727,14 +1753,16 @@ Setup:
     skills folder; asks which agents in a terminal, and remembers the choice.
     --all means every agent found on this machine. It never replaces a link
     or folder it didn't make unless --force. For Claude Code and Codex it
-    also installs the hooks (asked in a terminal; yes otherwise)
+    also installs the hooks, and every run keeps them current, unless
+    --no-hooks or \`kim hooks uninstall\` opted out
   skill agents      the agents it can link into, their ids and skills folders
   skill uninstall   remove the links and copy skill install made
-  skill refresh     bring the skill copy up to date (every run does this)
+  skill refresh     bring the skill copy and hooks up to date (every run does this)
   hooks install [--agents claude,codex] | uninstall | status
     agent hooks that bring answers into the agent's context while it works:
     Claude Code's settings.json (CLAUDE_CONFIG_DIR) and Codex's hooks.json
-    (CODEX_HOME) run \`kim hook <event>\`; only those entries are ever changed
+    (CODEX_HOME) run \`kim hook <event>\`; only those entries are ever changed.
+    uninstall opts out, so runs stop reinstalling them; install opts back in
   hook session-start|user-prompt-submit|post-tool-use   what the hooks run
   update   reinstall kim from this site, then refresh the skill. kim does this
     itself in the background when it finds a newer build (checked every six

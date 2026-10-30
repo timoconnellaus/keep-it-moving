@@ -717,7 +717,9 @@ h3 {
   font-size: 13px;
   font-weight: 600;
 }
+/* Beside the label, or flush left under it when it wraps. */
 .choice-card-label .default-mark {
+  margin-left: 0;
   padding: 1px 7px;
   font-size: 10.5px;
 }
@@ -744,25 +746,36 @@ h3 {
     opacity: 1;
   }
 }
+/* The frame's 3:2, measured inside the border, so a scaled frame fills it. */
 .thumb {
   position: relative;
-  height: 104px;
+  box-sizing: content-box;
+  aspect-ratio: 3 / 2;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--card);
 }
-/* Mockups render at desktop width, then scale down to the card. */
+/*
+ * Mockups render at desktop width, then scale down to the card's width
+ * (--thumb-scale, set from the card's width), so all of one shows.
+ */
 .thumb iframe {
+  display: block;
   width: 1200px;
   height: 800px;
   border: 0;
-  transform: scale(0.16);
+  transform: scale(var(--thumb-scale, 0.12));
   transform-origin: 0 0;
   pointer-events: none;
 }
 .thumb-diagram .diagram {
+  height: 100%;
   padding: 6px;
+  overflow: hidden;
+}
+.thumb-diagram .diagram img {
+  max-height: 100%;
 }
 .thumb-doc {
   display: grid;
@@ -2147,9 +2160,6 @@ h3 {
   }
   .question.open {
     padding: 14px;
-  }
-  .choice-card-label .default-mark {
-    margin-left: 0;
   }
   .answer-summary {
     max-width: 40%;

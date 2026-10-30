@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -220,4 +221,118 @@ export function hooksStatus(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/**
+ * A hash of the entries kim adds, as the skill copy is hashed: when it
+ * differs from the one recorded for a file, that file's entries are
+ * rewritten.
+ */
+export const hooksHash = () =>
+  createHash("sha256")
+    .update(
+      JSON.stringify(
+        (Object.keys(HOOK_EVENTS) as HookEvent[]).map((event) => [
+          event,
+          hookEntry(event),
+        ]),
+      ),
+    )
+    .digest("hex");
+
+/**
+ * What kim remembers about the hooks it keeps current: the agents the user
+ * opted out for (`kim hooks uninstall`, `--no-hooks`), and the hash last
+ * installed into each hooks file. By file, not agent, because each
+ * CLAUDE_CONFIG_DIR has a settings.json of its own.
+ */
+interface HooksState {
+  optedOut?: HookAgentId[];
+  installed?: Record<string, string>;
+}
+
+function readHooksState(stateFile: string): HooksState {
+  try {
+    const state = JSON.parse(readFileSync(stateFile, "utf8")) as unknown;
+    return state && typeof state === "object" ? (state as HooksState) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeHooksState(stateFile: string, state: HooksState) {
+  mkdirSync(dirname(stateFile), { recursive: true });
+  writeFileSync(stateFile, `${JSON.stringify(state)}\n`);
+}
+
+/** Records that the user doesn't want `agents`' hooks, or no longer minds. */
+export function setHooksOptOut(
+  stateFile: string,
+  agents: readonly HookAgentId[],
+  optedOut: boolean,
+) {
+  const state = readHooksState(stateFile);
+  const rest = (state.optedOut ?? []).filter((id) => !agents.includes(id));
+  const next = optedOut ? [...rest, ...agents] : rest;
+  if (JSON.stringify(next) === JSON.stringify(state.optedOut ?? [])) return;
+  writeHooksState(stateFile, { ...state, optedOut: next });
+}
+
+/** Forgets what was installed into `files`, as `kim hooks uninstall` removes it. */
+export function forgetInstalledHooks(stateFile: string, files: string[]) {
+  const state = readHooksState(stateFile);
+  if (!files.some((file) => state.installed?.[file])) return;
+  writeHooksState(stateFile, {
+    ...state,
+    installed: Object.fromEntries(
+      Object.entries(state.installed ?? {}).filter(
+        ([file]) => !files.includes(file),
+      ),
+    ),
+  });
+}
+
+export type HookRefreshResult =
+  | HookFileResult
+  | { agent: HookAgentId; file: string; optedOut: true }
+  | { agent: HookAgentId; file: string; error: string };
+
+/**
+ * Installs the hooks for each of `agents` the user hasn't opted out for,
+ * when the file's recorded hash isn't the current one (always, with
+ * `force`). Cheap enough for every run: when they're current it's one small
+ * state file read. A file it can't read or write is left as it is and
+ * reported, never thrown, and tried again next time.
+ */
+export function refreshHooks(
+  agents: readonly HookAgentId[],
+  home: string,
+  stateFile: string,
+  { env = process.env, force = false } = {},
+): HookRefreshResult[] {
+  const state = readHooksState(stateFile);
+  const hash = hooksHash();
+  const installed = { ...state.installed };
+  const results = agents.flatMap((agent): HookRefreshResult[] => {
+    const file = agentFile(agent, home, env);
+    if (state.optedOut?.includes(agent))
+      return [{ agent, file, optedOut: true }];
+    if (!force && installed[file] === hash) return [];
+    try {
+      const result = installHooks(agent, home, env);
+      installed[file] = hash;
+      return [result];
+    } catch (error) {
+      return [
+        {
+          agent,
+          file,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      ];
+    }
+  });
+  if (JSON.stringify(installed) !== JSON.stringify(state.installed ?? {}))
+    writeHooksState(stateFile, { ...state, installed });
+  return results;
 }

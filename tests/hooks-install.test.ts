@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -207,7 +208,125 @@ describe("kim hooks and kim skill install", () => {
       "claude",
       "--no-hooks",
     );
-    expect(without.hooks).toEqual([]);
+    expect(without.hooks).toEqual([
+      expect.objectContaining({ agent: "claude", optedOut: true }),
+    ]);
     expect(existsSync(join(other, ".claude", "settings.json"))).toBe(false);
+  }, 30_000);
+});
+
+describe("keeping the hooks current on every run", () => {
+  const tsx = new URL("../node_modules/tsx/dist/cli.mjs", import.meta.url)
+    .pathname;
+  const cli = new URL("../src/cli.ts", import.meta.url).pathname;
+  const run = (home: string, ...args: string[]) =>
+    exec(process.execPath, [tsx, cli, ...args], { env: homeEnv(home) });
+  const kim = async (home: string, ...args: string[]) =>
+    JSON.parse((await run(home, ...args)).stdout);
+  /** An ordinary run: housekeeping, then help on stdout. */
+  const ordinaryRun = async (home: string) => {
+    const { stdout } = await run(home, "help");
+    expect(stdout).toContain("skill install");
+  };
+  /** kim's state file, wherever the platform keeps its config. */
+  const stateFile = (home: string): string => {
+    const find = (dir: string): string | undefined => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isFile() && entry.name === "hooks-install.json") return path;
+        if (entry.isDirectory() && !entry.isSymbolicLink()) {
+          const found = find(path);
+          if (found) return found;
+        }
+      }
+    };
+    return find(home)!;
+  };
+  const codexFile = (home: string) => join(home, ".codex", "hooks.json");
+
+  it("installs them for the agents chosen for the skill, and only those", async () => {
+    const home = tempHome();
+    mkdirSync(join(home, ".claude"));
+    // A skill installed by a kim from before the hooks were automatic.
+    await kim(home, "skill", "install", "--agents", "codex,cursor");
+    rmSync(codexFile(home));
+    rmSync(stateFile(home));
+
+    await ordinaryRun(home);
+    expect(hooksStatus("codex", home, bare).events).toHaveLength(3);
+    // Claude Code wasn't chosen, though it's here.
+    expect(existsSync(join(home, ".claude", "settings.json"))).toBe(false);
+  }, 30_000);
+
+  it("rewrites them when their definition changed, and only then", async () => {
+    const home = tempHome();
+    await kim(home, "skill", "install", "--agents", "codex");
+    const stale = {
+      hooks: {
+        SessionStart: [
+          { hooks: [{ type: "command", command: "kim hook session-start" }] },
+        ],
+      },
+    };
+    writeFileSync(codexFile(home), JSON.stringify(stale));
+    // Current: nothing to do, so the file stays as the user left it.
+    await ordinaryRun(home);
+    expect(JSON.parse(readFileSync(codexFile(home), "utf8"))).toEqual(stale);
+
+    const state = JSON.parse(readFileSync(stateFile(home), "utf8"));
+    state.installed[codexFile(home)] = "an older definition";
+    writeFileSync(stateFile(home), JSON.stringify(state));
+    await ordinaryRun(home);
+    expect(JSON.parse(readFileSync(codexFile(home), "utf8"))).toEqual({
+      hooks: {
+        SessionStart: [hookEntry("SessionStart")],
+        UserPromptSubmit: [hookEntry("UserPromptSubmit")],
+        PostToolUse: [hookEntry("PostToolUse")],
+      },
+    });
+  }, 30_000);
+
+  it("respects kim hooks uninstall until kim hooks install", async () => {
+    const home = tempHome();
+    await kim(home, "skill", "install", "--agents", "codex");
+    await kim(home, "hooks", "uninstall");
+    await ordinaryRun(home);
+    const refreshed = await kim(home, "skill", "refresh");
+    expect(refreshed.hooks).toEqual([
+      expect.objectContaining({ agent: "codex", optedOut: true }),
+    ]);
+    expect(hooksStatus("codex", home, bare).events).toEqual([]);
+
+    await kim(home, "hooks", "install", "--agents", "codex");
+    rmSync(codexFile(home));
+    const state = JSON.parse(readFileSync(stateFile(home), "utf8"));
+    expect(state.optedOut).toEqual(["claude"]);
+    delete state.installed;
+    writeFileSync(stateFile(home), JSON.stringify(state));
+    await ordinaryRun(home);
+    expect(hooksStatus("codex", home, bare).events).toHaveLength(3);
+  }, 30_000);
+
+  it("leaves a broken settings.json alone, and the command still works", async () => {
+    const home = tempHome();
+    await kim(home, "skill", "install", "--agents", "claude", "--no-hooks");
+    await kim(home, "hooks", "install", "--agents", "codex");
+    const settings = join(home, ".claude", "settings.json");
+    writeFileSync(settings, "{ not json");
+    // Opted back in, so the next run tries, and fails quietly.
+    const state = JSON.parse(readFileSync(stateFile(home), "utf8"));
+    state.optedOut = [];
+    writeFileSync(stateFile(home), JSON.stringify(state));
+    const { stderr } = await run(home, "help");
+    expect(stderr).toBe("");
+    expect(readFileSync(settings, "utf8")).toBe("{ not json");
+    const refreshed = await kim(home, "skill", "refresh");
+    expect(refreshed.hooks).toEqual([
+      expect.objectContaining({
+        agent: "claude",
+        error: expect.stringMatching(/valid JSON/),
+      }),
+    ]);
+    expect(readFileSync(settings, "utf8")).toBe("{ not json");
   }, 30_000);
 });

@@ -113,7 +113,7 @@ Handle `messages` first: the user is waiting on the reply. A message from the us
 
 Then handle the rest of the batch: update the plan, adapt the questions, and add or revise visuals. Then run `wait` again. One watcher holds a session at a time; a new one takes over and the old one exits with "Replaced by a newer watcher", so run one `wait` per session. `kim attach` (NDJSON stream) and `kim events next` remain available.
 
-Answers also reach you between your own steps. In Claude Code and Codex, kim's hooks bring answers the user gave while you were working, or since your last turn, into your context as a line starting `Keep it moving: answers to interview <id>`, followed by a batch in `wait`'s JSON. Act on an injected batch exactly as on `kim wait` output: it has been delivered, so the next `wait` brings only later answers.
+Answers also reach you between your own steps. In Claude Code and Codex, kim's hooks (which kim installs and keeps current itself, unless the user ran `kim hooks uninstall`) bring answers the user gave while you were working, or since your last turn, into your context as a line starting `Keep it moving: answers to interview <id>`, followed by a batch in `wait`'s JSON. Act on an injected batch exactly as on `kim wait` output: it has been delivered, so the next `wait` brings only later answers.
 
 Answers can arrive while detached and appear in the next batch. Treat `answer.revised` as a fresh decision point. Decide whether later questions should remain, change, or be deleted; there is no automatic dependency system.
 
