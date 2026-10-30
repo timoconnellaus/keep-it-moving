@@ -66,7 +66,24 @@ export function Assign({
         onClick={() => setOpen((value) => !value)}
         title="Have someone else answer this interview"
       >
-        {session.assignee ? `Assigned to ${session.assignee}` : "Assign"}
+        {/* On phones the icon stands in for the words, which screen readers still get. */}
+        <svg
+          className="assign-icon"
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          aria-hidden="true"
+        >
+          <circle cx="6.5" cy="5.5" r="2.6" />
+          <path d="M1.8 13.5c.6-2.4 2.4-3.8 4.7-3.8s4.1 1.4 4.7 3.8M12.5 5v4M10.5 7h4" />
+        </svg>
+        <span className="assign-text">
+          {session.assignee ? `Assigned to ${session.assignee}` : "Assign"}
+        </span>
         {locked && !session.assignee && <span className="pro-badge">Pro</span>}
       </button>
       {open && (

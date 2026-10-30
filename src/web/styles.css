@@ -301,22 +301,37 @@ h3 {
 .workspace:not(.with-stage) .questions {
   padding-inline: max(18px, calc(50% - 380px));
 }
-.more-below {
+.more-below-band {
   position: sticky;
-  bottom: 12px;
+  /* Sticky offsets start inside the column's padding; this reaches its edge. */
+  bottom: -28px;
   z-index: 1;
-  align-self: flex-end;
-  margin-top: auto;
+  display: flex;
+  justify-content: flex-end;
+  margin: auto -18px -28px;
+  padding: 40px 18px 12px;
+  background: linear-gradient(rgb(255 255 255 / 0), var(--card) 60%);
+  pointer-events: none;
+}
+.more-below {
   padding: 8px 16px;
+  pointer-events: auto;
   border: 0;
   border-radius: 999px;
   background: var(--ink);
   color: #fff;
   font-size: 13px;
   font-weight: 600;
-  box-shadow:
-    0 0 0 6px rgb(255 255 255 / 0.85),
-    0 10px 24px -8px rgb(14 15 17 / 0.4);
+  box-shadow: 0 10px 24px -8px rgb(14 15 17 / 0.4);
+}
+.assign-icon {
+  display: none;
+  flex: none;
+}
+.assign-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .more-below:hover {
   background: #26272b;
@@ -1825,6 +1840,11 @@ html.previewing-full body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.switcher-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .switcher-button:hover .switcher-project {
   background: var(--line);
 }
@@ -2535,6 +2555,9 @@ html.previewing-full body {
     padding: 16px 16px 24px;
     border-right: 0;
   }
+  .more-below-band {
+    bottom: 0;
+  }
   .stage {
     height: 72vh;
     min-height: 420px;
@@ -2577,10 +2600,47 @@ html.previewing-full body {
   }
 }
 @media (max-width: 620px) {
+  /* Two rows: the interview and who's signed in, then its progress and actions. */
+  .topbar > * {
+    order: 3;
+  }
   .topbar .switcher,
   .respondent-title {
-    flex: 1 1 100%;
+    order: 0;
+    flex: 1 1 calc(100% - 100px);
+    min-width: 0;
   }
+  .respondent-title {
+    flex-basis: calc(100% - 48px);
+  }
+  .topbar .assign {
+    order: 1;
+  }
+  .topbar .account {
+    order: 2;
+  }
+  .assign-button {
+    width: 34px;
+    height: 34px;
+    justify-content: center;
+    padding: 0;
+  }
+  .assign-icon {
+    display: block;
+  }
+  .assign-button .assign-text,
+  .assign-button .pro-badge {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .question-progress {
+    min-width: 0;
+  }
+
   .topbar-spacer {
     display: none;
   }
@@ -2599,10 +2659,36 @@ html.previewing-full body {
   .tool kbd {
     display: none;
   }
-  /* Beside the zoom buttons, clear of the chat launcher. */
+  /* Zoom buttons in a small row, the tools beside them, clear of the chat launcher. */
+  .stage .react-flow__controls {
+    flex-direction: row;
+  }
+  .stage .react-flow__controls-button {
+    width: 28px;
+    height: 28px;
+    border-bottom: 0;
+    border-right: 1px solid var(--line);
+  }
   .react-flow__panel.bottom.center.toolbar-panel {
-    left: 52px;
+    left: 112px;
     transform: none;
+  }
+  .more-below-band {
+    margin-inline: -16px;
+    padding-inline: 16px;
+  }
+  /* The title keeps its room; the project chip shrinks to its initial. */
+  .switcher-button h1 {
+    flex: none;
+    max-width: calc(100% - 66px);
+  }
+  .switcher-project {
+    flex: 0 1 auto;
+    min-width: 30px;
+    white-space: nowrap;
+  }
+  .question-progress-bar {
+    display: none;
   }
   .chat {
     top: auto;

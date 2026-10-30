@@ -74,9 +74,12 @@ export function MoreBelow({
   if (below.length === 0) return null;
   const next = () =>
     cardFor(container.current, below[0]!)?.scrollIntoView({ block: "start" });
+  // On a band that fades the cards under it out, so they read as continuing below.
   return (
-    <button type="button" className="more-below" onClick={next}>
-      ↓ {below.length} more question{below.length === 1 ? "" : "s"} below
-    </button>
+    <div className="more-below-band">
+      <button type="button" className="more-below" onClick={next}>
+        ↓ {below.length} more question{below.length === 1 ? "" : "s"} below
+      </button>
+    </div>
   );
 }

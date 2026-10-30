@@ -178,3 +178,31 @@ export function layoutCanvas(
   }
   return { rows, frames, copies };
 }
+
+/**
+ * How far each frame's label may run, in canvas pixels from the frame's
+ * left edge: up to the next frame to its right whose top band it shares,
+ * as in Figma. Null when nothing is in the way.
+ */
+export function labelSpace(
+  boxes: Array<{ id: string; x: number; y: number; w: number; h: number }>,
+): Record<string, number | null> {
+  return Object.fromEntries(
+    boxes.map((box) => {
+      const next = boxes
+        .filter(
+          (other) =>
+            other !== box &&
+            other.x >= box.x + box.w &&
+            other.y < box.y + box.h &&
+            other.y + other.h > box.y - 100,
+        )
+        .reduce<number | null>(
+          (nearest, other) =>
+            nearest === null ? other.x : Math.min(nearest, other.x),
+          null,
+        );
+      return [box.id, next === null ? null : next - box.x];
+    }),
+  );
+}

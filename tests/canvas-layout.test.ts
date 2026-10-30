@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ArtifactView, QuestionView } from "../src/shared/schema.js";
-import { frameSize, layoutCanvas } from "../src/web/canvasLayout.js";
+import {
+  frameSize,
+  labelSpace,
+  layoutCanvas,
+} from "../src/web/canvasLayout.js";
 
 const artifact = (
   id: string,
@@ -134,5 +138,15 @@ describe("the canvas layout", () => {
       w: 834,
       h: 1112,
     });
+  });
+
+  it("lets a label run to the next frame on its right, past a narrow frame", () => {
+    expect(
+      labelSpace([
+        { id: "phone", x: 0, y: 0, w: 390, h: 844 },
+        { id: "desk", x: 510, y: 0, w: 1280, h: 800 },
+        { id: "below", x: 600, y: 2000, w: 1280, h: 800 },
+      ]),
+    ).toEqual({ phone: 510, desk: null, below: null });
   });
 });
