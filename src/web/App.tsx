@@ -229,11 +229,13 @@ export function App() {
       if (ids.length) fitTo(ids);
     }
   }, [focused]);
-  const staged = session?.stage?.artifactId;
+  // Undefined until the interview loads: what was on screen then isn't news.
+  const staged = session ? (session.stage?.artifactId ?? null) : undefined;
   const lastStaged = useRef(staged);
   useEffect(() => {
-    if (staged && lastStaged.current !== staged) fitTo([staged]);
+    const was = lastStaged.current;
     lastStaged.current = staged;
+    if (was !== undefined && staged && staged !== was) fitTo([staged]);
   }, [staged]);
 
   if (!session)
