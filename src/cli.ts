@@ -2002,7 +2002,7 @@ Interviews sent to you (someone assigned you one; your agent drafts, you send):
   inbox show <interview>   its questions with answers, drafts and threads, the chat, and the workspace
   inbox artifact <interview> <artifact> [--out <file>]   the artifact as its frame serves it
   inbox screenshot <interview> <artifact> [--width N] [--full-page] [--out <file.png>]
-    renders an html artifact with a local Chrome, Chromium or Edge (or CHROME_PATH); prints the PNG's path
+    renders an html artifact in the service's browser (Pro); saves the PNG and prints its path
   inbox chat <interview> [--question <question>] <text>   message the sender's agent, as you
   inbox wait [<interview>] [--timeout MS]   blocks until a new question, reply, workspace change or interview
   draft <interview> <question> [answer…] [--option <label>]… [--note <text>] [--skip] [--send] | --clear
