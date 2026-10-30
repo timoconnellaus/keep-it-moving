@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { defaultAnswerText } from "../shared/answers.js";
+import { artifactValues, type ControlValues } from "../shared/bindings.js";
 import type { SessionView } from "../shared/schema.js";
 import { shownArtifact } from "../shared/workspace.js";
 import { Account } from "./Account.js";
@@ -55,6 +56,24 @@ export function App() {
   const [acceptingAll, setAcceptingAll] = useState(false);
   const [stageExpanded, setStageExpanded] = useState(false);
   const [overviewVersion, setOverviewVersion] = useState(0);
+  // Unsaved values a question shows in its artifact: a hovered option, a
+  // dragged slider. Never sent anywhere; saving makes them the answer's.
+  const [previews, setPreviews] = useState<Record<string, ControlValues>>({});
+  const onPreview = useCallback(
+    (questionId: string, values: ControlValues | null) =>
+      setPreviews((current) => {
+        if (
+          JSON.stringify(current[questionId]) ===
+          JSON.stringify(values ?? undefined)
+        )
+          return current;
+        const next = { ...current };
+        if (values) next[questionId] = values;
+        else delete next[questionId];
+        return next;
+      }),
+    [],
+  );
   // An assignee sees this interview only, never the owner's list.
   const sessions = useOverview(
     session && !session.respondent ? overviewVersion : null,
@@ -212,6 +231,13 @@ export function App() {
             if (!session.stageVisible) void setStageVisible(true);
           }}
           onAsk={active ? () => chat.ask(question.id) : undefined}
+          onPreview={onPreview}
+          valuesWith={(artifactId, values) =>
+            artifactValues(session.questions, artifactId, {
+              ...previews,
+              [question.id]: values,
+            })
+          }
         />
       ))}
       <MoreBelow container={questionsRef} questions={session.questions} />
@@ -293,6 +319,11 @@ export function App() {
           <Stage
             token={token}
             session={session}
+            values={
+              shown?.format === "html"
+                ? artifactValues(session.questions, shown.id, previews)
+                : undefined
+            }
             expanded={stageExpanded}
             onShow={(id) => void showArtifact(id)}
             onToggleExpanded={() => setStageExpanded((value) => !value)}

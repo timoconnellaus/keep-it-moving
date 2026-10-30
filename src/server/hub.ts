@@ -1,11 +1,16 @@
 import { Hono, type Context } from "hono";
 import { defaultAnswerText } from "../shared/answers.js";
+import { artifactValues, isBound, savedValues } from "../shared/bindings.js";
 import type {
   ArtifactView,
   InterviewEvent,
   SessionView,
 } from "../shared/schema.js";
-import { ARTIFACT_VIEW_HEADERS, opensAsPage } from "./artifactView.js";
+import {
+  ARTIFACT_VIEW_HEADERS,
+  opensAsPage,
+  renderArtifact,
+} from "./artifactView.js";
 import { agentKeys, VIA_KEY_HEADER } from "./keys.js";
 import {
   ASSIGN_ROUTE,
@@ -799,12 +804,17 @@ export function createHub(options: HubOptions) {
   app.get("/api/browser/:token/artifacts/:artifactId/view", (c) => {
     if (opensAsPage(c.req.raw))
       return c.text("Open this from its interview's page.", 403);
-    const { format, content } = store.artifactContent(
-      tokenSession(c.req.param("token")),
-      c.req.param("artifactId"),
-    );
+    const sessionId = tokenSession(c.req.param("token"));
+    const artifactId = c.req.param("artifactId");
+    const { format, content } = store.artifactContent(sessionId, artifactId);
     if (format !== "html") throw new Error("Only html artifacts have a view");
-    return new Response(content, { headers: ARTIFACT_VIEW_HEADERS });
+    const values = artifactValues(
+      store.getSession(sessionId, "").questions,
+      artifactId,
+    );
+    return new Response(renderArtifact(content, values), {
+      headers: ARTIFACT_VIEW_HEADERS,
+    });
   });
   app.post("/api/browser/:token/questions/:questionId/answer", async (c) =>
     c.json(
@@ -1120,6 +1130,15 @@ function batchSummary(session: SessionView, events: InterviewEvent[]) {
           question.answer!.text === defaultAnswerText(question),
         ...(question.answer!.answeredBy
           ? { answeredBy: question.answer!.answeredBy }
+          : {}),
+        // What the answer set in its artifact, to carry into its next revision.
+        ...(isBound(question)
+          ? {
+              applied: {
+                artifactId: question.artifactId,
+                values: savedValues(question) ?? {},
+              },
+            }
           : {}),
       })),
     openQuestions: session.questions.filter((question) => !question.answer)

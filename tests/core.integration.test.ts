@@ -15,6 +15,10 @@ async function harness(path = ":memory:") {
   return { app, store };
 }
 
+/** A served html artifact without the control applier the hub adds. */
+const withoutApplier = (body: string) =>
+  body.replace(/<script>\(function \(window, initial\)[\s\S]*?<\/script>/, "");
+
 async function createQuestion(app: ReturnType<typeof hubHarness>["app"]) {
   const session = (
     await app.inject({ method: "POST", url: "/api/sessions" })
@@ -420,7 +424,7 @@ describe("interview HTTP seam", () => {
       method: "GET",
       url: `/api/browser/${session.token}/artifacts/${layout.json().id}/view`,
     });
-    expect(served.body.startsWith(mockup)).toBe(true);
+    expect(withoutApplier(served.body)).toBe(mockup);
 
     await app.inject({
       method: "POST",
@@ -486,7 +490,7 @@ describe("interview HTTP seam", () => {
     });
     expect(framed.statusCode).toBe(200);
     expect(view.headers["referrer-policy"]).toBe("no-referrer");
-    expect(view.body).toBe(
+    expect(withoutApplier(view.body)).toBe(
       "<!doctype html><html><body><svg></svg></body></html>",
     );
     const notHtml = await app.inject({
@@ -583,6 +587,161 @@ describe("interview HTTP seam", () => {
       })
     ).json();
     expect(renamed.optionArtifacts).toEqual({ Sidebar: a });
+  });
+
+  it("binds answers to controls inside an html artifact", async () => {
+    const { app } = await harness();
+    const session = (
+      await app.inject({ method: "POST", url: "/api/sessions" })
+    ).json();
+    const html = `<!doctype html><html><head><style>
+      :root { --font-display: Inter; --radius: 8px }
+      h1 { font-family: var(--font-display); color: var(--accent, blue) }
+    </style></head><body><h1 data-kim-text="headline">Plan</h1></body></html>`;
+    const artifact = async (kind: string, content: string) =>
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/sessions/${session.id}/artifacts`,
+          payload: { kind, title: "Home", content },
+        })
+      ).json().id as string;
+    const mockup = await artifact("mockup", html);
+    const doc = await artifact("document", "# Notes");
+    const add = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: "POST",
+        url: `/api/sessions/${session.id}/questions`,
+        payload,
+      });
+    const font = {
+      type: "single-choice",
+      prompt: "Display font?",
+      artifactId: mockup,
+      options: ["Inter", "Fraunces"],
+      optionValues: {
+        Inter: { "--font-display": "Inter" },
+        Fraunces: { "--font-display": "Fraunces, serif" },
+      },
+    };
+
+    const errors = await Promise.all(
+      [
+        { ...font, optionValues: { Fraunces: { "--font-body": "Fraunces" } } },
+        { ...font, artifactId: undefined },
+        { ...font, artifactId: doc },
+        { ...font, optionValues: { Serif: { "--font-display": "x" } } },
+        { ...font, optionValues: { Inter: { accent: "red" } } },
+        {
+          type: "number",
+          prompt: "Radius?",
+          artifactId: mockup,
+          control: "--radius",
+        },
+        {
+          type: "text",
+          prompt: "Headline?",
+          artifactId: mockup,
+          control: "--accent",
+        },
+      ].map(async (payload) => {
+        const response = await add(payload);
+        expect(response.statusCode).toBe(400);
+        return response.json().error as string;
+      }),
+    );
+    expect(errors[0]).toContain(`artifact "Home" doesn't declare --font-body`);
+    expect(errors[1]).toContain("need artifactId");
+    expect(errors[2]).toContain("only html artifacts have controls");
+    expect(errors[3]).toContain('"Serif", which is not an option');
+    expect(errors[4]).toContain("a control is --variable");
+    expect(errors[5]).toContain("needs min and max");
+    expect(errors[6]).toContain("sets a text slot such as #headline");
+
+    const [fontQuestion, radius, headline] = (
+      await add({
+        questions: [
+          font,
+          {
+            type: "number",
+            prompt: "Corner radius?",
+            artifactId: mockup,
+            control: "--radius",
+            unit: "px",
+            min: 0,
+            max: 24,
+          },
+          {
+            type: "text",
+            prompt: "Headline?",
+            artifactId: mockup,
+            control: "#headline",
+          },
+        ],
+      })
+    ).json().questions;
+    expect(radius).toMatchObject({ control: "--radius", unit: "px" });
+
+    const pending = app.inject({
+      method: "GET",
+      url: `/api/sessions/${session.id}/wait?idle=50&timeout=5000`,
+    });
+    for (const [id, answer] of [
+      [fontQuestion.id, "Fraunces — maybe"],
+      [radius.id, "16"],
+      [headline.id, "Ship <faster>"],
+    ])
+      await app.inject({
+        method: "POST",
+        url: `/api/browser/${session.token}/questions/${id}/answer`,
+        payload: { answer },
+      });
+    const batch = (await pending).json();
+    expect(
+      batch.answers.map((item: Record<string, unknown>) => item.applied),
+    ).toEqual([
+      { artifactId: mockup, values: { "--font-display": "Fraunces, serif" } },
+      { artifactId: mockup, values: { "--radius": "16px" } },
+      { artifactId: mockup, values: { "#headline": "Ship <faster>" } },
+    ]);
+
+    // Served with the decided state, before anything paints.
+    const served = (
+      await app.inject({
+        method: "GET",
+        url: `/api/browser/${session.token}/artifacts/${mockup}/view`,
+      })
+    ).body;
+    expect(served).toContain(
+      '<h1 data-kim-text="headline">Ship &lt;faster&gt;</h1>',
+    );
+    expect(served).toContain(
+      '"values":{"--font-display":"Fraunces, serif","--radius":"16px","#headline":"Ship \\u003cfaster>"}',
+    );
+
+    // Renaming an option drops its values; an edit that loses a control warns.
+    const renamed = (
+      await app.inject({
+        method: "PATCH",
+        url: `/api/sessions/${session.id}/questions/${fontQuestion.id}`,
+        payload: { options: ["Inter", "Serif"] },
+      })
+    ).json();
+    expect(renamed.optionValues).toEqual({
+      Inter: { "--font-display": "Inter" },
+    });
+    const edited = (
+      await app.inject({
+        method: "PATCH",
+        url: `/api/sessions/${session.id}/artifacts/${mockup}`,
+        payload: { content: html.replace('data-kim-text="headline"', "") },
+      })
+    ).json();
+    expect(edited.warnings).toEqual([
+      expect.stringContaining(
+        `Question "Headline?": artifact "Home" doesn't declare #headline`,
+      ),
+    ]);
   });
 
   it("supports skip, edit, delete, stop and resume without automatic invalidation", async () => {

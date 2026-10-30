@@ -36,6 +36,9 @@ const state: SessionView = {
       position: 0,
       artifactId: null,
       optionArtifacts: {},
+      optionValues: {},
+      control: null,
+      unit: null,
       answer: {
         text: "A",
         skipped: false,
@@ -721,6 +724,53 @@ describe("questionnaire UI seam", () => {
       );
       // The stylesheet hides the questions for an expanded workspace.
       expect(full.closest(".workspace")).toHaveClass("expanded");
+    });
+
+    it("previews a bound option in the staged mockup on hover, and keeps a pick", async () => {
+      const session = workspace();
+      session.stage = { artifactId: "a", source: "agent" };
+      session.questions[0] = {
+        ...session.questions[0]!,
+        prompt: "Display font?",
+        options: ["Inter", "Fraunces"],
+        artifactId: "a",
+        optionValues: {
+          Inter: { "--font-display": "Inter" },
+          Fraunces: { "--font-display": "Fraunces" },
+        },
+        default: null,
+        answer: null,
+      };
+      serve(session);
+      const { container } = render(<App />);
+      const frame = (await screen.findByTitle("Layout A")) as HTMLIFrameElement;
+      const sent = vi.spyOn(frame.contentWindow!, "postMessage");
+      const lastValues = () => sent.mock.calls.at(-1)?.[0];
+      const fraunces = screen.getByRole("button", { name: "Fraunces" });
+
+      fireEvent.mouseEnter(fraunces);
+      await vi.waitFor(() =>
+        expect(lastValues()).toEqual({
+          type: "kim-set",
+          values: { "--font-display": "Fraunces" },
+        }),
+      );
+      fireEvent.mouseLeave(fraunces);
+      await vi.waitFor(() =>
+        expect(lastValues()).toEqual({ type: "kim-set", values: {} }),
+      );
+      fireEvent.click(fraunces);
+      fireEvent.mouseLeave(fraunces);
+      await vi.waitFor(() =>
+        expect(lastValues()).toEqual({
+          type: "kim-set",
+          values: { "--font-display": "Fraunces" },
+        }),
+      );
+      // Each option's card shows the mockup with it applied.
+      expect(container.querySelectorAll(".choice-card iframe")).toHaveLength(2);
+      // Nothing was saved: previews stay in the page.
+      expect(posts("/answer")).toEqual([]);
     });
 
     it("offers visual option cards and links a question to what it is about", async () => {

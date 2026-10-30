@@ -114,6 +114,74 @@ describe("wait over the socket", () => {
   });
 });
 
+describe("question add with controls", () => {
+  it("binds options with --set and a number with --bind and --unit", async () => {
+    const { address, store } = await listeningHarness();
+    const session = store.createSession("", { title: "Look" });
+    const mockup = store.addArtifact(session.id, {
+      kind: "mockup",
+      title: "Home",
+      content:
+        "<html><style>:root{--font-display:Inter;--radius:8px}</style></html>",
+    });
+    const add = async (...args: string[]) =>
+      JSON.parse(
+        (await kim(address, "question", "add", session.id, ...args)).stdout,
+      ).questions[0];
+    const font = await add(
+      "--prompt",
+      "Display font?",
+      "--type",
+      "single-choice",
+      "--artifact",
+      mockup.id,
+      "--option",
+      "Inter",
+      "--option",
+      "Space = Grotesk",
+      "--set",
+      "Inter=--font-display=Inter",
+      "--set",
+      'Space = Grotesk=--font-display="Space Grotesk", sans-serif',
+    );
+    expect(font.optionValues).toEqual({
+      Inter: { "--font-display": "Inter" },
+      "Space = Grotesk": { "--font-display": '"Space Grotesk", sans-serif' },
+    });
+    const radius = await add(
+      "--prompt",
+      "Corner radius?",
+      "--type",
+      "number",
+      "--artifact",
+      mockup.id,
+      "--bind",
+      "--radius",
+      "--unit",
+      "px",
+      "--min",
+      "0",
+      "--max",
+      "24",
+    );
+    expect(radius).toMatchObject({ control: "--radius", unit: "px", max: 24 });
+
+    const bad = await kim(
+      address,
+      "question",
+      "add",
+      session.id,
+      "--prompt",
+      "Font?",
+      "--set",
+      "Inter:--font-display",
+    ).catch((error: { stderr: string }) => error);
+    expect(JSON.parse(bad.stderr).error).toContain(
+      "--set takes <option>=<control>=<value>",
+    );
+  }, 30_000);
+});
+
 describe("session delete", () => {
   it("deletes several interviews by id and prints what went", async () => {
     const { address, store } = await listeningHarness();

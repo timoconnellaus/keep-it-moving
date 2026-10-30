@@ -21,6 +21,34 @@ export function composeAnswer(selected: string[], note: string): string {
     .join(NOTE_SEPARATOR);
 }
 
+/** Inverse of composeAnswer; anything it cannot attribute to options becomes the note. */
+export function parseAnswer(
+  choices: string[],
+  multiple: boolean,
+  text: string,
+): { selected: string[]; note: string } {
+  const byLength = [...choices].sort((a, b) => b.length - a.length);
+  const selected: string[] = [];
+  let rest = text;
+  for (;;) {
+    const match = byLength.find(
+      (option) => !selected.includes(option) && rest.startsWith(option),
+    );
+    if (!match) break;
+    const after = rest.slice(match.length);
+    if (after === "") return { selected: [...selected, match], note: "" };
+    if (after.startsWith(NOTE_SEPARATOR))
+      return {
+        selected: [...selected, match],
+        note: after.slice(NOTE_SEPARATOR.length),
+      };
+    if (!multiple || !after.startsWith(", ")) break;
+    selected.push(match);
+    rest = after.slice(2);
+  }
+  return { selected: [], note: text };
+}
+
 /** The answer text that accepting a question's default submits. */
 export function defaultAnswerText(question: QuestionView): string | null {
   if (!question.default) return null;

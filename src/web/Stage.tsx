@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { ControlValues } from "../shared/bindings.js";
 import type { ArtifactView, SessionView } from "../shared/schema.js";
 import { artifactViewUrl, shownArtifact } from "../shared/workspace.js";
 import { svgImageUrl } from "./diagram.js";
@@ -12,9 +13,30 @@ const KIND_LABEL: Record<ArtifactView["kind"], string> = {
   mockup: "Mockup",
 };
 
+/**
+ * Keeps an html artifact's controls at `values`: posted to the frame's
+ * applier when it loads and whenever they change. Undefined leaves the
+ * frame as served. The frame's origin is opaque, so it can't be named as
+ * the target; the values are the user's own answers.
+ */
+function useFrameValues(values: ControlValues | undefined) {
+  const ref = useRef<HTMLIFrameElement>(null);
+  const key = values ? JSON.stringify(values) : null;
+  const post = () => {
+    if (key !== null)
+      ref.current?.contentWindow?.postMessage(
+        { type: "kim-set", values: JSON.parse(key) as ControlValues },
+        "*",
+      );
+  };
+  useEffect(post, [key]);
+  return { ref, onLoad: post };
+}
+
 export function Stage({
   token,
   session,
+  values,
   expanded,
   onShow,
   onToggleExpanded,
@@ -22,6 +44,8 @@ export function Stage({
 }: {
   token: string;
   session: SessionView;
+  /** The shown html artifact's controls, with any unsaved preview. */
+  values: ControlValues | undefined;
   expanded: boolean;
   onShow(artifactId: string): void;
   onToggleExpanded(): void;
@@ -41,6 +65,7 @@ export function Stage({
       : null;
   // Beside the questions, diagrams use archify's compact embed mode;
   // expanded, its full viewer with pan, zoom and tracing.
+  const frame = useFrameValues(values);
   const frameUrl =
     shown?.format === "html"
       ? artifactViewUrl(token, shown, {
@@ -105,6 +130,8 @@ export function Stage({
               // A fresh frame per URL: re-pointing a loaded frame between
               // archify's embed and full viewers has left it blank.
               key={frameUrl}
+              ref={frame.ref}
+              onLoad={frame.onLoad}
               className="artifact-frame"
               title={shown.title}
               // No sandbox attribute: the server's CSP sandbox header isolates
@@ -139,16 +166,22 @@ export function Stage({
 export function ArtifactThumb({
   token,
   artifact,
+  values,
 }: {
   token: string;
   artifact: ArtifactView;
+  /** Controls to show applied, such as one option's. */
+  values?: ControlValues | undefined;
 }) {
+  const frame = useFrameValues(values);
   if (artifact.format === "html")
     return (
       <div className="thumb" aria-hidden="true">
         <iframe
           title=""
           tabIndex={-1}
+          ref={frame.ref}
+          onLoad={frame.onLoad}
           // Isolated by the server's CSP sandbox header, as on the stage.
           src={artifactViewUrl(token, artifact, {
             embed: artifact.kind === "diagram",

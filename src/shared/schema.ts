@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONTROL_PATTERN, UNIT_PATTERN } from "./bindings.js";
 
 export const questionTypes = [
   "text",
@@ -35,6 +36,14 @@ export const SessionInputSchema = z.object({
     .default({}),
 });
 
+const ControlSchema = z
+  .string()
+  .trim()
+  .regex(
+    CONTROL_PATTERN,
+    "a control is --variable, @attribute or #text-slot, e.g. --accent, @nav, #headline",
+  );
+
 const DefaultValueSchema = z.union([
   z.string().trim().min(1).max(10_000),
   z.number().finite().transform(String),
@@ -55,6 +64,22 @@ const questionFields = {
   artifactId: z.string().uuid().nullable(),
   /** Option label → artifact id, for choices between visuals such as mockups. */
   optionArtifacts: z.record(z.string(), z.string().uuid()),
+  /**
+   * Option label → the controls it sets inside the html artifact named by
+   * artifactId, such as `{ "Serif": { "--font-display": "Fraunces" } }`.
+   */
+  optionValues: z.record(
+    z.string(),
+    z.record(ControlSchema, z.string().trim().min(1).max(500)),
+  ),
+  /** The one control a number (a CSS variable) or text (a text slot) answer sets. */
+  control: ControlSchema.nullable(),
+  /** Appended to a number answer, e.g. px. */
+  unit: z
+    .string()
+    .trim()
+    .regex(UNIT_PATTERN, "unit must be a CSS unit such as px, rem or %")
+    .nullable(),
   min: z.number().finite().nullable(),
   max: z.number().finite().nullable(),
   step: z.number().finite().positive().nullable(),
@@ -167,6 +192,10 @@ export interface QuestionView {
   position: number;
   artifactId: string | null;
   optionArtifacts: Record<string, string>;
+  /** Option label → control values it sets in the artifact (see bindings.ts). */
+  optionValues: Record<string, Record<string, string>>;
+  control: string | null;
+  unit: string | null;
   answer: AnswerView | null;
 }
 /**
@@ -187,6 +216,8 @@ export interface ArtifactView {
   source?: string | null;
   revision: number;
   updatedAt: string;
+  /** Agent responses to an edit: bound questions whose controls it no longer declares. */
+  warnings?: string[];
 }
 export type ArtifactFormat = "markdown" | "html" | "svg" | "text";
 export type StageSource = "agent" | "user";
