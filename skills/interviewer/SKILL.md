@@ -12,7 +12,7 @@ Use the `kim` CLI (Keep it moving) to run an adaptive interview in the user's br
 - If `kim` isn't installed, ask the user to install it (Node.js 22.13 or newer): `npm install -g https://keep-it-moving.zerobsai.com/cli.tgz`.
 - If a command says the CLI isn't signed in, ask the user to run `kim login` in their own terminal; it signs in with Google in the browser. `kim whoami` checks.
 - If `kim` says on stderr that an update is available, mention it to the user; `kim update` installs it.
-- If a command fails with `"code": "plan_limit"`, the user's Free plan refused it; don't retry or work around it. Relay the error to the user in plain words. For too many live interviews (agents waiting on at most 3 at once), name the interviews in `live` and suggest stopping one they're done with (`kim session stop <id>`) or upgrading at `upgradeUrl`. For assigning, which is Pro only, offer the upgrade or to run the interview with the user instead. When `session create --assign` is refused, the interview was still created, unassigned; its id is in the error.
+- If a command fails with `"code": "plan_limit"`, the user's Free plan refused it; don't retry or work around it. Relay the error to the user in plain words. For too many live interviews (at most 3 at once that an agent is waiting on, or whose open questions a hook asked about in the last 15 minutes), name the interviews in `live` and suggest stopping one they're done with (`kim session stop <id>`) or upgrading at `upgradeUrl`. For assigning, which is Pro only, offer the upgrade or to run the interview with the user instead. When `session create --assign` is refused, the interview was still created, unassigned; its id is in the error.
 
 ## Start or resume
 
@@ -88,7 +88,7 @@ Artifact ids come back from `artifact add`. `session show` lists artifacts witho
 
 ## Watch and adapt
 
-Run `kim wait <session-id>` as a background process. It exits with one JSON batch when the user pauses (15 s by default, `--idle` to change), or finishes every open question. An empty `events` list means the wait timed out with nothing new. Each batch contains:
+Run `kim wait <session-id>` in the background. In Claude Code, that means the Bash tool with `run_in_background`: you keep working, and you're woken with its output when the batch arrives. Elsewhere, run it as a background process, or loop on it in the foreground when background processes are unavailable. It exits with one JSON batch when the user pauses (15 s by default, `--idle` to change), or finishes every open question. An empty `events` list means the wait timed out with nothing new. Each batch contains:
 
 - `answers`: the latest answer to each question touched, with `acceptedDefault`. A false value means the user departed from your suggestion, so treat it as a signal to probe.
 - `events`: everything queued, including your own edits.
@@ -103,7 +103,9 @@ Handle `messages` first: the user is waiting on the reply. A message from the us
 
 `kim chat list <session-id>` shows the whole thread.
 
-Then handle the rest of the batch: update the plan, adapt the questions, and add or revise visuals. Then run `wait` again. One watcher holds a session at a time; a new one takes over and the old one exits with "Replaced by a newer watcher", so never run two. If background processes are unavailable, loop on `kim wait` in the foreground. `kim attach` (NDJSON stream) and `kim events next` remain available.
+Then handle the rest of the batch: update the plan, adapt the questions, and add or revise visuals. Then run `wait` again. One watcher holds a session at a time; a new one takes over and the old one exits with "Replaced by a newer watcher", so run one `wait` per session. `kim attach` (NDJSON stream) and `kim events next` remain available.
+
+Answers also reach you between your own steps. In Claude Code and Codex, kim's hooks bring answers the user gave while you were working, or since your last turn, into your context as a line starting `Keep it moving: answers to interview <id>`, followed by a batch in `wait`'s JSON. Act on an injected batch exactly as on `kim wait` output: it has been delivered, so the next `wait` brings only later answers.
 
 Answers can arrive while detached and appear in the next batch. Treat `answer.revised` as a fresh decision point. Decide whether later questions should remain, change, or be deleted; there is no automatic dependency system.
 

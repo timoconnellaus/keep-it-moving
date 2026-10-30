@@ -70,6 +70,8 @@ const ATTRIBUTION_COLUMNS = [
   ["sessions", "assigned_by"],
   ["answers", "answered_by"],
   ["chat_messages", "author_email"],
+  // When an agent's hook last asked for answers, which keeps it live.
+  ["sessions", "hook_seen_at"],
 ] as const;
 
 /** Just enough to catch a typo; Google checks the address at sign-in. */
@@ -324,6 +326,30 @@ export class InterviewStore {
     return row && row.status === "active" && !row.assignee
       ? Number(row.open)
       : 0;
+  }
+
+  /** An agent's hook asked this interview for answers just now. */
+  touchHook(sessionId: string): void {
+    this.sql.all(
+      "UPDATE sessions SET hook_seen_at = ? WHERE id = ?",
+      now(),
+      sessionId,
+    );
+  }
+
+  /**
+   * Active interviews with questions still unanswered whose hook asked for
+   * answers since `since`, whoever the questions wait on.
+   */
+  hookedSessions(since: string): string[] {
+    return this.sql
+      .all(
+        `SELECT s.id FROM sessions s WHERE s.status = 'active' AND s.hook_seen_at >= ?
+           AND EXISTS (SELECT 1 FROM questions q LEFT JOIN answers a ON a.question_id = q.id
+             WHERE q.session_id = s.id AND q.deleted = 0 AND a.question_id IS NULL)`,
+        since,
+      )
+      .map((row) => String(row.id));
   }
 
   /** Push endpoints of the user's devices; pushes carry no data. */

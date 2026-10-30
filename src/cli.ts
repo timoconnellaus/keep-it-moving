@@ -3,10 +3,12 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -14,6 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
+import { createInterface } from "node:readline/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +36,28 @@ import {
   skillsFolder,
   uninstallSkill,
 } from "./skill.js";
-import { checkForUpdate, readBuild } from "./update.js";
+import { runHook, type HookPayload, type TakeOutcome } from "./hook.js";
+import {
+  HOOK_AGENTS,
+  hookEventFor,
+  hooksStatus,
+  installHooks,
+  isHookAgent,
+  uninstallHooks,
+  type HookAgentId,
+} from "./hooks.js";
+import {
+  acquireUpdateLock,
+  autoUpdateBlocked,
+  checkForUpdate,
+  decideUpdate,
+  readBuild,
+  readUpdateState,
+  UPDATE_HINT,
+  updateDue,
+  updateLocked,
+  writeUpdateState,
+} from "./update.js";
 
 /**
  * KEEP_IT_MOVING_<name>, else the older INTERVIEWER_<name>, so environments
@@ -47,11 +71,15 @@ const defaultBase = (
 ).replace(/\/+$/, "");
 
 async function main(args: string[]): Promise<void> {
+  // Hooks run between an agent's steps: no housekeeping, and never an error.
+  if (args[0] === "hook") return hookCommand(args[1]);
   housekeeping(args[0]);
   if (!args.length || args.includes("--help") || args[0] === "help")
     return printHelp();
   const [group, action, ...rest] = args;
-  if (group === "update") return update();
+  if (group === "update")
+    return args.includes("--background") ? backgroundUpdate(args) : update();
+  if (group === "hooks") return hooksCommand(action, rest);
   if (group === "login") return login();
   if (group === "logout") return logout();
   if (group === "whoami") return whoami();
@@ -1002,8 +1030,14 @@ async function skillCommand(action: string | undefined, args: string[]) {
     const agents = await chooseAgents(args, paths);
     if (!agents) throw new Error("Cancelled");
     const result = installSkill(paths, agents, args.includes("--force"));
-    output(result);
-    if (result.skipped.length) process.exitCode = 1;
+    const hookAgents = agents.filter(isHookAgent);
+    const hooks =
+      hookAgents.length && (await wantHooks(args, hookAgents))
+        ? installHooksFor(hookAgents, paths.home)
+        : [];
+    output({ ...result, hooks });
+    if (result.skipped.length || hooks.some((hook) => "error" in hook))
+      process.exitCode = 1;
     return;
   }
   if (action === "uninstall") return output(uninstallSkill(paths));
@@ -1061,6 +1095,209 @@ async function chooseAgents(
   return ["claude"];
 }
 
+/**
+ * Whether `skill install` also installs the hooks: --hooks or --no-hooks,
+ * else asked in a terminal, else yes.
+ */
+async function wantHooks(args: string[], agents: HookAgentId[]) {
+  if (args.includes("--no-hooks")) return false;
+  if (args.includes("--hooks") || !process.stdin.isTTY || !process.stderr.isTTY)
+    return true;
+  const names = agents
+    .map((id) => HOOK_AGENTS.find((agent) => agent.id === id)!.name)
+    .join(" and ");
+  const prompt = createInterface({
+    input: process.stdin,
+    output: process.stderr,
+  });
+  try {
+    const answer = await prompt.question(
+      `Also install hooks, so answers reach ${names} while it works? [Y/n] `,
+    );
+    return !/^n/i.test(answer.trim());
+  } finally {
+    prompt.close();
+  }
+}
+
+const installHooksFor = (agents: HookAgentId[], home: string) =>
+  agents.map((agent) => {
+    try {
+      return installHooks(agent, home);
+    } catch (error) {
+      return {
+        agent,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+/**
+ * `hooks install` adds `kim hook` to the agents' hooks (Claude Code's
+ * settings.json, Codex's hooks.json): --agents claude,codex, else those
+ * found here, else Claude Code. `hooks uninstall` removes only those
+ * entries; `hooks status` says which events have them.
+ */
+async function hooksCommand(action: string | undefined, args: string[]) {
+  const home = homedir();
+  if (action === "install") {
+    const list = flag(args, "--agents");
+    const agents = list
+      ? parseAgents(list).filter(isHookAgent)
+      : HOOK_AGENTS.filter((agent) =>
+          existsSync(dirname(agent.file(home, process.env))),
+        ).map((agent) => agent.id);
+    if (list && !agents.length)
+      throw new Error("Only Claude Code and Codex have hooks kim can use");
+    const hooks = installHooksFor(agents.length ? agents : ["claude"], home);
+    output({ hooks });
+    if (hooks.some((hook) => "error" in hook)) process.exitCode = 1;
+    return;
+  }
+  if (action === "uninstall")
+    return output({
+      hooks: HOOK_AGENTS.map((agent) => uninstallHooks(agent.id, home)),
+    });
+  if (action === "status")
+    return output({
+      hooks: HOOK_AGENTS.map((agent) => hooksStatus(agent.id, home)),
+    });
+  throw new Error(`Unknown hooks action: ${action ?? ""}`);
+}
+
+/** The whole budget a hook has, network included. */
+const HOOK_BUDGET_MS = 2_000;
+const TAKE_TIMEOUT_MS = 1_500;
+
+/**
+ * `hook <event>`: reads the agent's hook payload on stdin and prints the
+ * hook's JSON response, the answers as context or `{}`. Whatever happens it
+ * prints something, exits 0, and is done within the budget.
+ */
+async function hookCommand(argument: string | undefined) {
+  let response: Record<string, unknown> = {};
+  try {
+    const event = hookEventFor(argument ?? "");
+    if (event)
+      response = await Promise.race([
+        (async () => {
+          const payload = JSON.parse(
+            (await readStdin()).trim() || "{}",
+          ) as HookPayload;
+          return runHook(event, payload, {
+            stateFile: configFile("hooks.json"),
+            take: takeAnswers,
+          });
+        })().catch(() => ({})),
+        new Promise<Record<string, unknown>>((resolve) =>
+          setTimeout(() => resolve({}), HOOK_BUDGET_MS),
+        ),
+      ]);
+  } catch {
+    // The agent's work matters more than the answers.
+  }
+  try {
+    checkForUpdateFromHook();
+  } catch {
+    // Likewise.
+  }
+  process.stdout.write(`${JSON.stringify(response)}\n`, () => process.exit(0));
+}
+
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) return "";
+  let text = "";
+  for await (const chunk of process.stdin) text += chunk;
+  return text;
+}
+
+/** The answers the user has given since the last delivery, without waiting. */
+async function takeAnswers(id: string): Promise<TakeOutcome> {
+  const response = await authorizedFetch(
+    `/api/sessions/${encodeURIComponent(id)}/take`,
+    { method: "POST", signal: AbortSignal.timeout(TAKE_TIMEOUT_MS) },
+  );
+  if (response.status === 404) return "gone";
+  if (!response.ok) return null;
+  return (await response.json()) as TakeOutcome;
+}
+
+/** Starts kim updating itself, detached, with its output in update.log. */
+function startBackgroundUpdate(args: string[]): string {
+  const log = configFile("update.log");
+  mkdirSync(dirname(log), { recursive: true });
+  const fd = openSync(log, "a");
+  try {
+    spawn(
+      process.execPath,
+      [fileURLToPath(import.meta.url), "update", "--background", ...args],
+      { detached: true, stdio: ["ignore", fd, fd], windowsHide: true },
+    ).unref();
+  } finally {
+    closeSync(fd);
+  }
+  return log;
+}
+
+/**
+ * A hook can't wait on the update check, so when one is due it stamps it
+ * and leaves the check, and any update, to a detached kim.
+ */
+function checkForUpdateFromHook() {
+  if (!readBuild(join(packageRoot(), "build.json"))) return;
+  const stateFile = configFile("update-check.json");
+  if (!updateDue(stateFile)) return;
+  writeUpdateState(stateFile, { checkedAt: Date.now() });
+  startBackgroundUpdate(["--check"]);
+}
+
+/**
+ * `update --background`, detached from whoever started it: with --check,
+ * asks the site for the latest build first; with --build, updates to the
+ * build already found. Holds a lock so only one runs, and on failure leaves
+ * the usual hint for the next command.
+ */
+async function backgroundUpdate(args: string[]) {
+  const stateFile = configFile("update-check.json");
+  const current = readBuild(join(packageRoot(), "build.json"));
+  if (!current) return;
+  const build = flag(args, "--build");
+  const latest = args.includes("--check")
+    ? await checkForUpdate({
+        base: defaultBase,
+        current,
+        stateFile,
+        force: true,
+      })
+    : build
+      ? { version: current.version, build }
+      : null;
+  const decision = decideUpdate({
+    latest,
+    blocked: autoUpdateBlocked(packageRoot()),
+    state: readUpdateState(stateFile),
+    locked: false,
+  });
+  if (decision === "hint") return writeUpdateState(stateFile, { hint: true });
+  if (decision !== "auto" || !latest) return;
+  const lock = configFile("update.lock");
+  if (!acquireUpdateLock(lock)) return;
+  process.stderr.write(
+    `${new Date().toISOString()} updating kim to build ${latest.build}\n`,
+  );
+  try {
+    update();
+    writeUpdateState(stateFile, { failedBuild: undefined, hint: undefined });
+  } catch (error) {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    writeUpdateState(stateFile, { failedBuild: latest.build, hint: true });
+  } finally {
+    rmSync(lock, { force: true });
+  }
+}
+
 /** Reinstalls the CLI from the site, then refreshes the skill with the new one. */
 function update() {
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -1088,8 +1325,9 @@ function update() {
 
 /**
  * What every run does first: refresh an installed skill copy that's out of
- * date, and once a day hint on stderr that a newer CLI exists. Neither
- * writes to stdout, holds up the command, or fails it.
+ * date, and every six hours look for a newer CLI, updating to it in the
+ * background (or, where kim mustn't update itself, hinting on stderr).
+ * None of it writes to stdout, holds up the command, or fails it.
  */
 function housekeeping(group: string | undefined) {
   if (group !== "skill" && group !== "update")
@@ -1100,13 +1338,30 @@ function housekeeping(group: string | undefined) {
     }
   const current = readBuild(join(packageRoot(), "build.json"));
   if (!current || group === "update") return;
-  void checkForUpdate({
-    base: defaultBase,
-    current,
-    stateFile: configFile("update-check.json"),
-  }).then((hint) => {
-    if (hint) process.stderr.write(`${hint}\n`);
-  });
+  const stateFile = configFile("update-check.json");
+  // Owed by a check a hook started, or an update that failed.
+  const { hint, failedBuild } = readUpdateState(stateFile);
+  if (hint) {
+    writeUpdateState(stateFile, { hint: undefined });
+    process.stderr.write(
+      `${UPDATE_HINT}${failedBuild ? ` (updating automatically failed; see ${configFile("update.log")})` : ""}\n`,
+    );
+  }
+  void checkForUpdate({ base: defaultBase, current, stateFile }).then(
+    (latest) => {
+      const decision = decideUpdate({
+        latest,
+        blocked: autoUpdateBlocked(packageRoot()),
+        state: readUpdateState(stateFile),
+        locked: updateLocked(configFile("update.lock")),
+      });
+      if (decision === "hint") process.stderr.write(`${UPDATE_HINT}\n`);
+      if (decision === "auto" && latest)
+        process.stderr.write(
+          `kim: updating in the background (log: ${startBackgroundUpdate(["--build", latest.build])})\n`,
+        );
+    },
+  );
 }
 
 async function accessToken(rejected?: string | null): Promise<string | null> {
@@ -1364,6 +1619,10 @@ const BOOLEAN_FLAGS = new Set([
   "--open-stage",
   "--clear",
   "--force",
+  "--hooks",
+  "--no-hooks",
+  "--background",
+  "--check",
 ]);
 
 function positional(args: string[], index: number): string {
@@ -1434,15 +1693,23 @@ Cloud sessions (claude.ai/code):
     access, environment variables and setup script, ready to paste
 
 Setup:
-  skill install [--agents claude,codex,cursor | --all] [--force]
+  skill install [--agents claude,codex,cursor | --all] [--force] [--hooks | --no-hooks]
     copy the interviewer skill to ~/.agents/skills and link it into each agent's
     skills folder; asks which agents in a terminal, and remembers the choice.
     --all means every agent found on this machine. It never replaces a link
-    or folder it didn't make unless --force
+    or folder it didn't make unless --force. For Claude Code and Codex it
+    also installs the hooks (asked in a terminal; yes otherwise)
   skill agents      the agents it can link into, their ids and skills folders
   skill uninstall   remove the links and copy skill install made
   skill refresh     bring the skill copy up to date (every run does this)
-  update   reinstall kim from this site, then refresh the skill
+  hooks install [--agents claude,codex] | uninstall | status
+    agent hooks that bring answers into the agent's context while it works:
+    Claude Code's settings.json (CLAUDE_CONFIG_DIR) and Codex's hooks.json
+    (CODEX_HOME) run \`kim hook <event>\`; only those entries are ever changed
+  hook session-start|user-prompt-submit|post-tool-use   what the hooks run
+  update   reinstall kim from this site, then refresh the skill. kim does this
+    itself in the background when it finds a newer build (checked every six
+    hours), unless KEEP_IT_MOVING_NO_AUTO_UPDATE=1 or it is a development link
 
 KEEP_IT_MOVING_URL points at another deployment, such as wrangler dev.
 `,
