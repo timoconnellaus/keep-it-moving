@@ -57,7 +57,7 @@ In a claude.ai cloud session, the CLI authenticates with the environment's `KEEP
 
 ## Workspace: plan, diagrams, mockups
 
-An interview exists to produce a plan, so build the plan alongside it where the user can see it:
+An interview exists to produce a plan, so build the plan alongside it where the user can see it. The workspace is a canvas: every artifact is a frame the user can pan to, zoom, drag, open at full size on desktop, tablet and phone widths, and pin comments to. Frames lay themselves out in a row per question (the first question that names an artifact by `artifactId` or `optionArtifacts`), after a row of the plan and anything tied to no question.
 
 ```sh
 kim plan <session-id> --file plan.md            # the one living plan (Markdown); replaces content
@@ -69,9 +69,9 @@ kim artifact show <session-id> <artifact-id>     # put it on screen
 
 - **Plan:** create it early and rewrite it after each batch of answers. Record decisions (what was chosen and why), open questions, and next steps. The user reads it, so keep it short and current.
 - **Diagrams:** use one when structure matters, such as architecture, workflow, a request sequence, data flow or state. Diagrams need the [archify](https://github.com/tt-a1i/archify) skill; if it isn't installed, describe the structure in the plan instead, or use a mockup. Author an archify spec by following the archify skill: pick the type, then read its schema and one example. Don't hand-write HTML or run `archify deliver` yourself. Pass the spec to `artifact add` or `artifact update`: it validates, and on failure returns archify's diagnostics with `supportedFixes`, so fix only what they name and retry. Keep the spec file and update it rather than adding near-duplicates. Keep labels meaningful.
-- **Mockups:** use self-contained HTML (inline CSS; CDN scripts work). Always pass `--description`; it keeps the options readable.
+- **Mockups:** use self-contained HTML (inline CSS; CDN scripts work), written as real responsive pages: the user previews them at 1280, 834 and 390 wide, and scrolls and clicks through them. Put `data-name="pay button"` (a short, plain name) on each meaningful element, so a comment pinned there names it. A frame is desktop-sized (1280 × 800) unless the title or description says mobile/phone (390 × 844) or tablet (834 × 1112). Always pass `--description`; it keeps the options readable.
 - **Whether the workspace is shown:** the workspace column starts closed, and you decide whether to open it. Keep it closed when the user follows the plan somewhere else, for example a Markdown file you are writing in the repo or a design open beside the interviewer, or when the interview is just questions. Open it (`kim stage open <session-id>`, or `session create --open-stage`) when the user should look at something here: a diagram, a mockup to choose between, or a plan they have no other view of. Close it with `kim stage close <session-id>` when it stops being useful. You can change your mind during the session. The user can toggle it too; `stage.visibility` events and `stageVisible` in each batch tell you its state. If the user closed it, don't reopen it unless you are showing something new they need to see.
-- **What's on screen:** `--show` switches the workspace to an item, but doesn't open a closed workspace. Don't yank the screen around while the user is mid-question; show a new item when you ask about it.
+- **What's on screen:** `--show` (or `artifact show`) moves every viewer's canvas to that frame, but doesn't open a closed workspace. Don't yank the canvas around while the user is mid-question; show a new item when you ask about it. Focusing a question fits its frames.
 - **Linking questions:** set `artifactId` on a question that is about an artifact. Focusing that question brings the artifact on screen. For a choice between visuals, map options to artifacts with `optionArtifacts`, and they render as cards with thumbnails:
 
   ```json
@@ -101,7 +101,7 @@ Run `kim wait <session-id>` in the background. In Claude Code, that means the Ba
 - `answers`: the latest answer to each question touched, with `acceptedDefault`. A false value means the user departed from your suggestion, so treat it as a signal to probe.
 - `events`: everything queued, including your own edits.
 - `openQuestions`: how many questions remain open.
-- `messages`: what the user wrote in the interview's chat since the last batch, each with its `messageId`, `text`, and `about` (the question's id, number and prompt) when they asked about a specific question.
+- `messages`: what the user wrote in the interview's chat since the last batch, each with its `messageId`, `text`, and `about` (the question's id, number and prompt) when they asked about a specific question. A comment pinned on the canvas carries `pin`: its number, `artifactId` and `artifact` title, the `element` (its `data-name`, else a short description such as `button "Pay $48.00"`, with a `selector`), and where it is (`x`, `y` in the page's pixels at `width`). Change that element, and reply saying what you changed.
 - On an assigned interview, `answeredBy` on an answer and `from` on a message name the assignee who wrote it.
 
 Handle `messages` first: the user is waiting on the reply. A message from the user wakes `wait` straight away.
