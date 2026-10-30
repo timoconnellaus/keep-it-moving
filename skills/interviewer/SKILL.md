@@ -84,6 +84,14 @@ kim artifact show <session-id> <artifact-id>     # put it on screen
   }
   ```
 
+- **Controls inside one mockup:** for fonts, colours, spacing, copy and small variants, let answers change one mockup live instead of drawing a mockup per option. Keep separate artifacts with `optionArtifacts` for different layouts. Mark what can change in the HTML: a CSS variable (`--accent`, used through `var(--accent)`), a variant attribute (`@nav` is `data-kim-nav`, styled with `[data-kim-nav="top"] …`), or a text slot (`#headline` is `data-kim-text="headline"` on an element holding only text). Point the question's `artifactId` at the mockup. A choice maps options to values with `optionValues` (or `--set '<option>=<control>=<value>'`, repeated). A number sets one variable with a unit and needs `min` and `max` (`--bind --radius --unit px --min 0 --max 24`), and shows a slider. A text question sets one slot (`--bind '#headline'`). Hovering an option previews it in the mockup, a font variable set to a Google Fonts family loads it, and a saved answer stays applied when the mockup is viewed again. Each bound answer in a batch carries `applied: { artifactId, values }`: write those values into the mockup's defaults when you next revise it. An undeclared control is rejected; an `artifact update` that drops one returns `warnings`.
+
+  ```sh
+  kim question add <session-id> --prompt "Display font?" --type single-choice --artifact <id> \
+    --option Inter --option Fraunces --default Inter \
+    --set 'Inter=--font-display=Inter, sans-serif' --set 'Fraunces=--font-display=Fraunces, serif'
+  ```
+
 Artifact ids come back from `artifact add`. `session show` lists artifacts without their content.
 
 ## Watch and adapt

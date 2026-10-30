@@ -1,42 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import {
-  NOTE_SEPARATOR,
   choicesFor,
   composeAnswer,
   defaultAnswerText,
   inOptionOrder,
+  parseAnswer,
 } from "../shared/answers.js";
+import {
+  answerValues,
+  isBound,
+  type ControlValues,
+} from "../shared/bindings.js";
 import type { ArtifactView, QuestionView } from "../shared/schema.js";
 import { ArtifactThumb } from "./Stage.js";
-
-/** Inverse of composeAnswer; anything it cannot attribute to options becomes the note. */
-function parseAnswer(
-  choices: string[],
-  multiple: boolean,
-  text: string,
-): { selected: string[]; note: string } {
-  const byLength = [...choices].sort((a, b) => b.length - a.length);
-  const selected: string[] = [];
-  let rest = text;
-  for (;;) {
-    const match = byLength.find(
-      (option) => !selected.includes(option) && rest.startsWith(option),
-    );
-    if (!match) break;
-    const after = rest.slice(match.length);
-    if (after === "") return { selected: [...selected, match], note: "" };
-    if (after.startsWith(NOTE_SEPARATOR))
-      return {
-        selected: [...selected, match],
-        note: after.slice(NOTE_SEPARATOR.length),
-      };
-    if (!multiple || !after.startsWith(", ")) break;
-    selected.push(match);
-    rest = after.slice(2);
-  }
-  return { selected: [], note: text };
-}
 
 function initialAnswerState(question: QuestionView): {
   selected: string[];
@@ -79,6 +56,8 @@ export function QuestionCard({
   shownArtifactId,
   onShowArtifact,
   onAsk,
+  onPreview,
+  valuesWith,
 }: {
   token: string;
   question: QuestionView;
@@ -94,6 +73,10 @@ export function QuestionCard({
   onShowArtifact(artifactId: string): void;
   /** Opens the chat with this question attached; absent once stopped. */
   onAsk?: (() => void) | undefined;
+  /** Shows unsaved control values in the question's artifact; null stops. */
+  onPreview(questionId: string, values: ControlValues | null): void;
+  /** An artifact's controls with this question's contribution replaced. */
+  valuesWith(artifactId: string, values: ControlValues): ControlValues;
 }) {
   const artifactFor = (id: string | null | undefined) =>
     id ? artifacts.find((artifact) => artifact.id === id) : undefined;
@@ -105,6 +88,8 @@ export function QuestionCard({
   const [note, setNote] = useState(initial.note);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  /** The option under the pointer or keyboard focus, previewed in the artifact. */
+  const [hovered, setHovered] = useState<string | null>(null);
   const reset = () => {
     setSelected(initial.selected);
     setNote(initial.note);
@@ -131,6 +116,36 @@ export function QuestionCard({
 
   const choices = choicesFor(question);
   const multiple = question.type === "multiple-choice";
+  // Answers that set controls inside the linked html artifact, live.
+  const bound = isBound(question) && linked?.format === "html";
+  const previewText = !open
+    ? null
+    : hovered !== null
+      ? composeAnswer(
+          multiple ? inOptionOrder(choices, [...selected, hovered]) : [hovered],
+          "",
+        )
+      : dirty
+        ? answerText
+        : null;
+  const preview =
+    bound && previewText !== null
+      ? (answerValues(question, previewText) ?? {})
+      : null;
+  const previewKey = JSON.stringify(preview);
+  useEffect(() => {
+    onPreview(question.id, preview);
+  }, [previewKey]);
+  useEffect(() => () => onPreview(question.id, null), []);
+  const hover = (option: string) =>
+    bound
+      ? {
+          onMouseEnter: () => setHovered(option),
+          onMouseLeave: () => setHovered(null),
+          onFocus: () => setHovered(option),
+          onBlur: () => setHovered(null),
+        }
+      : {};
   const defaultText = defaultAnswerText(question);
   const isDefault = defaultText !== null && answerText === defaultText;
   const save = async (answer: string, skipped = false) => {
@@ -150,8 +165,9 @@ export function QuestionCard({
           ((await response.json()) as { error?: string }).error ??
             "Could not save answer",
         );
-      setOpen(false);
+      // Closed once the saved answer is in, so a preview hands straight over to it.
       await onSaved();
+      setOpen(false);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -162,7 +178,9 @@ export function QuestionCard({
   const submit = () => {
     if (canSave) void save(answerText);
   };
-  const pick = (option: string) =>
+  const pick = (option: string) => {
+    setHovered(null);
+    if (bound && linked.id !== shownArtifactId) onShowArtifact(linked.id);
     setSelected((values) =>
       values.includes(option)
         ? values.filter((item) => item !== option)
@@ -170,6 +188,7 @@ export function QuestionCard({
           ? inOptionOrder(choices, [...values, option])
           : [option],
     );
+  };
   const hint = question.type === "number" ? numberHint(question) : "";
 
   const done = question.answer !== null && !open;
@@ -268,7 +287,8 @@ export function QuestionCard({
       {open && (
         <div className="answer-form">
           {choices.length > 0 &&
-            (choices.some((option) =>
+            (bound ||
+            choices.some((option) =>
               artifactFor(question.optionArtifacts[option]),
             ) ? (
               <div
@@ -291,9 +311,21 @@ export function QuestionCard({
                         className="choice-card-pick"
                         onClick={() => pick(option)}
                         aria-pressed={selected.includes(option)}
+                        {...hover(option)}
                       >
-                        {artifact && (
+                        {artifact ? (
                           <ArtifactThumb token={token} artifact={artifact} />
+                        ) : (
+                          bound && (
+                            <ArtifactThumb
+                              token={token}
+                              artifact={linked}
+                              values={valuesWith(
+                                linked.id,
+                                question.optionValues[option] ?? {},
+                              )}
+                            />
+                          )
                         )}
                         <span className="choice-card-label">
                           {option}
@@ -331,6 +363,7 @@ export function QuestionCard({
                       onClick={() => pick(option)}
                       type="button"
                       aria-pressed={selected.includes(option)}
+                      {...hover(option)}
                     >
                       <span className="choice-mark" aria-hidden="true" />
                       <span className="choice-label">{option}</span>
@@ -345,6 +378,25 @@ export function QuestionCard({
           {question.recommendation && (
             <Recommendation markdown={question.recommendation} />
           )}
+          {bound &&
+            question.type === "number" &&
+            question.min !== null &&
+            question.max !== null && (
+              <input
+                type="range"
+                className="control-slider"
+                min={question.min}
+                max={question.max}
+                step={question.step ?? "any"}
+                value={
+                  Number.isFinite(parseFloat(note))
+                    ? parseFloat(note)
+                    : question.min
+                }
+                aria-label={`${question.prompt} (${question.control})`}
+                onChange={(event) => setNote(event.target.value)}
+              />
+            )}
           <div className="answer-row">
             {question.type === "text" ? (
               <textarea

@@ -380,6 +380,39 @@ Questions can point at the workspace:
 }
 ```
 
+### Controls inside an artifact
+
+An answer can also change values inside one html artifact, applied in the page with no round-trip to the agent. The artifact names what can change, and the question's `artifactId` points at it:
+
+| Control     | In the artifact                                                 | An answer sets                    |
+| ----------- | --------------------------------------------------------------- | --------------------------------- |
+| `--accent`  | a CSS custom property it defines or reads (`--accent: #1f6bff`) | the property, inline on `:root`   |
+| `@nav`      | `data-kim-nav`, e.g. CSS on `[data-kim-nav="top"]`              | the attribute on the root element |
+| `#headline` | elements marked `data-kim-text="headline"`                      | their text                        |
+
+- Choice questions take `optionValues`: option → control values. Several chosen options merge in option order.
+- A number question takes `control` (a CSS variable), `unit` and `min`/`max`, and shows a slider.
+- A text question takes `control` (a text slot).
+
+Creating or updating a question checks that the artifact is html and declares every control, and rejects it otherwise. An artifact edit that drops a bound control succeeds, with `warnings` naming the questions it breaks.
+
+```json
+{
+  "type": "single-choice",
+  "prompt": "Display font?",
+  "artifactId": "<mockup-id>",
+  "options": ["Inter", "Fraunces"],
+  "optionValues": {
+    "Inter": { "--font-display": "Inter, sans-serif" },
+    "Fraunces": { "--font-display": "Fraunces, serif" }
+  }
+}
+```
+
+From the CLI: `--set 'Fraunces=--font-display=Fraunces, serif'` (repeat it), or `--bind --radius --unit px --min 0 --max 24` for a number.
+
+The view URL serves the artifact with a small script in its head (`APPLIER_SOURCE` in `src/server/artifactView.ts`). The script applies the values of saved answers before first paint (text slots holding plain text are filled on the server), so a reload, thumbnails and later questions show the decided state. It then follows `{ type: "kim-set", values }` messages, accepted only from the framing page. Each message carries the whole state, and a control it leaves out returns to the artifact's own value. In the page, hovering or focusing an option previews it in the stage, choosing keeps the preview until it's saved or cancelled, and sliders and text update the frame as the user drags or types. Option cards show a thumbnail with each option applied. Previews never leave the browser. When a variable whose name contains `font` is set to a family that isn't a system font, the script loads it from Google Fonts. The CSP sandbox has no fetch directives, so `fonts.googleapis.com` and `fonts.gstatic.com` load. Bound answers in the agent's batch carry `applied: { artifactId, values }`.
+
 ## Architecture
 
 ```text

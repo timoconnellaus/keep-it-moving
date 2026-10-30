@@ -1605,12 +1605,38 @@ function questionFromFlags(args: string[]): Record<string, unknown> {
   const defaults = flags(args, "--default");
   if (defaults.length)
     result.default = defaults.length === 1 ? defaults[0] : defaults;
+  const sets = flags(args, "--set");
+  if (sets.length) result.optionValues = optionValuesFromFlags(sets);
+  const control = flag(args, "--bind");
+  if (control) result.control = control;
+  const unit = flag(args, "--unit");
+  if (unit !== undefined) result.unit = unit;
   for (const key of ["min", "max", "step", "position"]) {
     const value = flag(args, `--${key}`);
     if (value !== undefined) result[key] = Number(value);
   }
   return result;
 }
+/**
+ * `--set '<option>=<control>=<value>'`, repeated: what choosing an option
+ * sets in the question's artifact, e.g. `--set 'Serif=--font-display=Fraunces'`.
+ */
+function optionValuesFromFlags(
+  sets: string[],
+): Record<string, Record<string, string>> {
+  const result: Record<string, Record<string, string>> = {};
+  for (const set of sets) {
+    const match = /^(.+?)=((?:--|@|#)[\w-]+)=(.*)$/s.exec(set);
+    if (!match)
+      throw new Error(
+        `--set takes <option>=<control>=<value>, e.g. 'Serif=--font-display=Fraunces'; got "${set}"`,
+      );
+    const [, option, control, value] = match;
+    (result[option!] ??= {})[control!] = value!;
+  }
+  return result;
+}
+
 /** Flags that take no value, so the next argument stays positional. */
 const BOOLEAN_FLAGS = new Set([
   "--all",
@@ -1668,6 +1694,9 @@ Commands:
   project list   the projects interviews are labelled with
   question add <session> --prompt <text> [--type <type>] [--option <text>] [--default <text>] [--recommendation <text>] [--artifact <id>]
   types: text, single-choice, multiple-choice, yes-no, number; repeat --option/--default
+    controls in the --artifact (html): choosing an option sets values, the page applies them live
+    [--set '<option>=<control>=<value>']   repeatable; controls are --css-var, @attr (data-kim-attr), #slot (data-kim-text)
+    [--bind <--css-var> --unit px --min N --max N]   a number question's slider; [--bind <#slot>] a text question
   question add|update <session> [question] --json '<object>'  (use --json - for stdin)
   question delete|focus|reorder <session> <question> [--position N]
   ask --title <text> --json <questions|-> | --prompt <text> … [--idle MS] [--timeout MS]

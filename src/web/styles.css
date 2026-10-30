@@ -772,6 +772,16 @@ h3 {
   font-size: 12px;
 }
 
+/* A number bound to a CSS variable: dragging updates the mockup live. */
+.control-slider {
+  display: block;
+  width: 100%;
+  /* As wide as the number box below it. */
+  max-width: 260px;
+  margin: 0 0 10px;
+  accent-color: var(--blue);
+}
+
 .answer-row {
   display: grid;
   gap: 10px;

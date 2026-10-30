@@ -18,6 +18,9 @@ const question = (id: string, prompt: string, position: number) => ({
   position,
   artifactId: null,
   optionArtifacts: {},
+  optionValues: {},
+  control: null,
+  unit: null,
   answer: null,
 });
 

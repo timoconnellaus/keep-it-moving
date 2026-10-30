@@ -19,6 +19,12 @@ import {
   type QuestionView,
   type SessionView,
 } from "../shared/schema.js";
+import {
+  boundControls,
+  controlKind,
+  isBound,
+  missingControls,
+} from "../shared/bindings.js";
 import { projectName } from "../shared/remote.js";
 import { artifactFormat } from "../shared/workspace.js";
 import { first, type Row, type Sql } from "./sql.js";
@@ -72,7 +78,25 @@ const ATTRIBUTION_COLUMNS = [
   ["chat_messages", "author_email"],
   // When an agent's hook last asked for answers, which keeps it live.
   ["sessions", "hook_seen_at"],
+  // A question's controls in its artifact (optionValues, control, unit), as JSON.
+  ["questions", "binding"],
 ] as const;
+
+type Binding = Pick<QuestionView, "optionValues" | "control" | "unit">;
+
+function readBinding(column: unknown): Binding {
+  const stored = column ? json<Partial<Binding>>(column) : {};
+  return {
+    optionValues: stored.optionValues ?? {},
+    control: stored.control ?? null,
+    unit: stored.unit ?? null,
+  };
+}
+const writeBinding = (binding: Binding) =>
+  boundControls(binding).length ? JSON.stringify(binding) : null;
+
+const undeclared = (title: string, missing: string[]) =>
+  `artifact "${title}" doesn't declare ${missing.join(", ")}. Define a variable (--accent: …), use data-kim-nav for @nav, or mark an element data-kim-text="headline" for #headline`;
 
 /** Just enough to catch a typo; Google checks the address at sign-in. */
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -455,6 +479,7 @@ export class InterviewStore {
         position: Number(row.position),
         artifactId: optional(row.artifact_id),
         optionArtifacts: json<Record<string, string>>(row.option_artifacts),
+        ...readBinding(row.binding),
         answer:
           row.revision === null
             ? null
@@ -652,8 +677,19 @@ export class InterviewStore {
         input.optionArtifacts ?? {},
         input.options,
       );
+      const binding = {
+        optionValues: input.optionValues ?? {},
+        control: input.control ?? null,
+        unit: input.unit ?? null,
+      };
+      this.validateBinding(sessionId, {
+        ...input,
+        ...binding,
+        artifactId: input.artifactId ?? null,
+      });
       return {
         ...input,
+        binding,
         default: normalizeDefault(
           input.type,
           input.options,
@@ -676,8 +712,8 @@ export class InterviewStore {
         const id = crypto.randomUUID();
         const time = now();
         this.sql.all(
-          `INSERT INTO questions (id, session_id, type, prompt, recommendation, default_answer, options, artifact_id, option_artifacts, min, max, step, position, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO questions (id, session_id, type, prompt, recommendation, default_answer, options, artifact_id, option_artifacts, binding, min, max, step, position, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           id,
           sessionId,
           input.type,
@@ -687,6 +723,7 @@ export class InterviewStore {
           JSON.stringify(input.options),
           input.artifactId ?? null,
           JSON.stringify(input.optionArtifacts ?? {}),
+          writeBinding(input.binding),
           input.min ?? null,
           input.max ?? null,
           input.step ?? null,
@@ -742,8 +779,28 @@ export class InterviewStore {
       String,
     );
     this.validateLinks(sessionId, artifactId, optionArtifacts, options);
+    const stored = readBinding(current.binding);
+    const binding = {
+      optionValues: Object.fromEntries(
+        Object.entries(parsed.optionValues ?? stored.optionValues).filter(
+          ([label]) => options.includes(label),
+        ),
+      ),
+      control: parsed.control === undefined ? stored.control : parsed.control,
+      unit: parsed.unit === undefined ? stored.unit : parsed.unit,
+    };
+    const min = keep(parsed.min, current.min, Number);
+    const max = keep(parsed.max, current.max, Number);
+    this.validateBinding(sessionId, {
+      type,
+      options,
+      artifactId,
+      min,
+      max,
+      ...binding,
+    });
     this.sql.all(
-      `UPDATE questions SET type=?, prompt=?, recommendation=?, default_answer=?, options=?, artifact_id=?, option_artifacts=?, min=?, max=?, step=?, position=?, updated_at=? WHERE id=?`,
+      `UPDATE questions SET type=?, prompt=?, recommendation=?, default_answer=?, options=?, artifact_id=?, option_artifacts=?, binding=?, min=?, max=?, step=?, position=?, updated_at=? WHERE id=?`,
       type,
       parsed.prompt ?? String(current.prompt),
       keep(parsed.recommendation, current.recommendation, String),
@@ -751,8 +808,9 @@ export class InterviewStore {
       JSON.stringify(options),
       artifactId,
       JSON.stringify(optionArtifacts),
-      keep(parsed.min, current.min, Number),
-      keep(parsed.max, current.max, Number),
+      writeBinding(binding),
+      min,
+      max,
       keep(parsed.step, current.step, Number),
       parsed.position ?? Number(current.position),
       now(),
@@ -943,7 +1001,14 @@ export class InterviewStore {
       });
     }
     if (parsed.show) this.showArtifact(sessionId, artifactId, "agent");
-    return this.artifactView(sessionId, artifactId);
+    const warnings =
+      parsed.content === undefined
+        ? []
+        : this.bindingWarnings(sessionId, artifactId);
+    return {
+      ...this.artifactView(sessionId, artifactId),
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
 
   deleteArtifact(sessionId: string, artifactId: string): void {
@@ -1056,6 +1121,103 @@ export class InterviewStore {
       if (!this.liveArtifact(sessionId, id))
         throw new Error(`No artifact ${id} in this session`);
     }
+  }
+
+  /**
+   * Checks a question's binding: its artifact is html and declares every
+   * control, and the controls suit the question type.
+   */
+  private validateBinding(
+    sessionId: string,
+    question: Binding & {
+      type: QuestionView["type"];
+      options: string[];
+      artifactId: string | null;
+      min?: number | null | undefined;
+      max?: number | null | undefined;
+    },
+  ): void {
+    const controls = boundControls(question);
+    if (!controls.length) {
+      if (question.unit) throw new Error("unit needs a control to apply to");
+      return;
+    }
+    if (!question.artifactId)
+      throw new Error(
+        "optionValues and control need artifactId: the html artifact they change",
+      );
+    const row = this.liveArtifact(sessionId, question.artifactId);
+    if (!row)
+      throw new Error(`No artifact ${question.artifactId} in this session`);
+    const artifact = this.mapArtifact(row);
+    if (artifact.format !== "html")
+      throw new Error(
+        `Artifact "${artifact.title}" is ${artifact.format}; only html artifacts have controls`,
+      );
+    const choices =
+      question.type === "yes-no"
+        ? ["Yes", "No"]
+        : question.type === "single-choice" ||
+            question.type === "multiple-choice"
+          ? question.options
+          : null;
+    if (choices) {
+      if (question.control)
+        throw new Error(
+          "control is for number and text questions; give a choice optionValues",
+        );
+      for (const label of Object.keys(question.optionValues))
+        if (!choices.includes(label))
+          throw new Error(
+            `optionValues names "${label}", which is not an option`,
+          );
+    } else {
+      if (Object.keys(question.optionValues).length)
+        throw new Error("optionValues is for choice questions");
+      const kind = controlKind(question.control!);
+      if (question.type === "number" && kind !== "variable")
+        throw new Error(
+          `A number question sets a CSS variable such as --radius, not ${question.control}`,
+        );
+      if (
+        question.type === "number" &&
+        (question.min == null || question.max == null)
+      )
+        throw new Error(
+          `A number question bound to ${question.control} needs min and max, for its slider`,
+        );
+      if (question.type === "text" && kind !== "text")
+        throw new Error(
+          `A text question sets a text slot such as #headline, not ${question.control}`,
+        );
+      if (question.type === "text" && question.unit)
+        throw new Error("unit is for number questions");
+    }
+    const missing = missingControls(artifact.content!, controls);
+    if (missing.length) throw new Error(undeclared(artifact.title, missing));
+  }
+
+  /** Bound questions an edited artifact no longer serves, as warnings. */
+  private bindingWarnings(sessionId: string, artifactId: string): string[] {
+    const artifact = this.artifactView(sessionId, artifactId);
+    return this.getSession(sessionId, "")
+      .questions.filter(
+        (question) => question.artifactId === artifactId && isBound(question),
+      )
+      .flatMap((question) => {
+        const where = `Question "${question.prompt}"`;
+        if (artifact.format !== "html")
+          return [
+            `${where} sets controls, but "${artifact.title}" is no longer html`,
+          ];
+        const missing = missingControls(
+          artifact.content!,
+          boundControls(question),
+        );
+        return missing.length
+          ? [`${where}: ${undeclared(artifact.title, missing)}`]
+          : [];
+      });
   }
 
   undeliveredEvents(sessionId: string): InterviewEvent[] {
