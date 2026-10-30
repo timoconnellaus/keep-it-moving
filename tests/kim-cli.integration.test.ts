@@ -17,6 +17,8 @@ const tsx = new URL("../node_modules/tsx/dist/cli.mjs", import.meta.url)
   .pathname;
 const cli = new URL("../src/cli.ts", import.meta.url).pathname;
 const repo = new URL("..", import.meta.url).pathname;
+/** A PNG's signature and a little more: the CLI saves the bytes as they come. */
+const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
 
 function tempDir() {
   const dir = mkdtempSync(join(tmpdir(), "interviewer-kim-test-"));
@@ -329,7 +331,6 @@ describe("the CLI package", () => {
       "package/LICENSE",
       "package/README.md",
       "package/build.json",
-      "package/dist/browser.js",
       "package/dist/checkbox.js",
       "package/dist/cli.js",
       "package/dist/hook.js",
@@ -413,8 +414,24 @@ describe("the inbox, as the assignee's agent", () => {
       },
     ]);
     store.assignSession(session.id, "bob@example.com", "Ann");
+    /** The Worker renders screenshots; this stands in for its reply. */
+    const screenshots: string[] = [];
+    let screenshot = () =>
+      new Response(PNG, {
+        headers: {
+          "content-type": "image/png",
+          "x-kim-width": "390",
+          "x-kim-height": "844",
+          "x-kim-revision": "1",
+          "x-kim-cache": "miss",
+        },
+      });
     const served = await serveHarness(harness, (request) => {
       const url = new URL(request.url);
+      if (url.pathname.endsWith("/screenshot")) {
+        screenshots.push(`${url.pathname}${url.search}`);
+        return screenshot();
+      }
       const inbox = /^\/api\/sessions\/inbox\/(.+)$/.exec(url.pathname);
       if (!inbox) return harness.app.fetch(request);
       // A wait's socket is in the user's own hub, which this one stands in for.
@@ -436,7 +453,18 @@ describe("the inbox, as the assignee's agent", () => {
     });
     const run = (...args: string[]) =>
       kim(served.address, ...args).then(({ stdout }) => JSON.parse(stdout));
-    return { ...harness, session, mockup, questions, run, ...served };
+    return {
+      ...harness,
+      session,
+      mockup,
+      questions,
+      run,
+      screenshots,
+      screenshotReply: (reply: () => Response) => {
+        screenshot = reply;
+      },
+      ...served,
+    };
   }
 
   it("shows the interview with commands for what isn't inline", async () => {
@@ -527,9 +555,8 @@ describe("the inbox, as the assignee's agent", () => {
     ).rejects.toMatchObject({ stderr: expect.stringContaining("error") });
   });
 
-  it("saves an artifact as served, with answers applied, and says it can't screenshot without a browser", async () => {
-    const { run, store, session, mockup, questions, address } =
-      await inboxHarness();
+  it("saves an artifact as served, with answers applied", async () => {
+    const { run, store, session, mockup, questions } = await inboxHarness();
     store.answerQuestion(session.id, questions[1]!.id, { answer: "Welcome" });
     const file = join(tempDir(), "layout.html");
     const saved = await run(
@@ -543,17 +570,49 @@ describe("the inbox, as the assignee's agent", () => {
     expect(saved).toMatchObject({ id: mockup.id, revision: 1, file });
     expect(saved.content).toBeUndefined();
     expect(readFileSync(file, "utf8")).toContain(">Welcome</h1>");
-    await expect(
-      exec(
-        process.execPath,
-        [tsx, cli, "inbox", "screenshot", session.token, mockup.id],
+  });
+
+  it("saves the screenshot the service renders, and relays a refusal", async () => {
+    const { run, session, mockup, screenshots, screenshotReply, address } =
+      await inboxHarness();
+    const file = join(tempDir(), "phone.png");
+    const shot = await run(
+      "inbox",
+      "screenshot",
+      session.token,
+      mockup.id,
+      "--width",
+      "390",
+      "--full-page",
+      "--out",
+      file,
+    );
+    expect(shot).toEqual({
+      file,
+      width: 390,
+      height: 844,
+      revision: 1,
+      cached: false,
+    });
+    expect(readFileSync(file)).toEqual(Buffer.from(PNG));
+    expect(screenshots).toEqual([
+      `/api/sessions/inbox/${session.token}/artifacts/${mockup.id}/screenshot?width=390&fullPage=1`,
+    ]);
+    screenshotReply(() =>
+      Response.json(
         {
-          env: { ...env(address), CHROME_PATH: "/nowhere/chrome" },
-          cwd: repo,
+          error: "Screenshots of artifacts are a Pro feature.",
+          code: "plan_limit",
+          feature: "screenshot",
+          upgradeUrl: "https://kim.test/pricing",
         },
+        { status: 402 },
       ),
+    );
+    await expect(
+      kim(address, "inbox", "screenshot", session.token, mockup.id),
     ).rejects.toMatchObject({
-      stderr: expect.stringContaining("CHROME_PATH is /nowhere/chrome"),
+      stderr: expect.stringMatching(/Pro feature[\s\S]*\/pricing/),
     });
   });
 

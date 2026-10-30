@@ -299,6 +299,7 @@ ${card(
   [
     "No limit on live interviews",
     "Assign interviews to other people to answer",
+    "Your agent can screenshot mockups sent to you",
     "Everything in Free",
   ],
   proAction,

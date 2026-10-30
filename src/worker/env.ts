@@ -1,5 +1,7 @@
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+import type { BrowserWorker } from "@cloudflare/puppeteer";
 import type { InterviewHub } from "./hub.js";
+import type { ScreenshotBudget } from "./screenshotBudget.js";
 
 export interface Env {
   HUB: DurableObjectNamespace<InterviewHub>;
@@ -7,6 +9,12 @@ export interface Env {
   OAUTH_KV: KVNamespace;
   OAUTH_PROVIDER: OAuthHelpers;
   ASSETS: Fetcher;
+  /** Cloudflare's headless browsers (Browser Run), for `kim inbox screenshot`. */
+  BROWSER: BrowserWorker;
+  /** Rendered screenshots, kept by what they show; a lifecycle rule expires them. */
+  SCREENSHOTS: R2Bucket;
+  /** The one ledger of browser time and renders, so screenshots stay free. */
+  SCREENSHOT_BUDGET: DurableObjectNamespace<ScreenshotBudget>;
   /** The public origin, e.g. https://keep-it-moving.zerobsai.com. */
   PUBLIC_URL: string;
   /**

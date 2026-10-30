@@ -30,7 +30,7 @@ export interface PlanRefusal {
   error: string;
   code: typeof PLAN_LIMIT;
   plan: Plan;
-  feature: "live" | "assign";
+  feature: "live" | "assign" | "screenshot";
   upgradeUrl: string;
   /** For `live`: the interviews holding the Free plan's places. */
   live?: LiveInterview[];
@@ -63,6 +63,22 @@ export function assignRefusal(baseUrl: string): PlanRefusal {
     code: PLAN_LIMIT,
     plan: "free",
     feature: "assign",
+    upgradeUrl,
+  };
+}
+
+/**
+ * Screenshots render in Cloudflare's browsers, which cost by the hour, so
+ * they are for whoever asks being on Pro (or Team); the page itself is
+ * still a `kim inbox artifact` away.
+ */
+export function screenshotRefusal(baseUrl: string): PlanRefusal {
+  const upgradeUrl = pricingUrl(baseUrl);
+  return {
+    error: `Screenshots of artifacts are a Pro feature. Save the page itself with \`kim inbox artifact <interview> <artifact> --out <file>\`, or upgrade to Pro: ${upgradeUrl}`,
+    code: PLAN_LIMIT,
+    plan: "free",
+    feature: "screenshot",
     upgradeUrl,
   };
 }
