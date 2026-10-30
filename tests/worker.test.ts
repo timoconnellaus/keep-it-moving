@@ -14,8 +14,48 @@ import type { Env } from "../src/worker/env.js";
 import worker from "../src/worker/index.js";
 import { link } from "../src/worker/links.js";
 import { plans, updatePlan } from "../src/worker/plans.js";
+import { MONTH_MS, screenshotLedger } from "../src/worker/screenshotBudget.js";
 import { STRIPE_API } from "../src/worker/stripe.js";
 import { ACCEPTED_SOCKET, hubHarness } from "./helpers/harness.js";
+import { nodeSql } from "./helpers/nodeSql.js";
+
+/** Cloudflare's browsers, faked: what each render did, and a way to make one fail. */
+const browsers = vi.hoisted(() => {
+  const state = {
+    log: [] as string[],
+    failContent: false,
+    launches: 0,
+    launch: async () => {
+      state.launches++;
+      return {
+        newPage: async () => ({
+          setDefaultTimeout: () => undefined,
+          setViewport: async ({
+            width,
+            height,
+          }: {
+            width: number;
+            height: number;
+          }) => void state.log.push(`viewport ${width}x${height}`),
+          setContent: async (html: string) => {
+            if (state.failContent) throw new Error("Navigation timeout");
+            state.log.push(`content ${/<h1>Hello<\/h1>/.test(html)}`);
+          },
+          goto: async (url: string) =>
+            void state.log.push(`goto ${url.slice(0, 19)}`),
+          evaluate: async () => 2_400,
+          screenshot: async () =>
+            new Uint8Array([137, 80, 78, 71, state.launches]),
+        }),
+        close: async () => void state.log.push("close"),
+      };
+    },
+  };
+  return state;
+});
+vi.mock("@cloudflare/puppeteer", () => ({
+  default: { launch: () => browsers.launch() },
+}));
 
 const ORIGIN = "https://kim.test";
 const OWNER = "owner@example.com";
@@ -117,6 +157,13 @@ function setup() {
     toString: () => name,
   });
   const kv = memoryKv();
+  const ledgerSql = nodeSql();
+  closers.push(() => ledgerSql.close());
+  const ledger = screenshotLedger(ledgerSql);
+  const r2 = new Map<
+    string,
+    { bytes: Uint8Array; meta: Record<string, string> }
+  >();
   const env = {
     PUBLIC_URL: ORIGIN,
     OWNER_EMAIL: OWNER,
@@ -128,6 +175,19 @@ function setup() {
       fetch: async (request: Request) =>
         new Response(`asset ${new URL(request.url).pathname}`),
     },
+    BROWSER: {},
+    SCREENSHOTS: {
+      get: async (key: string) => {
+        const kept = r2.get(key);
+        return kept ? { body: kept.bytes, customMetadata: kept.meta } : null;
+      },
+      put: async (
+        key: string,
+        value: Uint8Array,
+        options: { customMetadata: Record<string, string> },
+      ) => void r2.set(key, { bytes: value, meta: options.customMetadata }),
+    },
+    SCREENSHOT_BUDGET: { idFromName, get: () => ledger },
     HUB: {
       idFromName,
       get: ({ name }: { name: string }) => {
@@ -249,7 +309,19 @@ function setup() {
       status: "active",
     }));
 
-  return { env, kv, hubs, call, startAndReturn, signIn, cliToken, bearer, pro };
+  return {
+    env,
+    kv,
+    hubs,
+    ledger,
+    r2,
+    call,
+    startAndReturn,
+    signIn,
+    cliToken,
+    bearer,
+    pro,
+  };
 }
 
 /** The Set-Cookie values, as the browser would send them back. */
@@ -1006,6 +1078,206 @@ describe("interviews sent to you, through your agent", () => {
         questions: [expect.objectContaining({ prompt: "Budget?", number: 3 })],
       }),
     ]);
+  });
+});
+
+describe("screenshots through the Worker", () => {
+  let people = 0;
+  const person = (name: string) => `${name}.shot${++people}@example.com`;
+  afterEach(() => {
+    browsers.log.length = 0;
+    browsers.failContent = false;
+  });
+
+  /** Ann's interview with a mockup, sent to Bob, who is on Pro unless said otherwise. */
+  async function mockupSent(options: { bobOnPro?: boolean } = {}) {
+    const s = setup();
+    const annEmail = person("ann");
+    const bobEmail = person("bob");
+    await s.pro(annEmail);
+    if (options.bobOnPro !== false) await s.pro(bobEmail);
+    const as = async (email: string) => {
+      const token = await s.cliToken(await s.signIn(email));
+      return (path: string, init: RequestInit = {}) =>
+        s.call(path, {
+          ...init,
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+        });
+    };
+    const annAgent = await as(annEmail);
+    const bobAgent = await as(bobEmail);
+    const session = (await (
+      await annAgent("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ title: "Venue survey" }),
+      })
+    ).json()) as { id: string; token: string };
+    const mockup = (await (
+      await annAgent(`/api/sessions/${session.id}/artifacts`, {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "mockup",
+          title: "Layout A",
+          content: "<!doctype html><h1>Hello</h1>",
+        }),
+      })
+    ).json()) as { id: string };
+    await annAgent(`/api/sessions/${session.id}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ email: bobEmail }),
+    });
+    const shot = `/api/sessions/inbox/${session.token}/artifacts/${mockup.id}/screenshot`;
+    return { ...s, as, annAgent, bobAgent, bobEmail, session, mockup, shot };
+  }
+
+  it("renders the artifact as served at the asked width, then serves it again from the cache", async () => {
+    const { bobAgent, ledger, shot } = await mockupSent();
+    const launches = browsers.launches;
+    const first = await bobAgent(`${shot}?width=390&fullPage=1`);
+    expect(first.status).toBe(200);
+    expect(first.headers.get("content-type")).toBe("image/png");
+    expect(first.headers.get("x-kim-cache")).toBe("miss");
+    expect(first.headers.get("x-kim-width")).toBe("390");
+    expect(first.headers.get("x-kim-height")).toBe("2400");
+    const png = new Uint8Array(await first.arrayBuffer());
+    expect([...png.slice(0, 4)]).toEqual([137, 80, 78, 71]);
+    expect(browsers.log).toEqual([
+      expect.stringMatching(/^viewport 390x\d+$/),
+      "content true",
+      "viewport 390x2400",
+      "close",
+    ]);
+    expect(browsers.launches).toBe(launches + 1);
+    const used = ledger.used(Date.now());
+    // The same again opens no browser and counts against nothing.
+    const again = await bobAgent(`${shot}?width=390&fullPage=1`);
+    expect(again.headers.get("x-kim-cache")).toBe("hit");
+    expect(again.headers.get("x-kim-height")).toBe("2400");
+    expect(new Uint8Array(await again.arrayBuffer())).toEqual(png);
+    expect(browsers.launches).toBe(launches + 1);
+    expect(ledger.used(Date.now())).toBe(used);
+    // Another width is another render.
+    expect(
+      (await bobAgent(`${shot}?width=1280`)).headers.get("x-kim-cache"),
+    ).toBe("miss");
+    expect(browsers.launches).toBe(launches + 2);
+  });
+
+  it("lets in only whoever it was sent to, like the artifact itself", async () => {
+    const { as, annAgent, bobAgent, pro, shot } = await mockupSent();
+    const carolEmail = person("carol");
+    await pro(carolEmail);
+    const carol = await as(carolEmail);
+    const launches = browsers.launches;
+    expect((await carol(shot)).status).toBe(403);
+    expect((await annAgent(shot)).status).toBe(403);
+    expect(browsers.launches).toBe(launches);
+    expect(
+      (await bobAgent(shot.replace(/artifacts\/[^/]+/, "artifacts/nope")))
+        .status,
+    ).not.toBe(200);
+  });
+
+  it("refuses Free as a plan limit, pointing at /pricing and kim inbox artifact", async () => {
+    const { bobAgent, shot } = await mockupSent({ bobOnPro: false });
+    const launches = browsers.launches;
+    const refused = await bobAgent(shot);
+    expect(refused.status).toBe(402);
+    expect(await refused.json()).toMatchObject({
+      code: "plan_limit",
+      feature: "screenshot",
+      upgradeUrl: `${ORIGIN}/pricing`,
+      error: expect.stringContaining("kim inbox artifact"),
+    });
+    expect(browsers.launches).toBe(launches);
+  });
+
+  it("pauses new renders once the month's browser time reaches 9 hours, but still serves the cache", async () => {
+    const { bobAgent, ledger, shot } = await mockupSent();
+    expect((await bobAgent(shot)).status).toBe(200);
+    const begun = ledger.begin("someone@example.com");
+    if (!begun.ok) throw new Error("expected a place");
+    ledger.end(begun.lease, MONTH_MS);
+    const launches = browsers.launches;
+    const paused = await bobAgent(`${shot}?width=834`);
+    expect(paused.status).toBe(503);
+    expect(await paused.json()).toMatchObject({
+      code: "screenshot_paused",
+      error: expect.stringMatching(
+        /paused until next month.*kim inbox artifact/s,
+      ),
+    });
+    expect(browsers.launches).toBe(launches);
+    expect((await bobAgent(shot)).headers.get("x-kim-cache")).toBe("hit");
+  });
+
+  it("closes the browser when the render fails, and charges the time it had", async () => {
+    const { bobAgent, ledger, shot } = await mockupSent();
+    browsers.failContent = true;
+    const used = ledger.used(Date.now());
+    const failed = await bobAgent(shot);
+    expect(failed.status).toBe(502);
+    expect((await failed.json()).error).toMatch(/Navigation timeout/);
+    expect(browsers.log.at(-1)).toBe("close");
+    expect(ledger.used(Date.now())).toBeGreaterThanOrEqual(used);
+    // Its place is free again.
+    browsers.failContent = false;
+    expect((await bobAgent(shot)).status).toBe(200);
+  });
+});
+
+describe("the screenshot ledger", () => {
+  const ledgerAt = () => screenshotLedger(nodeSql());
+  const NOW = Date.UTC(2026, 9, 30, 12);
+  const DAY = 86_400_000;
+
+  it("allows a person 100 renders a UTC day", () => {
+    const ledger = ledgerAt();
+    for (let index = 0; index < 100; index++) {
+      const begun = ledger.begin("Bob@example.com", NOW);
+      if (!begun.ok) throw new Error(`refused at ${index}`);
+      ledger.end(begun.lease, 1_000, NOW);
+    }
+    expect(ledger.begin("bob@example.com", NOW)).toEqual({
+      ok: false,
+      refused: "daily",
+    });
+    expect(ledger.begin("carol@example.com", NOW).ok).toBe(true);
+    expect(ledger.begin("bob@example.com", NOW + DAY).ok).toBe(true);
+  });
+
+  it("runs at most three renders at once, and frees a place nobody reported back on", () => {
+    const ledger = ledgerAt();
+    for (let index = 0; index < 3; index++)
+      expect(ledger.begin(`p${index}@example.com`, NOW).ok).toBe(true);
+    expect(ledger.begin("p3@example.com", NOW)).toEqual({
+      ok: false,
+      refused: "busy",
+    });
+    // Two minutes on, the three are presumed gone, each charged two minutes.
+    expect(ledger.begin("p3@example.com", NOW + 120_000).ok).toBe(true);
+    expect(ledger.used(NOW + 120_000)).toBe(3 * 120_000);
+  });
+
+  it("refuses at 9 hours over the last 32 days, and lets them roll off", () => {
+    const ledger = ledgerAt();
+    const begun = ledger.begin("bob@example.com", NOW);
+    if (!begun.ok) throw new Error("expected a place");
+    ledger.end(begun.lease, MONTH_MS - 1, NOW);
+    expect(ledger.begin("bob@example.com", NOW + 1).ok).toBe(true);
+    const more = ledger.begin("carol@example.com", NOW + 2);
+    if (!more.ok) throw new Error("expected a place");
+    ledger.end(more.lease, 5_000, NOW + 2);
+    expect(ledger.begin("dave@example.com", NOW + 3)).toEqual({
+      ok: false,
+      refused: "paused",
+    });
+    // Across a month boundary it is still counted; 32 days on it isn't.
+    expect(ledger.begin("dave@example.com", NOW + 20 * DAY).ok).toBe(false);
+    expect(ledger.begin("dave@example.com", NOW + 32 * DAY).ok).toBe(true);
   });
 });
 
