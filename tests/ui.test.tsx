@@ -53,6 +53,7 @@ const state: SessionView = {
   stage: null,
   stageVisible: false,
   stageVisibilitySource: null,
+  positions: {},
   project: {
     id: "p1",
     key: "github.com/o/interviewer",
@@ -647,88 +648,33 @@ describe("questionnaire UI seam", () => {
         .mocked(fetch)
         .mock.calls.filter(([url]) => String(url).endsWith(suffix))
         .map(([, init]) => JSON.parse(String(init?.body)));
-    const stagePosts = () => posts("/stage");
-
-    it("keeps the workspace closed until someone opens it", async () => {
-      const closed = workspace();
-      closed.stageVisible = false;
-      serve(closed);
-      render(<App />);
-      await screen.findByText("Choose a direction");
-      expect(screen.queryByRole("tab")).not.toBeInTheDocument();
-      const toggle = screen.getByRole("button", { name: /Workspace/ });
-      expect(toggle).toHaveAttribute("aria-pressed", "false");
-      fireEvent.click(toggle);
-      await vi.waitFor(() =>
-        expect(posts("/stage/visibility")).toEqual([{ visible: true }]),
+    const frame = (title: string) =>
+      [...document.querySelectorAll(".react-flow__node-frame .frame")].find(
+        (node) => node.querySelector(".frame-name")?.textContent === title,
+      ) as HTMLElement | undefined;
+    // React Flow measures nodes and the pane; jsdom has no layout, so it gets an observer that never fires.
+    beforeEach(() => {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
       );
     });
-
-    it("closes the workspace from its own bar", async () => {
-      serve(workspace());
-      render(<App />);
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Hide the workspace" }),
-      );
-      await vi.waitFor(() =>
-        expect(posts("/stage/visibility")).toEqual([{ visible: false }]),
-      );
-    });
-
-    it("shows the plan beside the questions and switches items for everyone", async () => {
-      serve(workspace());
-      render(<App />);
-      expect(
-        await screen.findByRole("columnheader", { name: "Area" }),
-      ).toBeInTheDocument();
-      expect(screen.getByRole("tab", { name: "Plan Plan" })).toHaveAttribute(
-        "aria-selected",
-        "true",
-      );
-      fireEvent.click(screen.getByRole("tab", { name: "Mockup Layout A" }));
-      await vi.waitFor(() =>
-        expect(stagePosts()).toEqual([{ artifactId: "a" }]),
-      );
-    });
-
-    it("loads a staged mockup from its own sandboxed URL", async () => {
-      const staged = workspace();
-      staged.stage = { artifactId: "a", source: "agent" };
-      serve(staged);
-      render(<App />);
-      const frame = await screen.findByTitle("Layout A");
-      expect(frame.getAttribute("src")).toMatch(
-        /\/artifacts\/a\/view\?rev=1&theme=light$/,
-      );
-      // The server's CSP sandbox isolates it; embedded browsers can refuse
-      // to load frames that also carry the sandbox attribute.
-      expect(frame).not.toHaveAttribute("sandbox");
-      expect(screen.getByText("Sidebar navigation")).toBeInTheDocument();
-      expect(screen.getByText("via agent")).toBeInTheDocument();
-    });
-
-    it("shows archify diagrams compactly, and in the full viewer when expanded", async () => {
-      const session = workspace();
-      session.artifacts.push(
-        artifact({ id: "d", kind: "diagram", title: "Sync architecture" }),
-      );
-      session.stage = { artifactId: "d", source: "agent" };
-      serve(session);
-      render(<App />);
-      const compact = await screen.findByTitle("Sync architecture");
-      expect(compact.getAttribute("src")).toMatch(/theme=light&embed=1$/);
-      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
-      const full = screen.getByTitle("Sync architecture");
-      expect(full.getAttribute("src")).toMatch(
-        /\/artifacts\/d\/view\?rev=1&theme=light$/,
-      );
-      // The stylesheet hides the questions for an expanded workspace.
-      expect(full.closest(".workspace")).toHaveClass("expanded");
-    });
-
-    it("previews a bound option in the staged mockup on hover, and keeps a pick", async () => {
-      const session = workspace();
-      session.stage = { artifactId: "a", source: "agent" };
+    const layoutQuestion = (session: SessionView) => {
+      session.questions[0] = {
+        ...session.questions[0]!,
+        prompt: "Which layout?",
+        options: ["Sidebar", "Board"],
+        optionArtifacts: { Sidebar: "a", Board: "b" },
+        default: ["Sidebar"],
+        answer: null,
+      };
+      return session;
+    };
+    const fontQuestion = (session: SessionView) => {
       session.questions[0] = {
         ...session.questions[0]!,
         prompt: "Display font?",
@@ -741,10 +687,111 @@ describe("questionnaire UI seam", () => {
         default: null,
         answer: null,
       };
+      return session;
+    };
+
+    it("keeps the canvas closed until someone opens it", async () => {
+      const closed = workspace();
+      closed.stageVisible = false;
+      serve(closed);
+      const { container } = render(<App />);
+      await screen.findByText("Choose a direction");
+      expect(container.querySelector(".react-flow")).toBeNull();
+      const toggle = screen.getByRole("button", { name: /Canvas/ });
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(toggle);
+      await vi.waitFor(() =>
+        expect(posts("/stage/visibility")).toEqual([{ visible: true }]),
+      );
+    });
+
+    it("lays every artifact out as a frame, the plan first and a row per question", async () => {
+      serve(layoutQuestion(workspace()));
+      const { container } = render(<App />);
+      await screen.findByText("Which layout?");
+      await vi.waitFor(() => expect(frame("Layout B")).toBeDefined());
+      expect(
+        [...container.querySelectorAll(".row-label")].map(
+          (row) => row.textContent,
+        ),
+      ).toEqual(["Plankept by the agent", "Question 1Which layout?"]);
+      // The plan renders as a page; its table is there to read.
+      expect(within(frame("Plan")!).getByText("Area").tagName).toBe("TH");
+      const node = (id: string) =>
+        (
+          container.querySelector(
+            `.react-flow__node[data-id="${id}"]`,
+          ) as HTMLElement
+        ).style.transform.replace(/,\s*/, ", ");
+      expect(node("a")).toBe("translate(0px, 1460px)");
+      expect(node("b")).toBe("translate(1400px, 1460px)");
+    });
+
+    it("puts a frame where someone moved it, and the rest where they were", async () => {
+      const session = layoutQuestion(workspace());
+      session.positions = { b: { x: 300, y: -900 } };
       serve(session);
       const { container } = render(<App />);
-      const frame = (await screen.findByTitle("Layout A")) as HTMLIFrameElement;
-      const sent = vi.spyOn(frame.contentWindow!, "postMessage");
+      await vi.waitFor(() => expect(frame("Layout B")).toBeDefined());
+      const node = (id: string) =>
+        (
+          container.querySelector(
+            `.react-flow__node[data-id="${id}"]`,
+          ) as HTMLElement
+        ).style.transform.replace(/,\s*/, ", ");
+      expect(node("b")).toBe("translate(300px, -900px)");
+      expect(node("a")).toBe("translate(0px, 1460px)");
+    });
+
+    /** Without the plan, the mockups are the first row, in view in jsdom's unsized canvas. */
+    const withoutPlan = (session: SessionView) => {
+      session.artifacts = session.artifacts.filter(
+        (item) => item.id !== "plan",
+      );
+      return session;
+    };
+
+    it("loads a mockup frame from its own sandboxed URL", async () => {
+      serve(withoutPlan(layoutQuestion(workspace())));
+      render(<App />);
+      await vi.waitFor(() =>
+        expect(frame("Layout A")?.querySelector("iframe")).toBeTruthy(),
+      );
+      const iframe = frame("Layout A")!.querySelector("iframe")!;
+      expect(iframe.getAttribute("src")).toMatch(
+        /\/artifacts\/a\/view\?rev=1&theme=light$/,
+      );
+      // The server's CSP sandbox isolates it; embedded browsers can refuse
+      // to load frames that also carry the sandbox attribute.
+      expect(iframe).not.toHaveAttribute("sandbox");
+    });
+
+    it("lights up the frame of the option under the pointer, and marks the one chosen", async () => {
+      serve(layoutQuestion(workspace()));
+      render(<App />);
+      await vi.waitFor(() => expect(frame("Layout B")).toBeDefined());
+      expect(frame("Layout A")).toHaveClass("picked");
+      expect(within(frame("Layout A")!).getByText("Selected")).toBeTruthy();
+      const board = screen.getByRole("button", { name: "Board" });
+      fireEvent.mouseEnter(board);
+      await vi.waitFor(() => expect(frame("Layout B")).toHaveClass("hot"));
+      fireEvent.mouseLeave(board);
+      fireEvent.click(board);
+      await vi.waitFor(() => expect(frame("Layout B")).toHaveClass("picked"));
+      expect(frame("Layout B")).not.toHaveClass("hot");
+      expect(frame("Layout A")).not.toHaveClass("picked");
+    });
+
+    it("previews a bound option in the mockup's frame on hover, and keeps a pick", async () => {
+      const session = withoutPlan(fontQuestion(workspace()));
+      session.artifacts = session.artifacts.filter((item) => item.id === "a");
+      serve(session);
+      const { container } = render(<App />);
+      await vi.waitFor(() =>
+        expect(frame("Layout A")?.querySelector("iframe")).toBeTruthy(),
+      );
+      const iframe = frame("Layout A")!.querySelector("iframe")!;
+      const sent = vi.spyOn(iframe.contentWindow!, "postMessage");
       const lastValues = () => sent.mock.calls.at(-1)?.[0];
       const fraunces = screen.getByRole("button", { name: "Fraunces" });
 
@@ -755,6 +802,7 @@ describe("questionnaire UI seam", () => {
           values: { "--font-display": "Fraunces" },
         }),
       );
+      expect(within(frame("Layout A")!).getByText("Fraunces")).toBeTruthy();
       fireEvent.mouseLeave(fraunces);
       await vi.waitFor(() =>
         expect(lastValues()).toEqual({ type: "kim-set", values: {} }),
@@ -773,39 +821,181 @@ describe("questionnaire UI seam", () => {
       expect(posts("/answer")).toEqual([]);
     });
 
-    it("offers visual option cards and links a question to what it is about", async () => {
-      const session = workspace();
-      session.questions[0] = {
-        ...session.questions[0]!,
-        prompt: "Which layout?",
-        options: ["Sidebar", "Board"],
-        optionArtifacts: { Sidebar: "a", Board: "b" },
-        default: ["Sidebar"],
-        artifactId: "plan",
-        answer: null,
-      };
-      serve(session);
-      const { container } = render(<App />);
-      await screen.findByText("Which layout?");
-
-      expect(container.querySelectorAll(".choice-card iframe")).toHaveLength(2);
-      expect(
-        screen.getByRole("button", { name: "Sidebar Recommended" }),
-      ).toHaveAttribute("aria-pressed", "true");
-      fireEvent.click(screen.getByRole("button", { name: "Board" }));
-      expect(screen.getByRole("button", { name: "Board" })).toHaveAttribute(
+    it("compares a bound choice side by side, and picks an option from its copy", async () => {
+      serve(fontQuestion(workspace()));
+      render(<App />);
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Compare side by side" }),
+      );
+      await vi.waitFor(() => expect(frame("Layout A · Inter")).toBeDefined());
+      expect(frame("Layout A · Fraunces")).toBeDefined();
+      fireEvent.click(
+        within(frame("Layout A · Fraunces")!).getByText("Use Fraunces"),
+      );
+      expect(screen.getByRole("button", { name: "Fraunces" })).toHaveAttribute(
         "aria-pressed",
         "true",
       );
-      fireEvent.click(
-        screen.getByRole("button", { name: "View Board in the workspace" }),
-      );
-      fireEvent.click(screen.getByRole("button", { name: "Plan" }));
       await vi.waitFor(() =>
-        expect(stagePosts()).toEqual([
-          { artifactId: "b" },
-          { artifactId: "plan" },
+        expect(
+          within(frame("Layout A · Fraunces")!).getByText("Selected"),
+        ).toBeTruthy(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Hide comparison" }));
+      await vi.waitFor(() => expect(frame("Layout A · Inter")).toBeUndefined());
+    });
+
+    it("opens a frame at full size, with device widths, and backs out with Esc", async () => {
+      serve(layoutQuestion(workspace()));
+      const { container } = render(<App />);
+      await vi.waitFor(() => expect(frame("Layout A")).toBeDefined());
+      fireEvent.click(
+        frame("Layout A")!.querySelector('[aria-label="Preview Layout A"]')!,
+      );
+      console.log(
+        "DBG",
+        frame("Layout A")!.outerHTML.slice(0, 700),
+        (document.querySelector(".react-flow__viewport") as HTMLElement)?.style
+          .transform,
+      );
+      const preview = await screen.findByRole("dialog", {
+        name: "Preview of Layout A",
+      });
+      expect(
+        within(preview).getByRole("button", { name: /Desktop/ }),
+      ).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(within(preview).getByRole("button", { name: /Mobile/ }));
+      expect(
+        within(preview).getByRole("button", { name: /Mobile/ }),
+      ).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(within(preview).getByTitle("Open full screen"));
+      expect(container.querySelector(".preview.full")).not.toBeNull();
+      // Comment mode, then full screen, then the preview itself.
+      fireEvent.keyDown(window, { key: "c" });
+      expect(
+        within(preview).getByRole("button", { name: "Comment" }),
+      ).toHaveAttribute("aria-pressed", "true");
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(
+        within(preview).getByRole("button", { name: "Comment" }),
+      ).toHaveAttribute("aria-pressed", "false");
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(container.querySelector(".preview.full")).toBeNull();
+      // Esc pressed inside the artifact comes up from its frame.
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "kim-key", key: "Escape" },
+          source: preview.querySelector("iframe")!.contentWindow,
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      );
+    });
+
+    it("ignores Esc from a window that isn't one of its frames", async () => {
+      serve(layoutQuestion(workspace()));
+      render(<App />);
+      await vi.waitFor(() => expect(frame("Layout A")).toBeDefined());
+      fireEvent.doubleClick(frame("Layout A")!.querySelector(".frame-label")!);
+      await screen.findByRole("dialog");
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "kim-key", key: "Escape" },
+          source: window,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("pins a comment to a frame and sends it with the message", async () => {
+      serve(layoutQuestion(workspace()));
+      render(<App />);
+      await vi.waitFor(() => expect(frame("Plan")).toBeDefined());
+      fireEvent.click(screen.getByRole("button", { name: /Comment/ }));
+      fireEvent.click(frame("Plan")!.querySelector(".frame-body")!, {
+        clientX: 120,
+        clientY: 80,
+      });
+      expect(
+        await screen.findByText("Pin 1 · page · Plan"),
+      ).toBeInTheDocument();
+      // The pin shows on the frame before it's sent.
+      expect(frame("Plan")!.querySelector(".pin")?.textContent).toBe("1");
+      fireEvent.change(
+        screen.getByRole("textbox", { name: "Message to the agent" }),
+        {
+          target: { value: "Shorter, please" },
+        },
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await vi.waitFor(() =>
+        expect(posts("/chat")).toEqual([
+          {
+            text: "Shorter, please",
+            questionId: null,
+            pin: {
+              artifactId: "plan",
+              element: "page",
+              selector: null,
+              x: 120,
+              y: 80,
+              fx: 0,
+              fy: 0,
+              width: 620,
+            },
+          },
         ]),
+      );
+    });
+
+    it("shows sent pins on their frame and in the chat", async () => {
+      const session = layoutQuestion(workspace());
+      session.chat = [
+        {
+          id: "m1",
+          author: "user",
+          text: "Wider",
+          questionId: null,
+          replyTo: null,
+          delivered: false,
+          createdAt: "",
+          authorEmail: null,
+          pin: {
+            n: 3,
+            artifactId: "a",
+            element: "email field",
+            selector: null,
+            x: 300,
+            y: 450,
+            fx: 0.5,
+            fy: 0.5,
+            width: 1280,
+          },
+        },
+      ];
+      serve(session);
+      render(<App />);
+      expect(
+        await screen.findByText("Pin 3 · email field · Layout A"),
+      ).toBeInTheDocument();
+      await vi.waitFor(() =>
+        expect(frame("Layout A")!.querySelector(".pin")?.textContent).toBe("3"),
+      );
+    });
+
+    it("shows an option's frame from its card", async () => {
+      const session = layoutQuestion(workspace());
+      session.stageVisible = false;
+      serve(session);
+      render(<App />);
+      fireEvent.click(
+        await screen.findByRole("button", { name: "View Board on the canvas" }),
+      );
+      // A closed canvas opens to show it.
+      await vi.waitFor(() =>
+        expect(posts("/stage/visibility")).toEqual([{ visible: true }]),
       );
     });
   });

@@ -4,6 +4,7 @@ import {
   ArtifactInputSchema,
   ChatInputSchema,
   ArtifactPatchSchema,
+  FramePositionSchema,
   normalizeDefault,
   QuestionInputSchema,
   QuestionPatchSchema,
@@ -12,7 +13,9 @@ import {
   type ChatAuthor,
   type ChatMessageView,
   type InterviewEvent,
+  type FramePosition,
   type OriginView,
+  type PinView,
   type ProjectView,
   type SessionSummary,
   type StageSource,
@@ -80,6 +83,8 @@ const ATTRIBUTION_COLUMNS = [
   ["sessions", "hook_seen_at"],
   // A question's controls in its artifact (optionValues, control, unit), as JSON.
   ["questions", "binding"],
+  // A comment's pin on an artifact, as JSON.
+  ["chat_messages", "pin"],
 ] as const;
 
 type Binding = Pick<QuestionView, "optionValues" | "control" | "unit">;
@@ -168,6 +173,10 @@ export class InterviewStore {
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL,
         question_id TEXT, reply_to TEXT, delivered INTEGER NOT NULL DEFAULT 0, event_id INTEGER,
         created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS frame_positions (
+        session_id TEXT NOT NULL, artifact_id TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL,
+        updated_at TEXT NOT NULL, PRIMARY KEY (session_id, artifact_id)
       );
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         endpoint TEXT PRIMARY KEY, created_at TEXT NOT NULL
@@ -493,6 +502,7 @@ export class InterviewStore {
               },
       })),
       artifacts: artifacts.map(this.mapArtifact),
+      positions: this.positions(id, new Set(artifacts.map((row) => row.id))),
       stage: session.stage_artifact_id
         ? {
             artifactId: String(session.stage_artifact_id),
@@ -511,6 +521,42 @@ export class InterviewStore {
     };
   }
 
+  /** Where the user put frames, for artifacts that are still there. */
+  private positions(
+    sessionId: string,
+    live: Set<unknown>,
+  ): Record<string, FramePosition> {
+    return Object.fromEntries(
+      this.sql
+        .all(
+          "SELECT artifact_id, x, y FROM frame_positions WHERE session_id = ?",
+          sessionId,
+        )
+        .filter((row) => live.has(row.artifact_id))
+        .map((row) => [
+          String(row.artifact_id),
+          { x: Number(row.x), y: Number(row.y) },
+        ]),
+    );
+  }
+
+  /** Puts an artifact's frame where the user dragged it, for everyone. */
+  moveFrame(sessionId: string, artifactId: string, input: unknown): void {
+    this.requireSession(sessionId);
+    if (!this.liveArtifact(sessionId, artifactId))
+      throw new Error("Artifact not found");
+    const { x, y } = FramePositionSchema.parse(input);
+    this.sql.all(
+      `INSERT INTO frame_positions (session_id, artifact_id, x, y, updated_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (session_id, artifact_id) DO UPDATE SET x=excluded.x, y=excluded.y, updated_at=excluded.updated_at`,
+      sessionId,
+      artifactId,
+      Math.round(x),
+      Math.round(y),
+      now(),
+    );
+  }
+
   /** The interview's chat thread, oldest first. */
   chat(sessionId: string): ChatMessageView[] {
     return this.sql
@@ -527,6 +573,7 @@ export class InterviewStore {
         delivered: Boolean(row.delivered),
         createdAt: String(row.created_at),
         authorEmail: optional(row.author_email),
+        pin: row.pin ? json<PinView>(row.pin) : null,
       }));
   }
 
@@ -550,6 +597,21 @@ export class InterviewStore {
     const questionId = author === "user" ? (parsed.questionId ?? null) : null;
     const replyTo = author === "agent" ? (parsed.replyTo ?? null) : null;
     if (questionId) this.questionRow(sessionId, questionId);
+    const placed = author === "user" ? (parsed.pin ?? null) : null;
+    if (placed && !this.liveArtifact(sessionId, placed.artifactId))
+      throw new Error(`No artifact ${placed.artifactId} in this session`);
+    // Numbered in the order they're sent, so "pin 3" means the same to everyone.
+    const pin: PinView | null = placed && {
+      n:
+        Number(
+          first(
+            this.sql,
+            "SELECT COUNT(*) n FROM chat_messages WHERE session_id = ? AND pin IS NOT NULL",
+            sessionId,
+          )?.n ?? 0,
+        ) + 1,
+      ...placed,
+    };
     if (
       replyTo &&
       !first(
@@ -570,12 +632,13 @@ export class InterviewStore {
         ...(questionId ? { questionId } : {}),
         ...(replyTo ? { replyTo } : {}),
         ...(by ? { by } : {}),
+        ...(pin ? { pin } : {}),
       },
     );
     // Only the user's messages wait to be delivered; the agent wrote its own.
     this.sql.all(
-      `INSERT INTO chat_messages (id, session_id, author, text, question_id, reply_to, delivered, event_id, created_at, author_email)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO chat_messages (id, session_id, author, text, question_id, reply_to, delivered, event_id, created_at, author_email, pin)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       sessionId,
       author,
@@ -586,6 +649,7 @@ export class InterviewStore {
       event.id,
       event.createdAt,
       by,
+      pin && JSON.stringify(pin),
     );
     return this.chat(sessionId).find((message) => message.id === id)!;
   }
@@ -622,7 +686,13 @@ export class InterviewStore {
         "DELETE FROM answers WHERE question_id IN (SELECT id FROM questions WHERE session_id = ?)",
         id,
       );
-      for (const table of ["questions", "events", "artifacts", "chat_messages"])
+      for (const table of [
+        "questions",
+        "events",
+        "artifacts",
+        "chat_messages",
+        "frame_positions",
+      ])
         this.sql.all(`DELETE FROM ${table} WHERE session_id = ?`, id);
       this.sql.all("DELETE FROM sessions WHERE id = ?", id);
     });

@@ -13,7 +13,8 @@ import {
   type ControlValues,
 } from "../shared/bindings.js";
 import type { ArtifactView, QuestionView } from "../shared/schema.js";
-import { ArtifactThumb } from "./Stage.js";
+import { questionArtifacts } from "./canvasLayout.js";
+import { ArtifactThumb } from "./frames.js";
 
 function initialAnswerState(question: QuestionView): {
   selected: string[];
@@ -53,10 +54,16 @@ export function QuestionCard({
   onSaved,
   onDirtyChange,
   artifacts,
-  shownArtifactId,
   onShowArtifact,
+  onShowOnCanvas,
+  onFocusQuestion,
   onAsk,
   onPreview,
+  onPoint,
+  onSelection,
+  comparing,
+  onCompare,
+  choose,
   valuesWith,
 }: {
   token: string;
@@ -69,12 +76,26 @@ export function QuestionCard({
   onSaved(): Promise<void>;
   onDirtyChange(questionId: string, dirty: boolean): void;
   artifacts: ArtifactView[];
-  shownArtifactId: string | null;
+  /** Shows one option's artifact on the canvas. */
   onShowArtifact(artifactId: string): void;
+  /** Shows the question's frames on the canvas. */
+  onShowOnCanvas(): void;
+  /** The user is working on this question. */
+  onFocusQuestion(questionId: string): void;
   /** Opens the chat with this question attached; absent once stopped. */
   onAsk?: (() => void) | undefined;
   /** Shows unsaved control values in the question's artifact; null stops. */
   onPreview(questionId: string, values: ControlValues | null): void;
+  /** The option under the pointer or keyboard focus; null when none is. */
+  onPoint(questionId: string, option: string | null): void;
+  /** The options chosen so far while the question is open; null once closed. */
+  onSelection(questionId: string, selected: string[] | null): void;
+  /** Whether the canvas shows a copy of the artifact per option. */
+  comparing: boolean;
+  /** Turns that comparison on or off; absent without a canvas. */
+  onCompare?: (() => void) | undefined;
+  /** An option chosen on the canvas ("Use …"), to pick here. */
+  choose: { option: string; key: number } | null;
   /** An artifact's controls with this question's contribution replaced. */
   valuesWith(artifactId: string, values: ControlValues): ControlValues;
 }) {
@@ -137,15 +158,21 @@ export function QuestionCard({
     onPreview(question.id, preview);
   }, [previewKey]);
   useEffect(() => () => onPreview(question.id, null), []);
-  const hover = (option: string) =>
-    bound
-      ? {
-          onMouseEnter: () => setHovered(option),
-          onMouseLeave: () => setHovered(null),
-          onFocus: () => setHovered(option),
-          onBlur: () => setHovered(null),
-        }
-      : {};
+  useEffect(() => {
+    onPoint(question.id, open ? hovered : null);
+  }, [open, hovered]);
+  useEffect(() => () => onPoint(question.id, null), []);
+  const selectedKey = JSON.stringify(selected);
+  useEffect(() => {
+    onSelection(question.id, open ? selected : null);
+  }, [open, selectedKey]);
+  useEffect(() => () => onSelection(question.id, null), []);
+  const hover = (option: string) => ({
+    onMouseEnter: () => setHovered(option),
+    onMouseLeave: () => setHovered(null),
+    onFocus: () => setHovered(option),
+    onBlur: () => setHovered(null),
+  });
   const defaultText = defaultAnswerText(question);
   const isDefault = defaultText !== null && answerText === defaultText;
   const save = async (answer: string, skipped = false) => {
@@ -180,7 +207,6 @@ export function QuestionCard({
   };
   const pick = (option: string) => {
     setHovered(null);
-    if (bound && linked.id !== shownArtifactId) onShowArtifact(linked.id);
     setSelected((values) =>
       values.includes(option)
         ? values.filter((item) => item !== option)
@@ -189,19 +215,24 @@ export function QuestionCard({
           : [option],
     );
   };
+  useChangeEffect(() => {
+    if (choose && open && !selected.includes(choose.option))
+      pick(choose.option);
+  }, choose?.key);
   const hint = question.type === "number" ? numberHint(question) : "";
+  const onCanvas = questionArtifacts(question).some((id) => artifactFor(id));
 
   const done = question.answer !== null && !open;
   const actions = (
     <>
-      {linked && (
+      {onCanvas && (
         <button
           type="button"
-          className={`artifact-link ${linked.id === shownArtifactId ? "on-stage" : ""}`}
-          onClick={() => onShowArtifact(linked.id)}
-          title="Show in the workspace"
+          className={`canvas-link ${emphasized ? "on-stage" : ""}`}
+          onClick={onShowOnCanvas}
+          title="Show this question's frames on the canvas"
         >
-          {linked.title}
+          On canvas
         </button>
       )}
       {onAsk && (
@@ -234,6 +265,8 @@ export function QuestionCard({
     <article
       data-question-id={question.id}
       className={`question ${open ? "open" : ""} ${done ? "done" : ""} ${emphasized ? "emphasized" : ""} ${question.answer?.delivered ? "received" : ""}`}
+      onFocusCapture={open ? () => onFocusQuestion(question.id) : undefined}
+      onMouseDown={open ? () => onFocusQuestion(question.id) : undefined}
     >
       {done && question.answer ? (
         <div className="question-heading">
@@ -339,7 +372,7 @@ export function QuestionCard({
                           type="button"
                           className="choice-card-view"
                           onClick={() => onShowArtifact(artifact.id)}
-                          aria-label={`View ${option} in the workspace`}
+                          aria-label={`View ${option} on the canvas`}
                         >
                           View
                         </button>
@@ -449,6 +482,16 @@ export function QuestionCard({
               >
                 Skip
               </button>
+              {bound && choices.length > 0 && onCompare && (
+                <button
+                  className={`compare ${comparing ? "on" : ""}`}
+                  type="button"
+                  aria-pressed={comparing}
+                  onClick={onCompare}
+                >
+                  {comparing ? "Hide comparison" : "Compare side by side"}
+                </button>
+              )}
             </div>
           </div>
           {saveError && (

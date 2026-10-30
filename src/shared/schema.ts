@@ -143,11 +143,43 @@ export const AnswerInputSchema = z
     path: ["answer"],
   });
 
+const coordinate = z.number().finite().min(-1_000_000).max(1_000_000);
+const fraction = z.number().finite().min(0).max(1);
+
+/**
+ * A comment pinned to a point on an artifact: the element under it, as
+ * the artifact's own script described it, and where it is, in the
+ * document's pixels at the width it was shown at.
+ */
+export const PinInputSchema = z.object({
+  artifactId: z.string().uuid(),
+  /** The element's data-name, else a short description such as `button "Pay"`. */
+  element: z.string().trim().min(1).max(300),
+  /** A CSS selector that finds the element again, when it has no data-name. */
+  selector: z.string().trim().min(1).max(1_000).nullable().default(null),
+  x: coordinate,
+  y: coordinate,
+  /** Where in the element's box the pin sits, so it follows the element. */
+  fx: fraction,
+  fy: fraction,
+  /** The document's width when the pin was placed. */
+  width: z.number().finite().positive().max(10_000),
+});
+export type PinInput = z.input<typeof PinInputSchema>;
+/** A pin as stored: numbered in the order pins were sent. */
+export type PinView = z.output<typeof PinInputSchema> & { n: number };
+
+/** Where the user put an artifact's frame on the canvas. */
+export const FramePositionSchema = z.object({ x: coordinate, y: coordinate });
+export type FramePosition = z.output<typeof FramePositionSchema>;
+
 /** A message in an interview's chat: a clarification, or a direction for the agent. */
 export const ChatInputSchema = z.object({
   text: z.string().trim().min(1).max(20_000),
   /** The user's message is about this question. */
   questionId: z.string().uuid().nullable().optional(),
+  /** The user's message is about this spot on an artifact. */
+  pin: PinInputSchema.nullable().optional(),
   /** The agent's reply answers this message. */
   replyTo: z.string().uuid().nullable().optional(),
 });
@@ -166,6 +198,8 @@ export interface ChatMessageView {
   createdAt: string;
   /** The assignee who wrote it; null for the owner and the agent. */
   authorEmail: string | null;
+  /** A user's comment on a spot in an artifact. */
+  pin: PinView | null;
 }
 
 export type SessionStatus = "active" | "stopped";
@@ -272,6 +306,8 @@ export interface SessionView {
   artifacts: ArtifactView[];
   /** The artifact someone put on screen; null means the default (see shownArtifact). */
   stage: { artifactId: string; source: StageSource } | null;
+  /** Artifact id → where the user put its frame on the canvas; the rest lay themselves out. */
+  positions: Record<string, FramePosition>;
   /** Whether the workspace column is open, and who last opened or closed it. */
   stageVisible: boolean;
   stageVisibilitySource: StageSource | null;
