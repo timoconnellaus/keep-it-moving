@@ -854,6 +854,13 @@ export function createHub(options: HubOptions) {
     );
     return c.json({ ok: true });
   });
+  // Arranging the canvas reaches the other viewers, but isn't news for the agent.
+  app.post("/api/browser/:token/frames/:artifactId/position", async (c) => {
+    const id = tokenSession(c.req.param("token"));
+    store.moveFrame(id, c.req.param("artifactId"), await body(c));
+    later(() => broadcast(id));
+    return c.json({ ok: true });
+  });
   return {
     app,
     broadcast,
@@ -935,7 +942,7 @@ const RESPONDENT_ALLOWED: Array<[method: string, path: RegExp]> = [
   ["GET", /^\/api\/browser\/([^/]+)\/(session|artifacts\/[^/]+\/view)$/],
   [
     "POST",
-    /^\/api\/browser\/([^/]+)\/(questions\/[^/]+\/answer|chat|stage|stage\/visibility)$/,
+    /^\/api\/browser\/([^/]+)\/(questions\/[^/]+\/answer|chat|stage|stage\/visibility|frames\/[^/]+\/position)$/,
   ],
 ];
 
@@ -1095,6 +1102,9 @@ function batchSummary(session: SessionView, events: InterviewEvent[]) {
       { question, number: index + 1 },
     ]),
   );
+  const titles = new Map(
+    session.artifacts.map((artifact) => [artifact.id, artifact.title]),
+  );
   return {
     events,
     messages: session.chat
@@ -1114,6 +1124,23 @@ function batchSummary(session: SessionView, events: InterviewEvent[]) {
                 prompt: about.question.prompt,
               }
             : null,
+          // A comment on a spot in an artifact: the element, and where it is.
+          ...(message.pin
+            ? {
+                pin: {
+                  n: message.pin.n,
+                  artifactId: message.pin.artifactId,
+                  artifact: titles.get(message.pin.artifactId) ?? null,
+                  element: message.pin.element,
+                  ...(message.pin.selector
+                    ? { selector: message.pin.selector }
+                    : {}),
+                  x: Math.round(message.pin.x),
+                  y: Math.round(message.pin.y),
+                  width: Math.round(message.pin.width),
+                },
+              }
+            : {}),
         };
       }),
     answers: session.questions

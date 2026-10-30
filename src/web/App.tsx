@@ -1,17 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { defaultAnswerText } from "../shared/answers.js";
-import { artifactValues, type ControlValues } from "../shared/bindings.js";
-import type { SessionView } from "../shared/schema.js";
-import { shownArtifact } from "../shared/workspace.js";
+import {
+  artifactValues,
+  isBound,
+  type ControlValues,
+} from "../shared/bindings.js";
+import type { PinView, SessionView } from "../shared/schema.js";
 import { Account } from "./Account.js";
 import { Assign } from "./Assign.js";
+import {
+  Canvas,
+  type Comparison,
+  type FitRequest,
+  type FrameHighlight,
+  type PlacedPin,
+} from "./Canvas.js";
+import { questionArtifacts } from "./canvasLayout.js";
 import { Chat, useChat } from "./Chat.js";
 import { useOverview } from "./overview.js";
 import { QuestionCard } from "./QuestionCard.js";
 import { MoreBelow, QuestionProgress } from "./QuestionNav.js";
 import { liveSocket, probeStatus, STOP_MESSAGES } from "./liveSocket.js";
 import { Logo } from "./Logo.js";
-import { Stage } from "./Stage.js";
 import { Switcher } from "./Switcher.js";
 
 const token = window.location.pathname.split("/").filter(Boolean).at(-1) ?? "";
@@ -54,7 +64,6 @@ export function App() {
   const [error, setError] = useState("");
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
   const [acceptingAll, setAcceptingAll] = useState(false);
-  const [stageExpanded, setStageExpanded] = useState(false);
   const [overviewVersion, setOverviewVersion] = useState(0);
   // Unsaved values a question shows in its artifact: a hovered option, a
   // dragged slider. Never sent anywhere; saving makes them the answer's.
@@ -74,29 +83,61 @@ export function App() {
       }),
     [],
   );
+  // What the canvas follows in the questions: the option under the
+  // pointer, each open question's choice so far, the question in hand.
+  const [pointed, setPointed] = useState<{
+    questionId: string;
+    option: string;
+  } | null>(null);
+  const onPoint = useCallback(
+    (questionId: string, option: string | null) =>
+      setPointed((current) =>
+        option
+          ? current?.questionId === questionId && current.option === option
+            ? current
+            : { questionId, option }
+          : current?.questionId === questionId
+            ? null
+            : current,
+      ),
+    [],
+  );
+  const [selections, setSelections] = useState<Record<string, string[]>>({});
+  const onSelection = useCallback(
+    (questionId: string, selected: string[] | null) =>
+      setSelections((current) => {
+        if (
+          JSON.stringify(current[questionId]) ===
+          JSON.stringify(selected ?? undefined)
+        )
+          return current;
+        const next = { ...current };
+        if (selected) next[questionId] = selected;
+        else delete next[questionId];
+        return next;
+      }),
+    [],
+  );
+  const [localFocus, setLocalFocus] = useState<string | null>(null);
+  const [compareId, setCompareId] = useState<string | null>(null);
+  const [choose, setChoose] = useState<{
+    questionId: string;
+    option: string;
+    key: number;
+  } | null>(null);
+  const [fit, setFit] = useState<FitRequest | null>(null);
+  const fitTo = useCallback(
+    (ids: string[]) =>
+      setFit((current) => ({ ids, key: (current?.key ?? 0) + 1 })),
+    [],
+  );
   // An assignee sees this interview only, never the owner's list.
   const sessions = useOverview(
     session && !session.respondent ? overviewVersion : null,
   );
   const questionsRef = useRef<HTMLElement>(null);
   const chat = useChat();
-  const showArtifact = useCallback(async (artifactId: string) => {
-    await fetch(`/api/browser/${token}/stage`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ artifactId }),
-    });
-  }, []);
-  useEffect(() => {
-    if (!stageExpanded) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setStageExpanded(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [stageExpanded]);
   const setStageVisible = useCallback(async (visible: boolean) => {
-    if (!visible) setStageExpanded(false);
     await fetch(`/api/browser/${token}/stage/visibility`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -157,6 +198,46 @@ export function App() {
     });
   }, [refresh]);
 
+  // The agent's focus replaces the user's own; its "show" fits that frame.
+  const agentFocus = session?.focusedQuestionId;
+  useEffect(() => setLocalFocus(null), [agentFocus]);
+  const unanswered = session?.questions.find(
+    (question) => !question.answer,
+  )?.id;
+  const ownFocus = session?.questions.find(
+    (question) => question.id === localFocus && !question.answer,
+  )?.id;
+  const focused = ownFocus ?? agentFocus ?? unanswered;
+  const framesFor = (questionId: string | undefined): string[] => {
+    if (!session) return [];
+    const question = session.questions.find((item) => item.id === questionId);
+    const ids = question
+      ? questionArtifacts(question).filter((id) =>
+          session.artifacts.some((artifact) => artifact.id === id),
+        )
+      : [];
+    if (ids.length) return ids;
+    const plan = session.artifacts.find((artifact) => artifact.kind === "plan");
+    return plan ? [plan.id] : [];
+  };
+  const lastFocus = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const was = lastFocus.current;
+    lastFocus.current = focused;
+    if (was !== undefined && focused !== was && focused) {
+      const ids = framesFor(focused);
+      if (ids.length) fitTo(ids);
+    }
+  }, [focused]);
+  // Undefined until the interview loads: what was on screen then isn't news.
+  const staged = session ? (session.stage?.artifactId ?? null) : undefined;
+  const lastStaged = useRef(staged);
+  useEffect(() => {
+    const was = lastStaged.current;
+    lastStaged.current = staged;
+    if (was !== undefined && staged && staged !== was) fitTo([staged]);
+  }, [staged]);
+
   if (!session)
     return (
       <main className="shell">
@@ -167,8 +248,6 @@ export function App() {
         </div>
       </main>
     );
-  const unanswered = session.questions.find((question) => !question.answer)?.id;
-  const focused = session.focusedQuestionId ?? unanswered;
   const active = session.status === "active";
   // Questions whose form the user has touched keep their in-progress edits.
   const acceptable = session.questions.filter(
@@ -200,7 +279,115 @@ export function App() {
       await refresh();
     }
   };
-  const shown = shownArtifact(session);
+  const workspaceOpen = session.stageVisible && session.artifacts.length > 0;
+  const showOnCanvas = (ids: string[]) => {
+    if (!ids.length) return;
+    fitTo(ids);
+    if (!workspaceOpen) void setStageVisible(true);
+  };
+  const compareQuestion = session.questions.find(
+    (question) =>
+      question.id === compareId && !question.answer && isBound(question),
+  );
+  const compareArtifact = session.artifacts.find(
+    (artifact) =>
+      artifact.id === compareQuestion?.artifactId && artifact.format === "html",
+  );
+  const comparison: Comparison | null =
+    compareQuestion && compareArtifact
+      ? {
+          question: compareQuestion,
+          artifact: compareArtifact,
+          selected: selections[compareQuestion.id] ?? [],
+          valuesFor: (option) =>
+            artifactValues(session.questions, compareArtifact.id, {
+              ...previews,
+              [compareQuestion.id]: compareQuestion.optionValues[option] ?? {},
+            }),
+          onUse: (option) =>
+            setChoose((current) => ({
+              questionId: compareQuestion.id,
+              option,
+              key: (current?.key ?? 0) + 1,
+            })),
+        }
+      : null;
+  const toggleCompare = (questionId: string) => {
+    if (compareId === questionId) return setCompareId(null);
+    setCompareId(questionId);
+    const question = session.questions.find((item) => item.id === questionId);
+    const options =
+      question?.type === "yes-no" ? ["Yes", "No"] : (question?.options ?? []);
+    showOnCanvas([
+      ...framesFor(questionId),
+      ...options.map((_, index) => `copy:${index}`),
+    ]);
+  };
+  // How each frame stands out for the question in hand.
+  const inHand = session.questions.find(
+    (question) => question.id === focused && !question.answer,
+  );
+  const highlight = (artifactId: string): FrameHighlight => {
+    const pointedAt = session.questions.find(
+      (question) => question.id === pointed?.questionId,
+    );
+    const hot =
+      (pointedAt &&
+        pointed &&
+        (pointedAt.optionArtifacts[pointed.option] === artifactId ||
+          (isBound(pointedAt) && pointedAt.artifactId === artifactId))) ||
+      (inHand &&
+        isBound(inHand) &&
+        (inHand.type === "text" || inHand.type === "number") &&
+        inHand.artifactId === artifactId &&
+        Boolean(previews[inHand.id]));
+    const chosen = inHand ? (selections[inHand.id] ?? []) : [];
+    const picked = Boolean(
+      inHand &&
+      chosen.some((option) => inHand.optionArtifacts[option] === artifactId),
+    );
+    const live =
+      inHand &&
+      isBound(inHand) &&
+      inHand.artifactId === artifactId &&
+      inHand.options.length > 0
+        ? pointed?.questionId === inHand.id
+          ? pointed.option
+          : chosen.join(", ")
+        : "";
+    return {
+      hot: Boolean(hot),
+      picked,
+      tag: picked
+        ? { kind: "", text: "Selected" }
+        : live
+          ? { kind: "live", text: live }
+          : null,
+    };
+  };
+  const sentPins = session.chat.flatMap((message) =>
+    message.pin ? [message.pin] : [],
+  );
+  const pins: PinView[] = chat.pin ? [...sentPins, chat.pin] : sentPins;
+  const placePin = (pin: PlacedPin) =>
+    chat.comment({
+      artifactId: pin.artifactId,
+      element: pin.element,
+      selector: pin.selector,
+      x: pin.x,
+      y: pin.y,
+      fx: pin.fx,
+      fy: pin.fy,
+      width: pin.width,
+      n: Math.max(0, ...sentPins.map((sent) => sent.n)) + 1,
+      title: pin.title,
+    });
+  const staging = session.stage?.artifactId;
+  const initial = framesFor(focused).length
+    ? framesFor(focused)
+    : staging
+      ? [staging]
+      : [];
   const questions = (
     <section
       className="questions"
@@ -225,13 +412,23 @@ export function App() {
           onSaved={refresh}
           onDirtyChange={onDirtyChange}
           artifacts={session.artifacts}
-          shownArtifactId={shown?.id ?? null}
-          onShowArtifact={(id) => {
-            void showArtifact(id);
-            if (!session.stageVisible) void setStageVisible(true);
+          onShowArtifact={(id) => showOnCanvas([id])}
+          onShowOnCanvas={() => {
+            setLocalFocus(question.id);
+            showOnCanvas(framesFor(question.id));
           }}
+          onFocusQuestion={setLocalFocus}
           onAsk={active ? () => chat.ask(question.id) : undefined}
           onPreview={onPreview}
+          onPoint={onPoint}
+          onSelection={onSelection}
+          comparing={comparison?.question.id === question.id}
+          onCompare={
+            session.artifacts.length > 0
+              ? () => toggleCompare(question.id)
+              : undefined
+          }
+          choose={choose?.questionId === question.id ? choose : null}
           valuesWith={(artifactId, values) =>
             artifactValues(session.questions, artifactId, {
               ...previews,
@@ -243,7 +440,6 @@ export function App() {
       <MoreBelow container={questionsRef} questions={session.questions} />
     </section>
   );
-  const workspaceOpen = session.stageVisible && session.artifacts.length > 0;
   const activity = agentActivity(session);
   return (
     <main className="shell">
@@ -287,11 +483,11 @@ export function App() {
             onClick={() => void setStageVisible(!workspaceOpen)}
             title={
               workspaceOpen
-                ? "Hide the plan and other workspace items"
-                : "Show the plan and other workspace items"
+                ? "Hide the canvas of the plan and other workspace items"
+                : "Show the canvas of the plan and other workspace items"
             }
           >
-            Workspace
+            Canvas
             <span className="count">{session.artifacts.length}</span>
           </button>
         )}
@@ -311,23 +507,21 @@ export function App() {
         </div>
       )}
       {/* Questions on the left, the workspace in the middle, the chat on the right. */}
-      <div
-        className={`workspace ${workspaceOpen ? "with-stage" : ""} ${workspaceOpen && stageExpanded ? "expanded" : ""}`}
-      >
+      <div className={`workspace ${workspaceOpen ? "with-stage" : ""}`}>
         {questions}
         {workspaceOpen && (
-          <Stage
+          <Canvas
             token={token}
             session={session}
-            values={
-              shown?.format === "html"
-                ? artifactValues(session.questions, shown.id, previews)
-                : undefined
+            valuesFor={(artifactId) =>
+              artifactValues(session.questions, artifactId, previews)
             }
-            expanded={stageExpanded}
-            onShow={(id) => void showArtifact(id)}
-            onToggleExpanded={() => setStageExpanded((value) => !value)}
-            onClose={() => void setStageVisible(false)}
+            highlight={highlight}
+            compare={comparison}
+            pins={pins}
+            initial={fit?.ids ?? initial}
+            fit={fit}
+            onComment={placePin}
           />
         )}
         <Chat token={token} session={session} chat={chat} onSent={refresh} />

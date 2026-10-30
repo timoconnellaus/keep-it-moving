@@ -42,6 +42,7 @@ const state: SessionView = {
   stage: null,
   stageVisible: false,
   stageVisibilitySource: null,
+  positions: {},
   project: null,
   origin: {
     branch: null,

@@ -35,6 +35,8 @@ const added = { planned: newLines(1, 2), finished: newLines(2, 3) };
 const order = ["start", "previewB", "previewA", "answered", "planned", "asked", "replied", "accepted", "finished"];
 const demoCss = `
 html, body { overflow: hidden; }
+/* The canvas pans to what each state shows, as the app's fit does. */
+.react-flow__viewport { transition: transform 0.6s ease; }
 body { transition: opacity 0.4s ease; }
 body.demo-out { opacity: 0; }
 .demo-new { background: #fff3c4; border-radius: 5px; box-shadow: 0 0 0 4px #fff3c4; transition: background 1.2s ease, box-shadow 1.2s ease; }

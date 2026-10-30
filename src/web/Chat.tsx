@@ -1,18 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ChatMessageView, SessionView } from "../shared/schema.js";
+import type {
+  ChatMessageView,
+  PinView,
+  SessionView,
+} from "../shared/schema.js";
 
-/** Whether the chat is open, and the question the next message is about. */
+/** A comment's pin, placed on the canvas and waiting for its message. */
+export type PinDraft = PinView & { title: string };
+
+/**
+ * Whether the chat is open, the question the next message is about, and
+ * the pin it comments on.
+ */
 export function useChat() {
   const [open, setOpen] = useState(false);
   const [about, setAbout] = useState<string | null>(null);
+  const [pin, setPin] = useState<PinDraft | null>(null);
   const ask = useCallback((questionId: string | null) => {
     setAbout(questionId);
     setOpen(true);
   }, []);
+  const comment = useCallback((placed: PinDraft) => {
+    setPin(placed);
+    setOpen(true);
+  }, []);
   const close = useCallback(() => setOpen(false), []);
-  return { open, about, setAbout, ask, close };
+  return { open, about, setAbout, ask, pin, setPin, comment, close };
 }
 export type ChatState = ReturnType<typeof useChat>;
 
@@ -54,7 +69,7 @@ export function Chat({
   }, [chat.open, session.chat.length]);
   useEffect(() => {
     if (chat.open) input.current?.focus();
-  }, [chat.open, chat.about]);
+  }, [chat.open, chat.about, chat.pin]);
 
   const numbered = (questionId: string) => {
     const index = session.questions.findIndex(
@@ -65,6 +80,9 @@ export function Chat({
       : { number: index + 1, prompt: session.questions[index]!.prompt };
   };
   const attached = chat.about ? numbered(chat.about) : null;
+  const titled = (pin: PinView) =>
+    session.artifacts.find((artifact) => artifact.id === pin.artifactId)
+      ?.title ?? "a removed item";
 
   const send = async () => {
     const message = text.trim();
@@ -75,7 +93,22 @@ export function Chat({
       const response = await fetch(`/api/browser/${token}/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: message, questionId: chat.about }),
+        body: JSON.stringify({
+          text: message,
+          questionId: chat.about,
+          ...(chat.pin && {
+            pin: {
+              artifactId: chat.pin.artifactId,
+              element: chat.pin.element,
+              selector: chat.pin.selector,
+              x: chat.pin.x,
+              y: chat.pin.y,
+              fx: chat.pin.fx,
+              fy: chat.pin.fy,
+              width: chat.pin.width,
+            },
+          }),
+        }),
       });
       if (!response.ok)
         throw new Error(
@@ -84,6 +117,7 @@ export function Chat({
         );
       setText("");
       chat.setAbout(null);
+      chat.setPin(null);
       await onSent();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -145,6 +179,7 @@ export function Chat({
               key={message.id}
               message={message}
               about={message.questionId ? numbered(message.questionId) : null}
+              pinned={message.pin ? titled(message.pin) : null}
               quoted={
                 message.replyTo &&
                 message.replyTo !== previousUser(session.chat, message)?.id
@@ -171,6 +206,20 @@ export function Chat({
               void send();
             }}
           >
+            {chat.pin && (
+              <span className="chat-chip pinned">
+                <span>
+                  Pin {chat.pin.n} · {chat.pin.element} · {chat.pin.title}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => chat.setPin(null)}
+                  aria-label="Remove the pin from this message"
+                >
+                  ×
+                </button>
+              </span>
+            )}
             {chat.about && (
               <span className="chat-chip">
                 <span>
@@ -193,7 +242,11 @@ export function Chat({
                 rows={2}
                 value={text}
                 placeholder={
-                  chat.about ? "Ask about this question…" : "Ask the agent…"
+                  chat.pin
+                    ? "What should change here?"
+                    : chat.about
+                      ? "Ask about this question…"
+                      : "Ask the agent…"
                 }
                 aria-label="Message to the agent"
                 onChange={(event) => setText(event.target.value)}
@@ -243,10 +296,13 @@ export function Chat({
 function Message({
   message,
   about,
+  pinned,
   quoted,
 }: {
   message: ChatMessageView;
   about: { number: number; prompt: string } | null;
+  /** The title of the artifact the message's pin is on. */
+  pinned: string | null;
   quoted: ChatMessageView | undefined;
 }) {
   if (message.author === "user")
@@ -261,6 +317,13 @@ function Message({
               {about
                 ? `Q${about.number} · ${about.prompt}`
                 : "A removed question"}
+            </span>
+          </span>
+        )}
+        {message.pin && (
+          <span className="chat-chip pinned">
+            <span>
+              Pin {message.pin.n} · {message.pin.element} · {pinned}
             </span>
           </span>
         )}

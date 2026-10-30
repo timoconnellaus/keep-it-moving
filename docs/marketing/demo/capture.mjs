@@ -2,12 +2,12 @@
 import { spawn, execFileSync } from "node:child_process";
 import { writeFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-// Needs `wrangler dev --local --host localhost --port 8787` with DEV_EMAIL, and a CLI signed in to it under
+// Needs `wrangler dev --local --host localhost --port 8787` (or BASE for another port) with DEV_EMAIL, and a CLI signed in to it under
 // KIM_HOME (HOME for the kim config). Writes states.json and a screenshot per state into SCRATCH.
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const REPO = fileURLToPath(new URL("../../..", import.meta.url));
 const SCRATCH = process.env.SCRATCH ?? HERE;
-const BASE = "http://localhost:8787";
+const BASE = process.env.BASE ?? "http://localhost:8787";
 const env = { ...process.env, HOME: process.env.KIM_HOME ?? process.env.HOME, KEEP_IT_MOVING_URL: BASE };
 const kim = (...args) => execFileSync("node", [`${REPO}/dist/cli.js`, ...args], { env, encoding: "utf8" });
 const kimJson = (...args) => JSON.parse(kim(...args));
@@ -31,7 +31,7 @@ const Q3 = q({ type: "single-choice", prompt: "Which checkout layout?", options:
 const answer = (id, text) => fetch(`${BASE}/api/browser/${T}/questions/${id}/answer`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ answer: text }) });
 await answer(Q1, "Stripe Checkout"); await answer(Q2, "Yes");
 kim("wait", S, "--idle", "300", "--timeout", "5000");
-kim("chat", "reply", S, "--text", "I've drafted two checkout layouts. They're in the workspace.");
+kim("chat", "reply", S, "--text", "I've drafted two checkout layouts. They're on the canvas.");
 kim("artifact", "show", S, A);
 let waiting = bgWait();
 
@@ -70,9 +70,9 @@ const capture = async (name) => {
 const click = (selector, text) => run(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find((e) => ${JSON.stringify(text ?? "")} === "" || e.textContent.includes(${JSON.stringify(text ?? "")}) || e.getAttribute("aria-label") === ${JSON.stringify(text ?? "")}); if (!el) throw new Error("no " + ${JSON.stringify(selector + " " + (text ?? ""))}); el.click(); return true; })()`);
 
 await capture("start");
-await click(".choice-card-view", "View Two steps in the workspace"); await sleep(1500);
+await click(".choice-card-view", "View Two steps on the canvas"); await sleep(1500);
 await capture("previewB");
-await click(".choice-card-view", "View One page in the workspace"); await sleep(1500);
+await click(".choice-card-view", "View One page on the canvas"); await sleep(1500);
 await capture("previewA");
 await click(".question.emphasized .submit"); await waiting; await sleep(1500);
 await capture("answered");
