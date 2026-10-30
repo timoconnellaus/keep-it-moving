@@ -36,7 +36,7 @@ import type {
   SessionView,
 } from "../shared/schema.js";
 import { artifactViewUrl } from "../shared/workspace.js";
-import { layoutCanvas, PAGE_HEIGHT } from "./canvasLayout.js";
+import { labelSpace, layoutCanvas, PAGE_HEIGHT } from "./canvasLayout.js";
 import {
   ArtifactDocument,
   pickIn,
@@ -60,6 +60,48 @@ const reduceMotion = () =>
 const fitMs = () => (reduceMotion() ? 0 : 520);
 /** "Layout A · Desktop": a copy names its option instead. */
 const DEVICE_SUFFIX = / · (Desktop|Tablet|Mobile)$/;
+/** A label always has room for its play button and a readable name. */
+const LABEL_MIN = 112;
+/** With nothing to its right, a label stops here. */
+const LABEL_MAX = 560;
+const GAP = 8;
+let measurer: CanvasRenderingContext2D | null | undefined;
+/** A label part's width on screen, from the label's fonts. */
+function textWidth(text: string, font: string): number {
+  measurer ??= document.createElement("canvas").getContext?.("2d") ?? null;
+  if (!measurer) return text.length * 7;
+  measurer.font = font;
+  return Math.ceil(measurer.measureText(text).width);
+}
+
+/**
+ * Which of a label's extras fit beside its name, most useful first: the
+ * "Use" button, then the tag, then the size. When even the name doesn't
+ * fit, it truncates and the extras go.
+ */
+function labelParts(
+  room: number,
+  name: string,
+  extras: { use?: string; tag?: string; size?: string },
+) {
+  const body = '"Figtree", ui-sans-serif, system-ui, sans-serif';
+  let used = 20 + GAP + textWidth(name, `600 12px ${body}`) + 4;
+  const widths = {
+    use: extras.use ? textWidth(extras.use, `600 11px ${body}`) + 20 : 0,
+    tag: extras.tag ? textWidth(extras.tag, `600 11px ${body}`) + 16 : 0,
+    size: extras.size
+      ? textWidth(extras.size, '500 11px "JetBrains Mono", monospace')
+      : 0,
+  };
+  const shown = { use: false, tag: false, size: false };
+  for (const part of ["use", "tag", "size"] as const) {
+    if (!extras[part] || used + GAP + widths[part] > room) continue;
+    shown[part] = true;
+    used += GAP + widths[part];
+  }
+  return shown;
+}
+
 /** Below this zoom a frame is too small to read, so it isn't loaded. */
 const MIN_ZOOM_LIVE = 0.08;
 /** How far outside the canvas a frame still counts as in view, in screen pixels. */
@@ -96,6 +138,8 @@ interface FrameData extends Record<string, unknown> {
   h: number | null;
   /** On a comparison's copy: the option it shows. */
   option?: string;
+  /** Room for the label, up to the next frame on the right; null for no limit. */
+  space: number | null;
 }
 interface RowData extends Record<string, unknown> {
   title: string;
@@ -184,14 +228,19 @@ function FrameNode({
       [x, y, w, h],
     ),
   );
-  // How much of the label fits over the frame: 0 the name, 1 and its tag, 2 and its size.
+  // The label's room on screen: up to the next frame, at least a readable name.
   const room = useStore(
     useCallback(
-      (s: ReactFlowState) => {
-        const px = w * s.transform[2];
-        return px > 300 ? 2 : px > 150 ? 1 : 0;
-      },
-      [w],
+      (s: ReactFlowState) =>
+        Math.round(
+          Math.max(
+            LABEL_MIN,
+            data.space === null
+              ? LABEL_MAX
+              : Math.min(LABEL_MAX, data.space * s.transform[2] - 10),
+          ),
+        ),
+      [data.space],
     ),
   );
   const height = useStore(
@@ -240,6 +289,14 @@ function FrameNode({
     });
   };
 
+  const size = `${w} × ${Math.round(h ?? height ?? PAGE_HEIGHT)}`;
+  const parts = labelParts(room, data.title, {
+    ...(copy && !copy.selected.includes(option!)
+      ? { use: `Use ${option}` }
+      : {}),
+    ...(highlight.tag ? { tag: highlight.tag.text } : {}),
+    size,
+  });
   const classes = [
     "frame",
     highlight.hot && "hot",
@@ -252,7 +309,7 @@ function FrameNode({
     <div className={classes}>
       <div
         className="frame-label"
-        style={{ maxWidth: `calc(${w}px / var(--inv))` }}
+        style={{ maxWidth: room }}
         title="Double-click to preview"
         onClick={() => live.select(id)}
         onDoubleClick={() => live.openPreview(id)}
@@ -272,17 +329,13 @@ function FrameNode({
           </svg>
         </button>
         <span className="frame-name">{data.title}</span>
-        {room >= 1 && highlight.tag && (
+        {parts.tag && highlight.tag && (
           <span className={`frame-tag ${highlight.tag.kind}`}>
             {highlight.tag.text}
           </span>
         )}
-        {room >= 2 && (
-          <span className="frame-size">
-            {w} × {Math.round(h ?? height ?? PAGE_HEIGHT)}
-          </span>
-        )}
-        {room >= 1 && copy && !copy.selected.includes(option!) && (
+        {parts.size && <span className="frame-size">{size}</span>}
+        {parts.use && copy && (
           <button
             className="frame-use nodrag"
             type="button"
@@ -429,6 +482,16 @@ function Board({
     ],
   );
   useEffect(() => {
+    const boxes = [...layout.frames, ...(compare ? layout.copies : [])].map(
+      (frame) => ({
+        id: frame.id,
+        x: frame.x,
+        y: frame.y,
+        w: frame.w,
+        h: frame.h ?? heights[frame.id] ?? PAGE_HEIGHT,
+      }),
+    );
+    const space = labelSpace(boxes);
     const next: CanvasNode[] = [
       ...layout.rows.map((row): RowNodeType => ({
         id: row.id,
@@ -448,6 +511,7 @@ function Board({
           title: frame.artifact.title,
           w: frame.w,
           h: frame.h,
+          space: space[frame.id] ?? null,
         },
         dragHandle: ".frame-label",
       })),
@@ -462,6 +526,7 @@ function Board({
               w: copy.w,
               h: copy.h,
               option: copy.option,
+              space: space[copy.id] ?? null,
             },
             dragHandle: ".frame-label",
           }))
@@ -499,7 +564,10 @@ function Board({
         const known = ids.filter((id) => flow.getInternalNode(id));
         void flow.fitView({
           ...(known.length ? { nodes: known.map((id) => ({ id })) } : {}),
-          padding: 0.2,
+          // A phone's canvas is small: the frames in hand get most of it.
+          padding: window.matchMedia?.("(max-width: 620px)").matches
+            ? 0.08
+            : 0.2,
           duration,
           maxZoom: 0.7,
         });
@@ -508,14 +576,13 @@ function Board({
     },
     [flow, store],
   );
-  // Start on what's in hand (one frame on a phone), once the frames are measured.
+  // Start on what's in hand, once the frames are measured.
   const initialized = useNodesInitialized();
   const started = useRef(false);
   useEffect(() => {
     if (!initialized || started.current || !nodes.length) return;
     started.current = true;
-    const narrow = window.matchMedia?.("(max-width: 620px)").matches;
-    fitTo(narrow ? initial.slice(0, 1) : initial, 0);
+    fitTo(initial, 0);
   }, [initialized, nodes.length]);
   useEffect(() => {
     if (fit && started.current) fitTo(fit.ids);

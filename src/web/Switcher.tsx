@@ -94,7 +94,9 @@ export function Switcher({
         {session.project && (
           <span className="switcher-project">
             <ProjectChip project={session.project} size={14} />
-            {session.project.name}
+            <span className="switcher-project-name">
+              {session.project.name}
+            </span>
           </span>
         )}
         <svg
