@@ -1,2 +1,6 @@
 scripts:
-  setup: npm ci
+  # New worktrees get the root checkout's local secrets (.dev.vars), which git doesn't track.
+  setup: |
+    npm ci
+    root=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+    if [ -f "$root/.dev.vars" ] && [ ! -e .dev.vars ]; then cp "$root/.dev.vars" .dev.vars; fi
