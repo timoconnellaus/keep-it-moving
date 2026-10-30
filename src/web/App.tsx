@@ -64,6 +64,7 @@ export function App() {
   const [error, setError] = useState("");
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
   const [acceptingAll, setAcceptingAll] = useState(false);
+  const [sendingDrafts, setSendingDrafts] = useState(false);
   const [overviewVersion, setOverviewVersion] = useState(0);
   // Unsaved values a question shows in its artifact: a hovered option, a
   // dragged slider. Never sent anywhere; saving makes them the answer's.
@@ -249,11 +250,39 @@ export function App() {
       </main>
     );
   const active = session.status === "active";
+  const drafts = session.drafts ?? {};
   // Questions whose form the user has touched keep their in-progress edits.
   const acceptable = session.questions.filter(
     (question) =>
-      !question.answer && question.default && !dirty.has(question.id),
+      !question.answer &&
+      question.default &&
+      !drafts[question.id] &&
+      !dirty.has(question.id),
   );
+  const sendable = session.questions.filter(
+    (question) =>
+      !question.answer && drafts[question.id] && !dirty.has(question.id),
+  );
+  const sendDrafts = async () => {
+    setSendingDrafts(true);
+    try {
+      const response = await fetch(`/api/browser/${token}/drafts/send`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          questionIds: sendable.map((question) => question.id),
+        }),
+      });
+      if (!response.ok)
+        setError(
+          ((await response.json()) as { error?: string }).error ??
+            "Could not send drafts",
+        );
+    } finally {
+      setSendingDrafts(false);
+      await refresh();
+    }
+  };
   const acceptAll = async () => {
     setAcceptingAll(true);
     try {
@@ -405,10 +434,11 @@ export function App() {
           key={question.id}
           token={token}
           question={question}
+          draft={drafts[question.id] ?? null}
           number={index + 1}
           total={session.questions.length}
           emphasized={question.id === focused}
-          disabled={!active || acceptingAll}
+          disabled={!active || acceptingAll || sendingDrafts}
           onSaved={refresh}
           onDirtyChange={onDirtyChange}
           artifacts={session.artifacts}
@@ -462,6 +492,19 @@ export function App() {
         )}
         <span className="topbar-spacer" />
         <QuestionProgress questions={session.questions} />
+        {active && sendable.length > 0 && (
+          <button
+            className="accept-all send-drafts"
+            type="button"
+            disabled={sendingDrafts}
+            onClick={() => void sendDrafts()}
+            title="Send your agent's draft for every question you haven't edited"
+          >
+            {sendingDrafts
+              ? "Sending…"
+              : `Send ${sendable.length} draft${sendable.length === 1 ? "" : "s"}`}
+          </button>
+        )}
         {active && acceptable.length > 0 && (
           <button
             className="accept-all"

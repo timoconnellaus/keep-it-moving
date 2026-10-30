@@ -13,6 +13,7 @@ import {
 import { KEY_PREFIX, sha256, VIA_KEY_HEADER } from "../server/keys.js";
 import {
   ASSIGNED_BY_HEADER,
+  DRAFTER_HEADER,
   RESPONDENT_HEADER,
   sameSite,
 } from "../server/hub.js";
@@ -20,6 +21,7 @@ import { PLAN_HEADER } from "../server/plans.js";
 import type { Env } from "./env.js";
 import { ttlCache } from "./cache.js";
 import { hubFor } from "./hubs.js";
+import { inbox, isInbox } from "./inbox.js";
 import { isAdmin, listUsers } from "./users.js";
 import {
   adminPage,
@@ -85,6 +87,7 @@ function forwardable(request: Request): Request {
     VIA_KEY_HEADER,
     RESPONDENT_HEADER,
     ASSIGNED_BY_HEADER,
+    DRAFTER_HEADER,
     PLAN_HEADER,
   ])
     forwarded.headers.delete(header);
@@ -150,6 +153,9 @@ const agentApi: ExportedHandler<Env> = {
     const path = new URL(request.url).pathname;
     if (path === CLI_PACKAGE_PATH)
       return env.ASSETS.fetch(new Request(new URL("/cli.tgz", request.url)));
+    // Interviews sent to this user live in their senders' hubs.
+    if (isInbox(path))
+      return inbox(forwardable(request), env, email, props.via);
     // Tell the hub which requests a key made; a client can't claim either way.
     const forwarded = forwardable(request);
     if (props.via === "key") forwarded.headers.set(VIA_KEY_HEADER, "1");

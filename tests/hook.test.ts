@@ -71,7 +71,7 @@ describe("binding interviews to an agent session", () => {
           `${JSON.stringify({ id: ID, url: "https://k/s/t", questions: [] })}\n`,
         ),
       ),
-    ).toEqual({ bind: [ID], unbind: [] });
+    ).toEqual({ bind: [ID], unbind: [], inbox: [] });
     expect(
       bindingChanges(
         bash(
@@ -91,7 +91,7 @@ describe("binding interviews to an agent session", () => {
       bindingChanges(
         bash(`kim session stop ${ID}; kim session delete ${OTHER}`),
       ),
-    ).toEqual({ bind: [], unbind: [ID, OTHER] });
+    ).toEqual({ bind: [], unbind: [ID, OTHER], inbox: [] });
   });
 
   it("ignores other commands, and ids that kim didn't print", () => {
@@ -100,6 +100,7 @@ describe("binding interviews to an agent session", () => {
     ).toEqual({
       bind: [],
       unbind: [],
+      inbox: [],
     });
     // session list prints every interview's id; that binds none of them.
     expect(
@@ -147,7 +148,7 @@ describe("kim hook", () => {
         JSON.stringify({ questions: [] }),
       ),
     );
-    expect(take).toHaveBeenCalledWith(ID);
+    expect(take).toHaveBeenCalledWith(ID, expect.anything());
     const output = response.hookSpecificOutput as Record<string, string>;
     expect(output.hookEventName).toBe("PostToolUse");
     const [intro, json] = output.additionalContext!.split("\n");
@@ -206,7 +207,7 @@ describe("kim hook", () => {
       { session_id: "new", cwd: "/repo" },
       start + 60_000,
     );
-    expect(take).toHaveBeenCalledWith(ID);
+    expect(take).toHaveBeenCalledWith(ID, expect.anything());
     expect(
       (response.hookSpecificOutput as Record<string, string>).hookEventName,
     ).toBe("SessionStart");
@@ -379,4 +380,70 @@ describe("kim hook, end to end", () => {
     // Two seconds for the network, plus starting node and tsx.
     expect(result.ms).toBeLessThan(5_000);
   }, 30_000);
+});
+
+describe("interviews sent to the user", () => {
+  const TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+
+  it("bind from the inbox commands that name one, by token or url", () => {
+    expect(
+      bindingChanges(bash(`kim draft ${TOKEN} 2 --option Big`)).inbox,
+    ).toEqual([TOKEN]);
+    expect(
+      bindingChanges(
+        bash(`kim inbox show https://kim.test/s/${TOKEN} && kim inbox`),
+      ),
+    ).toEqual({ bind: [], unbind: [], inbox: [TOKEN] });
+    // Listing, or waiting on everything, names none.
+    expect(
+      bindingChanges(bash("kim inbox wait --timeout 600000")).inbox,
+    ).toEqual([]);
+  });
+
+  it("bring the sender's changes in through the hook, like inbox wait's output", async () => {
+    const { run, take, stateFile } = setup();
+    take.mockResolvedValue({
+      news: {
+        news: true,
+        id: TOKEN,
+        questions: [{ number: 3, prompt: "Budget?" }],
+        status: "active",
+      },
+    });
+    await run("PostToolUse", bash(`kim inbox show ${TOKEN}`));
+    expect(take).toHaveBeenCalledWith(
+      TOKEN,
+      expect.objectContaining({ inbox: true }),
+    );
+    expect(readBindings(stateFile)).toEqual([
+      expect.objectContaining({ interviewId: TOKEN, inbox: true }),
+    ]);
+    const response = await run(
+      "UserPromptSubmit",
+      { session_id: "s1", cwd: "/repo" },
+      Date.parse("2026-10-30T09:05:00Z"),
+    );
+    const context = (response.hookSpecificOutput as Record<string, string>)
+      .additionalContext!;
+    expect(context).toContain(`changes to interview ${TOKEN}`);
+    expect(context).toContain("kim inbox wait");
+    expect(context).toContain("Budget?");
+    // Nothing new: nothing said.
+    take.mockResolvedValue({ news: { news: false, status: "active" } });
+    expect(
+      await run(
+        "UserPromptSubmit",
+        { session_id: "s1", cwd: "/repo" },
+        Date.parse("2026-10-30T09:10:00Z"),
+      ),
+    ).toEqual({});
+    // Only in the agent session that worked on it.
+    take.mockClear();
+    await run(
+      "UserPromptSubmit",
+      { session_id: "s2", cwd: "/repo" },
+      Date.parse("2026-10-30T09:15:00Z"),
+    );
+    expect(take).not.toHaveBeenCalled();
+  });
 });

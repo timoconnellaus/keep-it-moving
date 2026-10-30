@@ -57,3 +57,68 @@ export function defaultAnswerText(question: QuestionView): string | null {
     ? composeAnswer(inOptionOrder(choices, question.default), "")
     : question.default[0]!;
 }
+
+/** An answer as an agent gives it: words, chosen options, a note, or a skip. */
+export interface AnswerParts {
+  answer?: string | undefined;
+  options?: string[] | undefined;
+  note?: string | undefined;
+  skipped?: boolean | undefined;
+}
+
+/**
+ * The answer text the browser's form would send for these parts, checked
+ * against the question as its form checks it: options must be the
+ * question's, a number a number in range, and a note goes only where the
+ * form has an "Other, or add a note" field.
+ */
+export function composeParts(
+  question: QuestionView,
+  parts: AnswerParts,
+): { answer: string; skipped: boolean } {
+  const text = parts.answer?.trim() ?? "";
+  const note = parts.note?.trim() ?? "";
+  const options = parts.options ?? [];
+  if (parts.skipped) {
+    if (text || note || options.length)
+      throw new Error("A skip takes no answer, options or note");
+    return { answer: "", skipped: true };
+  }
+  const choices = choicesFor(question);
+  if (!choices.length) {
+    if (options.length || note)
+      throw new Error(
+        `A ${question.type} question has no options or note; give the answer itself`,
+      );
+    if (!text)
+      throw new Error("An answer is required unless the question is skipped");
+    if (question.type === "number") {
+      const value = Number(text);
+      if (!Number.isFinite(value)) throw new Error(`"${text}" isn't a number`);
+      if (question.min !== null && value < question.min)
+        throw new Error(`${value} is below the minimum, ${question.min}`);
+      if (question.max !== null && value > question.max)
+        throw new Error(`${value} is above the maximum, ${question.max}`);
+    }
+    return { answer: text, skipped: false };
+  }
+  const named = [...options, ...(text ? [text] : [])];
+  const selected = named.map((value) => {
+    const match = choices.find(
+      (choice) => choice.trim().toLowerCase() === value.trim().toLowerCase(),
+    );
+    if (!match)
+      throw new Error(
+        `"${value}" is not one of the options: ${choices.join(", ")}. Anything else goes in the note`,
+      );
+    return match;
+  });
+  if (question.type !== "multiple-choice" && new Set(selected).size > 1)
+    throw new Error(`A ${question.type} question takes one option`);
+  if (!selected.length && !note)
+    throw new Error(`Choose one of: ${choices.join(", ")}, or give a note`);
+  return {
+    answer: composeAnswer(inOptionOrder(choices, selected), note),
+    skipped: false,
+  };
+}

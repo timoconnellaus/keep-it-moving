@@ -17,9 +17,10 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import envPaths from "env-paths";
+import { findBrowser, localSearch, NO_BROWSER, screenshot } from "./browser.js";
 import { checkbox } from "./checkbox.js";
 import { normalizeRemote, projectName } from "./shared/remote.js";
 import {
@@ -35,7 +36,12 @@ import {
   skillsFolder,
   uninstallSkill,
 } from "./skill.js";
-import { runHook, type HookPayload, type TakeOutcome } from "./hook.js";
+import {
+  runHook,
+  type HookPayload,
+  type InboxNews,
+  type TakeOutcome,
+} from "./hook.js";
 import {
   HOOK_AGENTS,
   hookEventFor,
@@ -94,6 +100,11 @@ async function main(args: string[]): Promise<void> {
   if (group === "key") return keyCommand(action, rest);
   if (group === "cloud") return cloudCommand(action, rest);
   if (group === "skill") return skillCommand(action, rest);
+  if (group === "inbox") return inboxCommand(action, rest);
+  if (group === "draft")
+    return draftCommand(
+      [action, ...rest].filter((value): value is string => Boolean(value)),
+    );
   if (group === "ask")
     return ask(
       [action, ...rest].filter((value): value is string => Boolean(value)),
@@ -606,6 +617,213 @@ async function chatCommand(action: string | undefined, args: string[]) {
   );
 }
 
+/** An interview sent to the user, by its token or its page's URL. */
+function interviewRef(value: string): string {
+  const token = /\/s\/([A-Za-z0-9_-]{32})(?:[/?#]|$)/.exec(value)?.[1] ?? value;
+  return encodeURIComponent(token);
+}
+
+/**
+ * `inbox`: interviews other people sent to the user, as the user's own
+ * agent works on them. It reads, drafts and chats; it never changes the
+ * interview itself.
+ */
+async function inboxCommand(action: string | undefined, args: string[]) {
+  if (action === undefined || action === "list")
+    return output(await api("/api/sessions/inbox"));
+  if (action === "wait") return inboxWait(args);
+  const interview = interviewRef(positional(args, 0));
+  const base = `/api/sessions/inbox/${interview}`;
+  if (action === "show") {
+    const view = (await api(base)) as {
+      artifacts: Array<{ id: string; format: string; content?: string }>;
+    };
+    // What isn't inline is a command away.
+    for (const artifact of view.artifacts)
+      if (artifact.content === undefined)
+        Object.assign(artifact, {
+          fetch: `kim inbox artifact ${interview} ${artifact.id} --out <file>`,
+          ...(artifact.format === "html"
+            ? { screenshot: `kim inbox screenshot ${interview} ${artifact.id}` }
+            : {}),
+        });
+    return output(view);
+  }
+  if (action === "artifact") {
+    const artifact = (await api(
+      `${base}/artifacts/${encodeURIComponent(positional(args, 1))}`,
+    )) as { content: string };
+    const out = flag(args, "--out");
+    if (!out) return output(artifact);
+    writeFileSync(out, artifact.content);
+    return output({ ...artifact, content: undefined, file: resolve(out) });
+  }
+  if (action === "screenshot") return inboxScreenshot(interview, args);
+  if (action === "chat") {
+    const text = positionals(args).slice(1).join(" ");
+    if (!text.trim())
+      throw new Error("Give the message: kim inbox chat <interview> <text>");
+    const question = flag(args, "--question");
+    return output(
+      await api(`${base}/chat`, {
+        method: "POST",
+        body: JSON.stringify({ text, ...(question ? { question } : {}) }),
+      }),
+    );
+  }
+  throw new Error(`Unknown inbox action: ${action}`);
+}
+
+/**
+ * `draft <interview> <question> [answer…]`: a draft answer the user
+ * reviews and sends in the browser, or with --send their answer now.
+ * The question is its id or number; choices take --option, repeated, and
+ * the form's "Other, or add a note" is --note.
+ */
+async function draftCommand(args: string[]) {
+  const interview = interviewRef(positional(args, 0));
+  const question = encodeURIComponent(positional(args, 1));
+  const path = `/api/sessions/inbox/${interview}/questions/${question}`;
+  if (args.includes("--clear"))
+    return output(await api(`${path}/draft`, { method: "DELETE" }));
+  const answer = positionals(args).slice(2).join(" ");
+  const options = flags(args, "--option");
+  const note = flag(args, "--note");
+  const body = JSON.stringify({
+    ...(answer ? { answer } : {}),
+    ...(options.length ? { options } : {}),
+    ...(note !== undefined ? { note } : {}),
+    ...(args.includes("--skip") ? { skipped: true } : {}),
+  });
+  return output(
+    args.includes("--send")
+      ? await api(`${path}/answer`, { method: "POST", body })
+      : await api(`${path}/draft`, { method: "PUT", body }),
+  );
+}
+
+interface ServedArtifact {
+  id: string;
+  title: string;
+  format: string;
+  revision: number;
+  frame: { width: number; height: number | null };
+  content: string;
+}
+
+/** Renders an html artifact, as its frame shows it, to a PNG with a local browser. */
+async function inboxScreenshot(interview: string, args: string[]) {
+  const artifact = (await api(
+    `/api/sessions/inbox/${interview}/artifacts/${encodeURIComponent(positional(args, 1))}`,
+  )) as ServedArtifact;
+  if (artifact.format !== "html" && artifact.format !== "svg")
+    throw new Error(
+      `"${artifact.title}" is ${artifact.format}, not a page; read it with kim inbox artifact`,
+    );
+  const browser = findBrowser(localSearch());
+  if (!browser) throw new Error(NO_BROWSER);
+  const width = Number(flag(args, "--width") ?? artifact.frame.width);
+  if (!Number.isInteger(width) || width < 100 || width > 4_000)
+    throw new Error("--width is a number of pixels, such as 1280, 834 or 390");
+  const height = artifact.frame.height ?? 800;
+  const slug =
+    artifact.title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 40) || "artifact";
+  const out = resolve(
+    flag(args, "--out") ??
+      join(
+        tmpdir(),
+        "kim-screenshots",
+        `${slug}-r${artifact.revision}-${width}${args.includes("--full-page") ? "-full" : ""}.png`,
+      ),
+  );
+  mkdirSync(dirname(out), { recursive: true });
+  rmSync(out, { force: true });
+  // From a temp file: the browser never holds the agent's token.
+  const dir = mkdtempSync(join(tmpdir(), "kim-artifact-"));
+  try {
+    const page = join(
+      dir,
+      `page.${artifact.format === "svg" ? "svg" : "html"}`,
+    );
+    writeFileSync(page, artifact.content);
+    const size = await screenshot({
+      browser,
+      page,
+      out,
+      width,
+      height,
+      fullPage: args.includes("--full-page"),
+    });
+    return output({
+      file: out,
+      ...size,
+      artifact: { id: artifact.id, title: artifact.title },
+      revision: artifact.revision,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `inbox wait [<interview>]`: blocks until something new arrives in an
+ * interview sent to the user (or any of them): a question, the sender's
+ * agent's reply, a workspace change, or a newly sent interview. What it
+ * prints counts as delivered, so the next wait brings only what is newer.
+ */
+async function inboxWait(args: string[]) {
+  const only = positionals(args)[0];
+  const interview = only ? interviewRef(only) : null;
+  const idle = Number(flag(args, "--idle") ?? 2_000);
+  const timeout = Number(flag(args, "--timeout") ?? 600_000);
+  const take = async (): Promise<InboxNews[]> =>
+    interview
+      ? [
+          (await api(`/api/sessions/inbox/${interview}/take`, {
+            method: "POST",
+          })) as InboxNews,
+        ].filter((news) => news.news)
+      : (
+          (await api("/api/sessions/inbox/take", { method: "POST" })) as {
+            interviews: InboxNews[];
+          }
+        ).interviews;
+  let found: InboxNews[] = [];
+  // One take at a time, and none once something was found: a take marks
+  // what it returns delivered.
+  let taking: Promise<"done" | undefined> = Promise.resolve(undefined);
+  const check = (settle: number) => {
+    taking = taking.then(async (done) => {
+      if (done || found.length) return "done";
+      if (settle) await new Promise((wake) => setTimeout(wake, settle));
+      if (found.length) return "done";
+      found = await take();
+      return found.length ? "done" : undefined;
+    });
+    return taking;
+  };
+  const signal = AbortSignal.timeout(timeout);
+  await watchSocket(
+    "/api/sessions/inbox/socket",
+    () => ({}),
+    (message) => {
+      if (message.type !== "changed") return;
+      if (interview && message.interview !== decodeURIComponent(interview))
+        return;
+      return check(idle);
+    },
+    // Anything that came while nothing waited is news at once.
+    { onOpen: () => check(0), signal },
+  );
+  output(
+    found.length ? { interviews: found } : { interviews: [], timedOut: true },
+  );
+}
+
 async function attach(args: string[]) {
   const id = positional(args, 0);
   process.stdout.on("error", () => process.exit(0));
@@ -681,15 +899,42 @@ interface WatchMessage {
  * connection reconnects with backoff, asking `query` again; a refusal
  * (signed out, deleted, not allowed) or a newer watcher ends it with an error.
  */
-async function watchInterview(
+const watchInterview = (
   id: string,
   query: () => Record<string, string>,
   onMessage: (message: WatchMessage, line: string) => "done" | undefined,
+) =>
+  watchSocket(
+    `/api/sessions/${encodeURIComponent(id)}/socket`,
+    query,
+    onMessage,
+  );
+
+type Watched = "done" | undefined;
+
+/**
+ * The socket behind `watchInterview` and `inbox wait`. `onOpen` runs on
+ * each connection; either it or `onMessage` may finish the watch, now or
+ * once a promise settles. An aborted `signal` ends it quietly.
+ */
+async function watchSocket(
+  path: string,
+  query: () => Record<string, string>,
+  onMessage: (
+    message: WatchMessage,
+    line: string,
+  ) => Watched | Promise<Watched>,
+  extra: {
+    onOpen?: () => Watched | Promise<Watched>;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<void> {
+  const { signal } = extra;
   for (let attempt = 0; ; attempt++) {
+    if (signal?.aborted) return;
     const token = await accessToken();
     const ended = await new Promise<"done" | "dropped" | Error>((resolve) => {
-      const url = `${defaultBase.replace(/^http/, "ws")}/api/sessions/${encodeURIComponent(id)}/socket?${new URLSearchParams(query())}`;
+      const url = `${defaultBase.replace(/^http/, "ws")}${path}?${new URLSearchParams(query())}`;
       // Node's WebSocket takes headers, unlike a browser's.
       const socket = new WebSocket(url, {
         headers: token ? { authorization: `Bearer ${token}` } : {},
@@ -700,8 +945,28 @@ async function watchInterview(
         if (Date.now() - heard > SILENT_MS) socket.close();
         else if (socket.readyState === WebSocket.OPEN) socket.send("ping");
       }, PING_MS);
+      const settle = (result: Watched | Promise<Watched>) =>
+        void Promise.resolve(result).then(
+          (value) => {
+            if (value !== "done" || finished) return;
+            finished = "done";
+            socket.close();
+          },
+          (error: unknown) => {
+            if (finished) return;
+            finished =
+              error instanceof Error ? error : new Error(String(error));
+            socket.close();
+          },
+        );
+      const abort = () => {
+        finished ??= "done";
+        socket.close();
+      };
+      signal?.addEventListener("abort", abort, { once: true });
       socket.onopen = () => {
         attempt = 0;
+        if (extra.onOpen) settle(extra.onOpen());
       };
       socket.onmessage = (event) => {
         heard = Date.now();
@@ -712,12 +977,15 @@ async function watchInterview(
           finished = new Error(message.message ?? "Replaced");
         if (message.type === "deleted")
           finished = new Error(message.message ?? "Session not found");
-        if (onMessage(message, line) === "done") finished = "done";
+        const result = onMessage(message, line);
+        if (result === "done") finished = "done";
+        else if (result && !finished) settle(result);
         if (finished) socket.close();
       };
       socket.onerror = () => undefined;
       socket.onclose = (event) => {
         clearInterval(pinger);
+        signal?.removeEventListener("abort", abort);
         if (finished) return resolve(finished);
         if (event.code === 4404) return resolve(new Error("Session not found"));
         resolve("dropped");
@@ -728,7 +996,7 @@ async function watchInterview(
     // A refused upgrade only says it failed: ask the same route over HTTP
     // why, such as the Free plan's limit. 426 means it would take a socket.
     const probe = await authorizedFetch(
-      `/api/sessions/${encodeURIComponent(id)}/socket?${new URLSearchParams(query())}`,
+      `${path}?${new URLSearchParams(query())}`,
     ).catch(() => null);
     if (
       probe &&
@@ -1208,7 +1476,8 @@ async function hookCommand(argument: string | undefined) {
           ) as HookPayload;
           return runHook(event, payload, {
             stateFile: configFile("hooks.json"),
-            take: takeAnswers,
+            take: (id, binding) =>
+              binding.inbox ? takeInbox(id) : takeAnswers(id),
           });
         })().catch(() => ({})),
         new Promise<Record<string, unknown>>((resolve) =>
@@ -1242,6 +1511,18 @@ async function takeAnswers(id: string): Promise<TakeOutcome> {
   if (response.status === 404) return "gone";
   if (!response.ok) return null;
   return (await response.json()) as TakeOutcome;
+}
+
+/** What changed in an interview sent to the user since its agent last looked. */
+async function takeInbox(token: string): Promise<TakeOutcome> {
+  const response = await authorizedFetch(
+    `/api/sessions/inbox/${encodeURIComponent(token)}/take`,
+    { method: "POST", signal: AbortSignal.timeout(TAKE_TIMEOUT_MS) },
+  );
+  // Unassigned or deleted: it is no longer the agent's to follow.
+  if (response.status === 403 || response.status === 404) return "gone";
+  if (!response.ok) return null;
+  return { news: (await response.json()) as InboxNews };
 }
 
 /** Starts kim updating itself, detached, with its output in update.log. */
@@ -1675,9 +1956,13 @@ const BOOLEAN_FLAGS = new Set([
   "--no-hooks",
   "--background",
   "--check",
+  "--skip",
+  "--send",
+  "--full-page",
 ]);
 
-function positional(args: string[], index: number): string {
+/** The arguments that aren't flags or their values. */
+function positionals(args: string[]): string[] {
   const values: string[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i]?.startsWith("--")) {
@@ -1686,7 +1971,10 @@ function positional(args: string[], index: number): string {
     }
     values.push(args[i]!);
   }
-  const value = values[index];
+  return values;
+}
+function positional(args: string[], index: number): string {
+  const value = positionals(args)[index];
   if (!value) throw new Error(`Missing positional argument ${index + 1}`);
   return value;
 }
@@ -1740,6 +2028,18 @@ Commands:
   artifact show <session> <artifact|none>   choose what the workspace shows
   artifact delete <session> <artifact>
   stage open|close <session>   show or hide the workspace column
+
+Interviews sent to you (someone assigned you one; your agent drafts, you send):
+  inbox   the interviews sent to you (or a linked account) still open: url, sender, open and drafted counts
+  inbox show <interview>   its questions with answers, drafts and threads, the chat, and the workspace
+  inbox artifact <interview> <artifact> [--out <file>]   the artifact as its frame serves it
+  inbox screenshot <interview> <artifact> [--width N] [--full-page] [--out <file.png>]
+    renders an html artifact with a local Chrome, Chromium or Edge (or CHROME_PATH); prints the PNG's path
+  inbox chat <interview> [--question <question>] <text>   message the sender's agent, as you
+  inbox wait [<interview>] [--timeout MS]   blocks until a new question, reply, workspace change or interview
+  draft <interview> <question> [answer…] [--option <label>]… [--note <text>] [--skip] [--send] | --clear
+    a draft answer the user reviews and sends at the url; --send answers now (only when the user said to)
+    <interview> is its id or url; <question> its id or number
 
 Cloud sessions (claude.ai/code):
   key create <name> | list | revoke <id|name>   agent keys for cloud environments (KEEP_IT_MOVING_TOKEN)

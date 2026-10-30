@@ -323,6 +323,21 @@ export interface SessionView {
   assignedBy: string | null;
   /** Browser views only: the viewer is the assignee, not the owner. */
   respondent?: boolean;
+  /** The assignee's views only: their agent's drafts, by question id. */
+  drafts?: Record<string, DraftView>;
+}
+/**
+ * An answer the assignee's agent suggested, waiting for the assignee to
+ * send it. Kept apart from answers: the owner and their agent never see it.
+ */
+export interface DraftView {
+  text: string;
+  skipped: boolean;
+  /** The signed-in email whose agent wrote it: the assignee or a linked account. */
+  draftedBy: string;
+  updatedAt: string;
+  /** The revision of the question's artifact when it was written. */
+  artifactRevision: number | null;
 }
 export interface InterviewEvent {
   id: number;

@@ -220,6 +220,14 @@ h3 {
 .accept-all:hover {
   background: #dbe7ff;
 }
+.send-drafts {
+  background: var(--blue);
+  color: #fff;
+}
+.send-drafts:hover {
+  background: var(--blue);
+  filter: brightness(1.08);
+}
 .workspace-toggle,
 .assign-button {
   flex: none;
@@ -586,6 +594,17 @@ h3 {
 .answer-form {
   display: grid;
   gap: 12px;
+}
+/* Only the assignee sees this: their agent prefilled the form. */
+.draft-note {
+  width: fit-content;
+  margin: 0 0 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 600;
 }
 .recommendation {
   padding-left: 10px;
@@ -2580,6 +2599,10 @@ html.previewing-full body {
   }
   .chat-launcher {
     display: inline-flex;
+  }
+  /* Clear of the chat launcher, which takes the bottom right. */
+  .more-below-band {
+    justify-content: flex-start;
   }
   .chat {
     display: none;

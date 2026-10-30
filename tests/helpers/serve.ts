@@ -34,6 +34,19 @@ export async function serveHarness(
         );
         const id = Number(response.headers.get(ACCEPTED_SOCKET));
         const fake = harness.agents.all.find((socket) => socket.id === id);
+        const inbox = harness.inbox.all.find((socket) => socket.id === id);
+        if (inbox) {
+          sockets.handleUpgrade(request, raw, head, (ws) => {
+            ws.on("message", (data) => {
+              if (String(data) === "ping") ws.send("pong");
+            });
+            ws.on("close", () => {
+              inbox.closed = true;
+            });
+            inbox.peer = { send: (data) => ws.send(data) };
+          });
+          return;
+        }
         if (!fake) {
           raw.end(
             `HTTP/1.1 ${response.status} ${response.statusText || "Refused"}\r\nconnection: close\r\ncontent-length: 0\r\n\r\n`,

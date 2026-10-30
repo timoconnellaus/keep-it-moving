@@ -9,6 +9,8 @@ import {
 import { durableObjectSql } from "../server/sql.js";
 import { InterviewStore } from "../server/store.js";
 import type { Env } from "./env.js";
+import { hubFor } from "./hubs.js";
+import { linkedEmails } from "./links.js";
 import { webPush } from "./push.js";
 
 /**
@@ -17,6 +19,8 @@ import { webPush } from "./push.js";
  * their session id, or `respondent:<id>` for an assignee's page. Agents'
  * sockets, tagged `agent:<id>`, hibernate too, carrying what they wait for;
  * the object's one alarm wakes it when a wait's batch or timeout is due.
+ * `kim inbox wait` sockets, tagged `inbox`, wait for word from the hubs of
+ * people who sent this user an interview.
  */
 export class InterviewHub extends DurableObject<Env> {
   private readonly hub: ReturnType<typeof createHub>;
@@ -33,6 +37,40 @@ export class InterviewHub extends DurableObject<Env> {
       sql,
       baseUrl: env.PUBLIC_URL,
       push: webPush(env),
+      inboxSockets: {
+        accept: () => {
+          const [client, server] = Object.values(new WebSocketPair()) as [
+            WebSocket,
+            WebSocket,
+          ];
+          ctx.acceptWebSocket(server, [INBOX]);
+          return new Response(null, { status: 101, webSocket: client });
+        },
+        send: (data) => {
+          for (const socket of ctx.getWebSockets(INBOX))
+            try {
+              socket.send(data);
+            } catch {
+              /* closing */
+            }
+        },
+      },
+      // The assignee's agent may be signed in as any account linked to theirs.
+      pingInbox: (assignee, token) =>
+        ctx.waitUntil(
+          linkedEmails(env, assignee)
+            .then((emails) =>
+              Promise.all(
+                emails.map((email) =>
+                  hubFor(env, email).fetch("https://hub/internal/inbox/ping", {
+                    method: "POST",
+                    body: JSON.stringify({ token }),
+                  }),
+                ),
+              ),
+            )
+            .catch(() => undefined),
+        ),
       sockets: {
         send: (sessionId, data) => {
           for (const socket of ctx.getWebSockets(sessionId))
@@ -66,7 +104,9 @@ export class InterviewHub extends DurableObject<Env> {
                 .getTags(socket)
                 .some(
                   (tag) =>
-                    tag.startsWith("respondent:") || tag.startsWith(AGENT),
+                    tag.startsWith("respondent:") ||
+                    tag.startsWith(AGENT) ||
+                    tag === INBOX,
                 )
             )
               try {
@@ -189,6 +229,7 @@ const SOCKETS_PER_PAGE = 50;
 const SOCKETS_PER_HUB = 1_000;
 
 const respondentTag = (sessionId: string) => `respondent:${sessionId}`;
+const INBOX = "inbox";
 const AGENT = "agent:";
 const agentTag = (sessionId: string) => `${AGENT}${sessionId}`;
 

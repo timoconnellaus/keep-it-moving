@@ -12,6 +12,7 @@ import {
   type ArtifactView,
   type ChatAuthor,
   type ChatMessageView,
+  type DraftView,
   type InterviewEvent,
   type FramePosition,
   type OriginView,
@@ -85,6 +86,9 @@ const ATTRIBUTION_COLUMNS = [
   ["questions", "binding"],
   // A comment's pin on an artifact, as JSON.
   ["chat_messages", "pin"],
+  // The last event the assignee's agent has been given (see inboxChanges);
+  // null until it has seen the interview at all.
+  ["sessions", "inbox_delivered"],
 ] as const;
 
 type Binding = Pick<QuestionView, "optionValues" | "control" | "unit">;
@@ -130,6 +134,43 @@ function sessionToken(): string {
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 }
+
+/** What the assignee's agent hasn't been given yet; see inboxChanges. */
+export interface InboxChanges {
+  /** The agent hasn't seen this interview at all: read it whole. */
+  assigned: boolean;
+  questions: Array<{
+    id: string;
+    number: number;
+    type: QuestionView["type"];
+    prompt: string;
+  }>;
+  messages: Array<{
+    id: string;
+    text: string;
+    replyTo: string | null;
+    /** The question whose thread it replies in. */
+    question: number | null;
+  }>;
+  artifacts: InboxArtifactChange[];
+  notes: string[];
+  status: SessionView["status"];
+  through: number;
+}
+export interface InboxArtifactChange {
+  id: string;
+  title: string;
+  kind: ArtifactView["kind"];
+  happened: Array<"added" | "revised" | "removed" | "shown">;
+  revision: number;
+}
+
+/** Whether there is anything in these changes for the agent. */
+export const hasInboxNews = (changes: InboxChanges) =>
+  changes.assigned ||
+  changes.questions.length > 0 ||
+  changes.messages.length > 0 ||
+  changes.artifacts.length > 0;
 
 export class InterviewStore {
   private readonly listeners = new Set<(event: InterviewEvent) => void>();
@@ -177,6 +218,11 @@ export class InterviewStore {
       CREATE TABLE IF NOT EXISTS frame_positions (
         session_id TEXT NOT NULL, artifact_id TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL,
         updated_at TEXT NOT NULL, PRIMARY KEY (session_id, artifact_id)
+      );
+      CREATE TABLE IF NOT EXISTS drafts (
+        question_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+        text TEXT NOT NULL, skipped INTEGER NOT NULL DEFAULT 0, drafted_by TEXT NOT NULL,
+        artifact_revision INTEGER, updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         endpoint TEXT PRIMARY KEY, created_at TEXT NOT NULL
@@ -687,6 +733,7 @@ export class InterviewStore {
         id,
       );
       for (const table of [
+        "drafts",
         "questions",
         "events",
         "artifacts",
@@ -716,6 +763,14 @@ export class InterviewStore {
     const assignee = email?.trim().toLowerCase() || null;
     if (assignee && !EMAIL.test(assignee))
       throw new Error(`"${email}" is not an email address`);
+    // A new assignee starts afresh: nothing seen, nothing drafted.
+    if (assignee !== optional(row.assignee)) {
+      this.sql.all(
+        "UPDATE sessions SET inbox_delivered = NULL WHERE id = ?",
+        id,
+      );
+      this.sql.all("DELETE FROM drafts WHERE session_id = ?", id);
+    }
     this.sql.all(
       "UPDATE sessions SET assignee = ?, assigned_by = ?, updated_at = ? WHERE id = ?",
       assignee,
@@ -983,7 +1038,234 @@ export class InterviewStore {
       now(),
       by,
     );
+    // An answer, however it came, replaces the draft.
+    this.sql.all("DELETE FROM drafts WHERE question_id = ?", questionId);
     return { revision, event };
+  }
+
+  /** The assignee's agent's drafts, by question, for questions still open. */
+  drafts(sessionId: string): Record<string, DraftView> {
+    return Object.fromEntries(
+      this.sql
+        .all(
+          `SELECT d.* FROM drafts d JOIN questions q ON q.id = d.question_id
+           LEFT JOIN answers a ON a.question_id = d.question_id
+           WHERE d.session_id = ? AND q.deleted = 0 AND a.question_id IS NULL`,
+          sessionId,
+        )
+        .map((row) => [
+          String(row.question_id),
+          {
+            text: String(row.text),
+            skipped: Boolean(row.skipped),
+            draftedBy: String(row.drafted_by),
+            updatedAt: String(row.updated_at),
+            artifactRevision:
+              row.artifact_revision === null
+                ? null
+                : Number(row.artifact_revision),
+          },
+        ]),
+    );
+  }
+
+  /**
+   * Saves a draft answer from the assignee's agent. No event: the owner's
+   * agent and pages never learn of it, and it reaches them only when the
+   * assignee sends it, as their own answer.
+   */
+  saveDraft(
+    sessionId: string,
+    questionId: string,
+    answer: { answer: string; skipped: boolean },
+    by: string,
+  ): DraftView {
+    this.requireActive(sessionId);
+    const question = this.questionRow(sessionId, questionId);
+    if (
+      first(this.sql, "SELECT 1 FROM answers WHERE question_id=?", questionId)
+    )
+      throw new Error(
+        "That question is already answered; drafts are for open questions",
+      );
+    const artifact = question.artifact_id
+      ? this.liveArtifact(sessionId, String(question.artifact_id))
+      : undefined;
+    this.sql.all(
+      `INSERT INTO drafts (question_id, session_id, text, skipped, drafted_by, artifact_revision, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(question_id) DO UPDATE SET text=excluded.text, skipped=excluded.skipped,
+         drafted_by=excluded.drafted_by, artifact_revision=excluded.artifact_revision, updated_at=excluded.updated_at`,
+      questionId,
+      sessionId,
+      answer.answer,
+      answer.skipped ? 1 : 0,
+      by.toLowerCase(),
+      artifact ? Number(artifact.revision) : null,
+      now(),
+    );
+    return this.drafts(sessionId)[questionId]!;
+  }
+
+  /** Drops a question's draft; false when it had none. */
+  clearDraft(sessionId: string, questionId: string): boolean {
+    this.questionRow(sessionId, questionId);
+    const had = Boolean(
+      first(this.sql, "SELECT 1 FROM drafts WHERE question_id=?", questionId),
+    );
+    this.sql.all("DELETE FROM drafts WHERE question_id = ?", questionId);
+    return had;
+  }
+
+  /** Who an interview is assigned to, and its token, for telling their agent. */
+  assignment(sessionId: string): { assignee: string; token: string } | null {
+    const row = first(
+      this.sql,
+      "SELECT assignee, token FROM sessions WHERE id = ?",
+      sessionId,
+    );
+    return row?.assignee
+      ? { assignee: String(row.assignee), token: String(row.token) }
+      : null;
+  }
+
+  /**
+   * What the assignee's agent hasn't been given yet: whether the interview
+   * is new to it, questions added, the owner's agent's chat replies, and
+   * workspace changes, one entry per artifact however many edits it had,
+   * with a note for each draft written against an older revision of an
+   * artifact that changed. `through` is the event to mark delivered up to.
+   */
+  inboxChanges(sessionId: string): InboxChanges {
+    const session = first(
+      this.sql,
+      "SELECT inbox_delivered, status FROM sessions WHERE id = ?",
+      sessionId,
+    );
+    if (!session) throw new Error("Session not found");
+    const cursor =
+      session.inbox_delivered === null ? null : Number(session.inbox_delivered);
+    const through = Number(
+      first(
+        this.sql,
+        "SELECT COALESCE(MAX(id), 0) id FROM events WHERE session_id = ?",
+        sessionId,
+      )!.id,
+    );
+    const view = this.getSession(sessionId, "");
+    const numbers = new Map(
+      view.questions.map((question, index) => [question.id, index + 1]),
+    );
+    const changes: InboxChanges = {
+      assigned: cursor === null,
+      questions: [],
+      messages: [],
+      artifacts: [],
+      notes: [],
+      status: view.status,
+      through,
+    };
+    // An interview new to the agent is news in itself: it reads it whole.
+    if (cursor === null) return changes;
+    const events = this.sql
+      .all(
+        `SELECT * FROM events WHERE session_id = ? AND id > ? AND type IN
+          ('question.added', 'chat.reply', 'artifact.added', 'artifact.updated', 'artifact.deleted', 'stage.changed')
+         ORDER BY id`,
+        sessionId,
+        cursor,
+      )
+      .map(this.mapEvent);
+    const artifacts = new Map<string, InboxArtifactChange["happened"]>();
+    for (const event of events) {
+      const { payload } = event;
+      if (event.type === "question.added") {
+        const question = view.questions.find(
+          (item) => item.id === payload.questionId,
+        );
+        if (question && !question.answer)
+          changes.questions.push({
+            id: question.id,
+            number: numbers.get(question.id)!,
+            type: question.type,
+            prompt: question.prompt,
+          });
+        continue;
+      }
+      if (event.type === "chat.reply") {
+        const message = view.chat.find((item) => item.id === payload.messageId);
+        if (!message) continue;
+        const about = view.chat.find(
+          (item) => item.id === message.replyTo,
+        )?.questionId;
+        changes.messages.push({
+          id: message.id,
+          text: message.text,
+          replyTo: message.replyTo,
+          question: about ? (numbers.get(about) ?? null) : null,
+        });
+        continue;
+      }
+      if (event.type === "stage.changed" && payload.source !== "agent")
+        continue;
+      const artifactId = payload.artifactId ? String(payload.artifactId) : null;
+      if (!artifactId) continue;
+      const happened: InboxArtifactChange["happened"][number] =
+        event.type === "artifact.added"
+          ? "added"
+          : event.type === "artifact.updated"
+            ? "revised"
+            : event.type === "artifact.deleted"
+              ? "removed"
+              : "shown";
+      const happenings = artifacts.get(artifactId) ?? [];
+      if (!happenings.includes(happened)) happenings.push(happened);
+      artifacts.set(artifactId, happenings);
+    }
+    for (const [id, happened] of artifacts) {
+      const row = first(
+        this.sql,
+        "SELECT * FROM artifacts WHERE id = ? AND session_id = ?",
+        id,
+        sessionId,
+      );
+      if (!row) continue;
+      const removed = Boolean(row.deleted);
+      changes.artifacts.push({
+        id,
+        title: String(row.title),
+        kind: row.kind as ArtifactView["kind"],
+        happened: removed ? ["removed"] : happened,
+        revision: Number(row.revision),
+      });
+    }
+    // A draft about an artifact that has moved on since it was written.
+    const drafts = this.drafts(sessionId);
+    for (const question of view.questions) {
+      const draft = drafts[question.id];
+      const changed = changes.artifacts.find(
+        (item) => item.id === question.artifactId,
+      );
+      if (!draft || !changed || draft.artifactRevision === null) continue;
+      if (changed.happened.includes("removed"))
+        changes.notes.push(
+          `Your draft for Q${numbers.get(question.id)} was written against ${changed.title}, which has been removed`,
+        );
+      else if (changed.revision > draft.artifactRevision)
+        changes.notes.push(
+          `Your draft for Q${numbers.get(question.id)} was written against an older ${changed.title} (revision ${draft.artifactRevision}; it is now ${changed.revision})`,
+        );
+    }
+    return changes;
+  }
+
+  /** The assignee's agent has been given everything up to this event. */
+  markInboxDelivered(sessionId: string, through: number): void {
+    this.sql.all(
+      "UPDATE sessions SET inbox_delivered = ? WHERE id = ?",
+      String(through),
+      sessionId,
+    );
   }
 
   /** Adds an artifact. A session has one plan, so adding another plan replaces its content. */

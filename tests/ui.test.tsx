@@ -188,6 +188,130 @@ describe("assigning an interview", () => {
   });
 });
 
+describe("drafts from the assignee's agent", () => {
+  const open = (id: string, prompt: string) => ({
+    ...state.questions[0]!,
+    id,
+    prompt,
+    answer: null,
+  });
+  const drafted: SessionView = {
+    ...state,
+    project: null,
+    assignee: "bob@example.com",
+    assignedBy: "Ann",
+    respondent: true,
+    questions: [
+      open("q1", "Choose a direction"),
+      { ...open("q2", "Why?"), type: "text", options: [] },
+      open("q3", "Budget?"),
+    ],
+    drafts: {
+      q1: {
+        text: "B — the bolder one",
+        skipped: false,
+        draftedBy: "bob@example.com",
+        updatedAt: "",
+        artifactRevision: null,
+      },
+      q2: {
+        text: "Matches the brand",
+        skipped: false,
+        draftedBy: "bob@example.com",
+        updatedAt: "",
+        artifactRevision: null,
+      },
+    },
+  };
+
+  it("prefills each drafted question, says so, and sends the untouched ones", async () => {
+    const fetchMock = vi.fn(async (...request: [string, RequestInit?]) => ({
+      ok: true,
+      json: async () => structuredClone(drafted),
+      request,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    expect(
+      await screen.findByRole("button", { name: "Send 2 drafts" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Drafted by your agent")).toHaveLength(2);
+    const first = screen
+      .getByText("Choose a direction")
+      .closest("article") as HTMLElement;
+    expect(within(first).getByRole("button", { name: /^B/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(first).getByLabelText("Other answer or note")).toHaveValue(
+      "the bolder one",
+    );
+    // Editing one keeps it out of the batch, and it says it was edited.
+    const second = screen.getByText("Why?").closest("article") as HTMLElement;
+    fireEvent.change(within(second).getByLabelText("Your answer"), {
+      target: { value: "Matches the brand, mostly" },
+    });
+    expect(
+      within(second).getByText("Edited from your agent's draft"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Send 1 draft" }));
+    await act(async () => undefined);
+    const send = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/drafts/send"),
+    );
+    expect(JSON.parse(String(send![1]!.body))).toEqual({ questionIds: ["q1"] });
+  });
+
+  it("fills in a draft that arrives while the page is open", async () => {
+    const before = { ...drafted, drafts: {} };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => structuredClone(before),
+      })),
+    );
+    render(<App />);
+    const card = (await screen.findByText("Why?")).closest(
+      "article",
+    ) as HTMLElement;
+    expect(within(card).getByLabelText("Your answer")).toHaveValue("");
+    act(() =>
+      FakeSocket.instances[0]!.onmessage?.({
+        data: JSON.stringify({ type: "state", session: drafted }),
+      } as MessageEvent),
+    );
+    expect(within(card).getByLabelText("Your answer")).toHaveValue(
+      "Matches the brand",
+    );
+    expect(within(card).getByText("Drafted by your agent")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Send 2 drafts" }),
+    ).toBeInTheDocument();
+  });
+
+  it("never shows drafts in the owner's view", async () => {
+    const owner = { ...drafted, drafts: undefined };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/overview")
+          ? { ok: true, json: async () => ({ sessions: [] }) }
+          : {
+              ok: true,
+              json: async () => ({
+                ...structuredClone(owner),
+                respondent: false,
+              }),
+            },
+      ),
+    );
+    render(<App />);
+    expect(await screen.findByText("Budget?")).toBeInTheDocument();
+    expect(screen.queryByText(/draft/i)).not.toBeInTheDocument();
+  });
+});
+
 describe("assigning on the Free plan", () => {
   it("shows Assign as a Pro feature, with the way to upgrade", async () => {
     vi.stubGlobal(

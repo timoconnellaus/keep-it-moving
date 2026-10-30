@@ -7,8 +7,10 @@ import type { HookEvent } from "./hooks.js";
  * interviews each agent session works on, from the kim commands the agent
  * runs, and between the agent's steps takes any answers the user has given
  * since, so they reach the agent while it works instead of waiting for its
- * next `kim wait`. It must never hold the agent up: a session with no
- * interviews costs one small file read.
+ * next `kim wait`. Interviews sent to the user (`kim inbox`, `kim draft`)
+ * bind too, and bring what the sender's side changed: new questions, its
+ * agent's replies, workspace changes. It must never hold the agent up: a
+ * session with no interviews costs one small file read.
  */
 
 /** An interview an agent session is working on. */
@@ -19,6 +21,8 @@ export interface Binding {
   boundAt: number;
   /** When a hook last took this interview's answers. */
   takenAt?: number;
+  /** Sent to the user: interviewId is its token, and changes come from the inbox. */
+  inbox?: true;
 }
 
 /** The parts of a hook's stdin payload kim reads; Claude Code and Codex share them. */
@@ -38,8 +42,20 @@ export interface Batch {
   [key: string]: unknown;
 }
 
-/** What a take found: a batch (maybe empty), the interview gone, or no answer in time. */
-export type TakeOutcome = { batch: Batch } | "gone" | null;
+/** What `kim inbox wait` prints for one interview, as a take returns it. */
+export interface InboxNews {
+  /** Whether anything in it is new. */
+  news: boolean;
+  status?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * What a take found: a batch (maybe empty), an interview sent to the user's
+ * news, the interview gone, or no answer in time.
+ */
+export type TakeOutcome =
+  { batch: Batch } | { news: InboxNews } | "gone" | null;
 
 /** At most one take per interview this often between tool calls. */
 export const TAKE_THROTTLE_MS = 15_000;
@@ -49,6 +65,16 @@ export const BINDING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CONTEXT_MAX = 9_500;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** An interview sent to the user, by its token or its page's URL. */
+const SENT = /^(?:https?:\/\/[^\s]*\/s\/)?([A-Za-z0-9_-]{32})$/;
+/** Inbox commands that name the interview first. */
+const INBOX_ACTIONS = new Set([
+  "show",
+  "artifact",
+  "screenshot",
+  "chat",
+  "wait",
+]);
 const KIM = /(^|\/)(kim|interviewer)$/;
 
 export function readBindings(file: string): Binding[] {
@@ -103,16 +129,30 @@ function kimInvocations(command: string): string[][] {
 export function bindingChanges(payload: HookPayload): {
   bind: string[];
   unbind: string[];
+  /** Interviews sent to the user that the command worked on, by token. */
+  inbox: string[];
 } {
   const bind: string[] = [];
   const unbind: string[] = [];
+  const inbox: string[] = [];
   const raw = payload.tool_input?.command;
   const command = Array.isArray(raw) ? raw.join(" ") : raw;
-  if (typeof command !== "string") return { bind, unbind };
+  if (typeof command !== "string") return { bind, unbind, inbox };
   const invocations = kimInvocations(command);
-  if (!invocations.length) return { bind, unbind };
+  if (!invocations.length) return { bind, unbind, inbox };
   let printsSession = false;
   for (const [group, action, ...rest] of invocations) {
+    const sent =
+      group === "draft"
+        ? action
+        : group === "inbox" && INBOX_ACTIONS.has(action!)
+          ? rest[0]
+          : undefined;
+    if (group === "draft" || group === "inbox") {
+      const token = sent && SENT.exec(sent)?.[1];
+      if (token) inbox.push(token);
+      continue;
+    }
     const ids = [action, ...rest].filter(
       (word): word is string => word !== undefined && UUID.test(word),
     );
@@ -141,6 +181,7 @@ export function bindingChanges(payload: HookPayload): {
   return {
     bind: [...new Set(bind)].filter((id) => !unbind.includes(id)),
     unbind: [...new Set(unbind)],
+    inbox: [...new Set(inbox)],
   };
 }
 
@@ -170,6 +211,17 @@ export function formatBatch(
   return `${intro}\n${json}`;
 }
 
+/** An interview sent to the user's news, as the agent reads it. */
+export function formatNews(
+  event: HookEvent,
+  token: string,
+  news: InboxNews,
+): string {
+  const intro = `Keep it moving: changes to interview ${token}, which was sent to your user, ${ARRIVED[event]}. Act on them exactly as on \`kim inbox wait\` output.`;
+  const json = JSON.stringify(news);
+  return `${intro}\n${json.length > CONTEXT_MAX ? `${json.slice(0, CONTEXT_MAX)}… (cut short; run \`kim inbox show ${token}\`)` : json}`;
+}
+
 /**
  * Runs one hook event against the bindings in `stateFile`, taking answers
  * through `take`, and returns the hook's JSON response: `{}`, or the
@@ -180,7 +232,7 @@ export async function runHook(
   payload: HookPayload,
   deps: {
     stateFile: string;
-    take: (interviewId: string) => Promise<TakeOutcome>;
+    take: (interviewId: string, binding: Binding) => Promise<TakeOutcome>;
     now?: number;
   },
 ): Promise<Record<string, unknown>> {
@@ -194,10 +246,10 @@ export async function runHook(
   let changed = bindings.length !== before.length;
 
   if (event === "PostToolUse") {
-    const { bind, unbind } = bindingChanges(payload);
-    if (bind.length || unbind.length) {
+    const { bind, unbind, inbox } = bindingChanges(payload);
+    if (bind.length || unbind.length || inbox.length) {
       changed = true;
-      const touched = new Set([...bind, ...unbind]);
+      const touched = new Set([...bind, ...unbind, ...inbox]);
       const previous = new Map(
         bindings.map((binding) => [binding.interviewId, binding]),
       );
@@ -208,6 +260,16 @@ export async function runHook(
           agentSessionId: sessionId,
           cwd,
           boundAt: now,
+          ...(previous.get(interviewId)?.takenAt !== undefined
+            ? { takenAt: previous.get(interviewId)!.takenAt }
+            : {}),
+        })),
+        ...inbox.map((interviewId) => ({
+          interviewId,
+          agentSessionId: sessionId,
+          cwd,
+          boundAt: now,
+          inbox: true as const,
           ...(previous.get(interviewId)?.takenAt !== undefined
             ? { takenAt: previous.get(interviewId)!.takenAt }
             : {}),
@@ -233,7 +295,7 @@ export async function runHook(
   const outcomes = await Promise.all(
     targets.map(async (target) => ({
       interviewId: target.interviewId,
-      outcome: await deps.take(target.interviewId).catch(() => null),
+      outcome: await deps.take(target.interviewId, target).catch(() => null),
     })),
   );
   const finished = new Set<string>();
@@ -244,6 +306,12 @@ export async function runHook(
       continue;
     }
     if (!outcome) continue;
+    if ("news" in outcome) {
+      if (outcome.news.status === "stopped") finished.add(interviewId);
+      if (outcome.news.news)
+        parts.push(formatNews(event, interviewId, outcome.news));
+      continue;
+    }
     if (outcome.batch.status === "stopped") finished.add(interviewId);
     if (outcome.batch.events.length)
       parts.push(formatBatch(event, interviewId, outcome.batch));

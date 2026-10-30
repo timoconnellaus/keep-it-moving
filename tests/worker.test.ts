@@ -12,6 +12,7 @@ import {
 import { GOOGLE_JWKS, GOOGLE_TOKEN } from "../src/worker/auth.js";
 import type { Env } from "../src/worker/env.js";
 import worker from "../src/worker/index.js";
+import { link } from "../src/worker/links.js";
 import { plans, updatePlan } from "../src/worker/plans.js";
 import { STRIPE_API } from "../src/worker/stripe.js";
 import { ACCEPTED_SOCKET, hubHarness } from "./helpers/harness.js";
@@ -782,6 +783,229 @@ describe("assigning an interview to someone else", () => {
       body: JSON.stringify({ email: "ann@example.com" }),
     });
     expect(response.status).toBe(400);
+  });
+});
+
+describe("interviews sent to you, through your agent", () => {
+  /** Fresh addresses per test: this isolate caches link groups by email. */
+  let people = 0;
+  const person = (name: string) => `${name}.inbox${++people}@example.com`;
+
+  /** Ann's interview with two questions, assigned to Bob; both signed in to kim. */
+  async function sent() {
+    const s = setup();
+    const annEmail = person("ann");
+    const bobEmail = person("bob");
+    await s.pro(annEmail);
+    const ann = await s.signIn(annEmail);
+    const bob = await s.signIn(bobEmail);
+    const as =
+      (token: string) =>
+      (path: string, init: RequestInit = {}) =>
+        s.call(path, {
+          ...init,
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+        });
+    const annAgent = as(await s.cliToken(ann));
+    const bobAgent = as(await s.cliToken(bob));
+    const session = (await (
+      await annAgent("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ title: "Venue survey" }),
+      })
+    ).json()) as { id: string; token: string };
+    const { questions } = (await (
+      await annAgent(`/api/sessions/${session.id}/questions`, {
+        method: "POST",
+        body: JSON.stringify([
+          {
+            prompt: "Which room?",
+            type: "single-choice",
+            options: ["Big", "Small"],
+          },
+          { prompt: "When?" },
+        ]),
+      })
+    ).json()) as { questions: Array<{ id: string }> };
+    await annAgent(`/api/sessions/${session.id}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ email: bobEmail }),
+    });
+    return {
+      ...s,
+      ann,
+      bob,
+      annEmail,
+      bobEmail,
+      as,
+      annAgent,
+      bobAgent,
+      session,
+      questions,
+    };
+  }
+
+  it("lists what was sent to you and is still open, with drafts counted", async () => {
+    const { bobAgent, annAgent, session } = await sent();
+    await bobAgent(`/api/sessions/inbox/${session.token}/questions/1/draft`, {
+      method: "PUT",
+      body: JSON.stringify({ answer: "Big" }),
+    });
+    const listed = await (await bobAgent("/api/sessions/inbox")).json();
+    expect(listed).toEqual({
+      interviews: [
+        {
+          id: session.token,
+          url: expect.stringMatching(new RegExp(`/s/${session.token}$`)),
+          title: "Venue survey",
+          from: expect.stringMatching(/^ann\./),
+          sentTo: expect.stringMatching(/^bob\./),
+          status: "active",
+          openQuestions: 2,
+          drafted: 1,
+        },
+      ],
+    });
+    // Ann's own inbox is empty; her interview isn't sent to her.
+    expect(await (await annAgent("/api/sessions/inbox")).json()).toEqual({
+      interviews: [],
+    });
+    // Finished, it drops off.
+    await annAgent(`/api/sessions/${session.id}/stop`, { method: "POST" });
+    expect(await (await bobAgent("/api/sessions/inbox")).json()).toEqual({
+      interviews: [],
+    });
+  });
+
+  it("opens it for the assignee and a linked account, never the sender or anyone else", async () => {
+    const { env, as, cliToken, signIn, annAgent, bobAgent, bobEmail, session } =
+      await sent();
+    const show = `/api/sessions/inbox/${session.token}`;
+    expect((await bobAgent(show)).status).toBe(200);
+    const workEmail = person("work");
+    const work = as(await cliToken(await signIn(workEmail)));
+    expect((await work(show)).status).toBe(403);
+    await link(env, bobEmail, workEmail);
+    expect((await work(show)).status).toBe(200);
+    // Drafts and answers from the linked account carry the address it was sent to.
+    await work(`${show}/questions/2/answer`, {
+      method: "POST",
+      body: JSON.stringify({ answer: "Friday" }),
+    });
+    const batch = await (
+      await annAgent(`/api/sessions/${session.id}/wait?idle=0&timeout=5000`)
+    ).json();
+    expect(batch.answers).toEqual([
+      expect.objectContaining({ answer: "Friday", answeredBy: bobEmail }),
+    ]);
+    const carol = as(await cliToken(await signIn(person("carol"))));
+    for (const path of [
+      show,
+      `${show}/questions/1/draft`,
+      `${show}/chat`,
+      `${show}/take`,
+    ])
+      expect((await carol(path)).status, path).toBe(403);
+    // The sender reads it through their own routes, not the inbox.
+    expect((await annAgent(show)).status).toBe(403);
+    expect(
+      (
+        await annAgent(`${show}/chat`, {
+          method: "POST",
+          body: JSON.stringify({ text: "hi" }),
+        })
+      ).status,
+    ).toBe(403);
+    // A made-up token, or one that isn't a token, says the same.
+    expect(
+      (await bobAgent(`/api/sessions/inbox/${"x".repeat(32)}`)).status,
+    ).toBe(403);
+    expect((await bobAgent(`/api/sessions/inbox/nope`)).status).toBe(403);
+    // A forged header changes nothing.
+    expect(
+      (
+        await carol(show, {
+          headers: { "x-kim-respondent": bobEmail, "x-kim-drafter": bobEmail },
+        })
+      ).status,
+    ).toBe(403);
+  });
+
+  it("refuses agent keys", async () => {
+    const { call, bobAgent, session } = await sent();
+    const { key } = (await (
+      await bobAgent("/api/sessions/kim/keys", {
+        method: "POST",
+        body: JSON.stringify({ name: "cloud" }),
+      })
+    ).json()) as { key: string };
+    const response = await call(`/api/sessions/inbox/${session.token}`, {
+      headers: { authorization: `Bearer ${key}` },
+    });
+    expect(response.status).toBe(403);
+    expect((await response.json()).error).toMatch(/signed-in CLI/);
+  });
+
+  it("delivers drafts only once the assignee sends them, as theirs", async () => {
+    const { call, bob, annAgent, bobAgent, bobEmail, session, questions } =
+      await sent();
+    const base = `/api/sessions/inbox/${session.token}`;
+    await bobAgent(`${base}/questions/1/draft`, {
+      method: "PUT",
+      body: JSON.stringify({ answer: "Big" }),
+    });
+    await bobAgent(`${base}/questions/2/draft`, {
+      method: "PUT",
+      body: JSON.stringify({ answer: "Friday" }),
+    });
+    // Nothing for Ann's agent yet, and nothing on her page.
+    const early = await (
+      await annAgent(`/api/sessions/${session.id}/wait?idle=0&timeout=300`)
+    ).json();
+    expect(early.answers).toEqual([]);
+    const bobView = await (
+      await call(`/api/browser/${session.token}/session`, { cookie: bob })
+    ).json();
+    expect(Object.keys(bobView.drafts)).toHaveLength(2);
+    const sentNow = await call(`/api/browser/${session.token}/drafts/send`, {
+      method: "POST",
+      cookie: bob,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ questionIds: questions.map((q) => q.id) }),
+    });
+    expect(await sentNow.json()).toEqual({ sent: 2 });
+    const batch = await (
+      await annAgent(`/api/sessions/${session.id}/wait?idle=0&timeout=5000`)
+    ).json();
+    expect(batch.answers).toEqual([
+      expect.objectContaining({ answer: "Big", answeredBy: bobEmail }),
+      expect.objectContaining({ answer: "Friday", answeredBy: bobEmail }),
+    ]);
+    expect(JSON.stringify(batch)).not.toMatch(/draft/i);
+  });
+
+  it("takes what's new across everything sent to you", async () => {
+    const { bobAgent, annAgent, session } = await sent();
+    const take = () =>
+      bobAgent("/api/sessions/inbox/take", { method: "POST" }).then((r) =>
+        r.json(),
+      );
+    expect((await take()).interviews).toEqual([
+      expect.objectContaining({ id: session.token, assigned: true }),
+    ]);
+    expect(await take()).toEqual({ interviews: [] });
+    await annAgent(`/api/sessions/${session.id}/questions`, {
+      method: "POST",
+      body: JSON.stringify([{ prompt: "Budget?" }]),
+    });
+    expect((await take()).interviews).toEqual([
+      expect.objectContaining({
+        questions: [expect.objectContaining({ prompt: "Budget?", number: 3 })],
+      }),
+    ]);
   });
 });
 

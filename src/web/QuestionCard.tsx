@@ -12,23 +12,34 @@ import {
   isBound,
   type ControlValues,
 } from "../shared/bindings.js";
-import type { ArtifactView, QuestionView } from "../shared/schema.js";
+import type {
+  ArtifactView,
+  DraftView,
+  QuestionView,
+} from "../shared/schema.js";
 import { questionArtifacts } from "./canvasLayout.js";
 import { ArtifactThumb } from "./frames.js";
 
-function initialAnswerState(question: QuestionView): {
+function initialAnswerState(
+  question: QuestionView,
+  draft: DraftView | null,
+): {
   selected: string[];
   note: string;
 } {
   const choices = choicesFor(question);
-  if (question.answer && !question.answer.skipped)
+  // The answer, else the assignee's agent's draft, else the default.
+  const text =
+    question.answer && !question.answer.skipped
+      ? question.answer.text
+      : !question.answer && draft && !draft.skipped
+        ? draft.text
+        : null;
+  if (text !== null)
     return choices.length
-      ? parseAnswer(
-          choices,
-          question.type === "multiple-choice",
-          question.answer.text,
-        )
-      : { selected: [], note: question.answer.text };
+      ? parseAnswer(choices, question.type === "multiple-choice", text)
+      : { selected: [], note: text };
+  if (draft) return { selected: [], note: "" };
   if (!question.default) return { selected: [], note: "" };
   return choices.length
     ? { selected: inOptionOrder(choices, question.default), note: "" }
@@ -47,6 +58,7 @@ function numberHint(question: QuestionView): string {
 export function QuestionCard({
   token,
   question,
+  draft = null,
   number,
   total,
   emphasized,
@@ -68,6 +80,8 @@ export function QuestionCard({
 }: {
   token: string;
   question: QuestionView;
+  /** The assignee's agent's draft, prefilled until they send it. */
+  draft?: DraftView | null;
   number: number;
   /** How many questions the interview has, for "Question 2 of 5". */
   total: number;
@@ -102,7 +116,7 @@ export function QuestionCard({
   const artifactFor = (id: string | null | undefined) =>
     id ? artifacts.find((artifact) => artifact.id === id) : undefined;
   const linked = artifactFor(question.artifactId);
-  const initial = initialAnswerState(question);
+  const initial = initialAnswerState(question, draft);
   const initialText = composeAnswer(initial.selected, initial.note);
   const [open, setOpen] = useState(!question.answer);
   const [selected, setSelected] = useState(initial.selected);
@@ -117,8 +131,9 @@ export function QuestionCard({
   };
   const answerText = composeAnswer(selected, note);
   const dirty = answerText !== initialText;
-  const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
+  // What the form started from before this render: a form still showing
+  // it is untouched, whatever the new starting point.
+  const shownInitial = useRef(initialText);
 
   useChangeEffect(() => {
     if (question.answer) {
@@ -126,9 +141,10 @@ export function QuestionCard({
       setOpen(false);
     }
   }, question.answer?.revision);
-  // An agent edit to the default or options refreshes an untouched form.
+  // An agent edit to the default or options, or a new draft, refreshes an untouched form.
   useChangeEffect(() => {
-    if (!dirtyRef.current) reset();
+    if (answerText === shownInitial.current) reset();
+    shownInitial.current = initialText;
   }, initialText);
   useEffect(() => {
     onDirtyChange(question.id, open && dirty);
@@ -316,6 +332,15 @@ export function QuestionCard({
           </div>
           <h2>{question.prompt}</h2>
         </>
+      )}
+      {open && draft && !question.answer && (
+        <p className="draft-note">
+          {draft.skipped
+            ? "Your agent suggests skipping this"
+            : dirty
+              ? "Edited from your agent's draft"
+              : "Drafted by your agent"}
+        </p>
       )}
       {open && (
         <div className="answer-form">

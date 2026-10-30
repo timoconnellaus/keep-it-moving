@@ -46,3 +46,28 @@ export function artifactViewUrl(
   if (options.embed) params.set("embed", "1");
   return `/api/browser/${token}/artifacts/${artifact.id}/view?${params}`;
 }
+
+/** Plans and documents are a page wide, and at least a page tall. */
+export const PAGE_WIDTH = 620;
+export const PAGE_HEIGHT = 760;
+
+export interface FrameSize {
+  w: number;
+  /** Null for documents, which are as tall as their text. */
+  h: number | null;
+}
+
+/**
+ * The size a frame shows an artifact at. Mockups are desktop pages unless
+ * their title or description says phone or tablet; documents are a page.
+ */
+export function frameSize(artifact: ArtifactView): FrameSize {
+  if (artifact.format === "markdown" || artifact.format === "text")
+    return { w: PAGE_WIDTH, h: null };
+  const words = `${artifact.title} ${artifact.description ?? ""}`;
+  if (artifact.format === "html" && /\b(mobile|phone)\b/i.test(words))
+    return { w: 390, h: 844 };
+  if (artifact.format === "html" && /\b(tablet|ipad)\b/i.test(words))
+    return { w: 834, h: 1112 };
+  return { w: 1280, h: 800 };
+}
