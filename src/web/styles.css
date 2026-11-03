@@ -973,7 +973,7 @@ h3 {
 }
 .pane-picker {
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: 140px;
   max-width: 360px;
   height: 34px;
   padding: 0 28px 0 10px;
@@ -983,6 +983,26 @@ h3 {
   color: var(--ink);
   font: 600 14px var(--display);
   text-overflow: ellipsis;
+}
+/* A tab's toolbar also holds the picker and more tools: icons only, sooner. */
+@container (max-width: 1040px) {
+  .preview.embedded .seg-num {
+    display: none;
+  }
+  .preview.embedded .pbtn .ptext {
+    display: none;
+  }
+  .preview.embedded .pbtn {
+    padding: 0;
+  }
+}
+@container (max-width: 640px) {
+  .preview.embedded .seg-text {
+    display: none;
+  }
+  .preview.embedded .seg button {
+    padding: 0 9px;
+  }
 }
 .preview-bar a.pbtn {
   color: var(--ink);
