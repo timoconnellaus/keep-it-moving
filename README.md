@@ -376,7 +376,15 @@ Diagrams come from archify, a separate skill that turns a small typed JSON spec 
 
 `--quality showcase` applies archify's stricter layout checks. HTML that `archify deliver` already produced can be added with `--kind diagram`, and plain SVG is shown as an image. Mermaid is no longer rendered; older Mermaid diagrams are shown as source.
 
-The workspace column starts closed, because the plan may be followed elsewhere, such as a Markdown file or a design open beside the interviewer. The agent opens or closes it (`kim stage open|close`, or `session create --open-stage`) and the user toggles it with **Canvas** in the header. Open, it sits between the questions and the chat as a canvas ([React Flow](https://reactflow.dev)):
+The workspace column starts closed, because the plan may be followed elsewhere, such as a Markdown file or a design open beside the interviewer. The agent opens or closes it (`kim stage open|close`, or `session create --open-stage`) and the user toggles it with **Canvas** in the header. Open, it sits between the questions and the chat, in three tabs (each shown when it has something in it; the last one picked is remembered in the browser):
+
+- **Document**: the plan and other Markdown documents, one at a time at page width, with a picker, comments and full screen.
+- **HTML**: html artifacts other than diagrams (mockups, html documents), one at a time and fully interactive, at Desktop 1280, Tablet 834 or Mobile 390 (a phone or tablet mockup opens on its device), with Rotate for tablet and phone, Reload, Open in a new tab, comments and full screen. Bound questions preview and apply their values here as on the canvas.
+- **Design**: every artifact, diagrams included, as a canvas ([React Flow](https://reactflow.dev)), described below. Compare side by side always opens here.
+
+Showing an artifact on purpose (`--show`, `artifact show`, an option's or a question's link to it) goes to the tab that holds it, unless the user is on Design, which fits it there. Focusing a question shows its first artifact in the Document or HTML tab without changing tabs. Comments from any tab reach the agent the same way.
+
+The Design canvas:
 
 - **Frames.** Every artifact is a frame under a label (name, tag, size) that keeps its screen size at any zoom and truncates to fit. Frames lay themselves out in rows: first the plan and anything tied to no question, then a row per question for the artifacts it is the first to name (`artifactId`, `optionArtifacts`). Plans and documents are a page (620 wide, as tall as the text); mockups are 1280 × 800, or 390 × 844 / 834 × 1112 when the title or description says mobile/phone or tablet. Dragging a frame by its label saves where it is in the hub (`POST /api/browser/<token>/frames/<id>/position`, per interview and artifact), which every viewer sees at once; new artifacts take their slot in the layout without moving placed frames. Moves aren't events, so they never reach the agent.
 - **Controls.** Scroll or drag pans, pinch or ctrl-scroll zooms; zoom buttons, a minimap, and a toolbar with Move (V), Comment (C), Fit all and the zoom level.
