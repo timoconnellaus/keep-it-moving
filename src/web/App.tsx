@@ -8,12 +8,11 @@ import {
 import type { PinView, SessionView } from "../shared/schema.js";
 import { Account } from "./Account.js";
 import { Assign } from "./Assign.js";
-import {
-  Canvas,
-  type Comparison,
-  type FitRequest,
-  type FrameHighlight,
-  type PlacedPin,
+import type {
+  Comparison,
+  FitRequest,
+  FrameHighlight,
+  PlacedPin,
 } from "./Canvas.js";
 import { questionArtifacts } from "./canvasLayout.js";
 import { Chat, useChat } from "./Chat.js";
@@ -23,6 +22,7 @@ import { MoreBelow, QuestionProgress } from "./QuestionNav.js";
 import { liveSocket, probeStatus, STOP_MESSAGES } from "./liveSocket.js";
 import { Logo } from "./Logo.js";
 import { Switcher } from "./Switcher.js";
+import { Workspace } from "./Workspace.js";
 
 const token = window.location.pathname.split("/").filter(Boolean).at(-1) ?? "";
 
@@ -128,8 +128,8 @@ export function App() {
   } | null>(null);
   const [fit, setFit] = useState<FitRequest | null>(null);
   const fitTo = useCallback(
-    (ids: string[]) =>
-      setFit((current) => ({ ids, key: (current?.key ?? 0) + 1 })),
+    (ids: string[], reveal?: FitRequest["reveal"]) =>
+      setFit((current) => ({ ids, key: (current?.key ?? 0) + 1, reveal })),
     [],
   );
   // An assignee sees this interview only, never the owner's list.
@@ -236,7 +236,7 @@ export function App() {
   useEffect(() => {
     const was = lastStaged.current;
     lastStaged.current = staged;
-    if (was !== undefined && staged && staged !== was) fitTo([staged]);
+    if (was !== undefined && staged && staged !== was) fitTo([staged], "best");
   }, [staged]);
 
   if (!session)
@@ -309,9 +309,12 @@ export function App() {
     }
   };
   const workspaceOpen = session.stageVisible && session.artifacts.length > 0;
-  const showOnCanvas = (ids: string[]) => {
+  const showOnCanvas = (
+    ids: string[],
+    reveal: FitRequest["reveal"] = "best",
+  ) => {
     if (!ids.length) return;
-    fitTo(ids);
+    fitTo(ids, reveal);
     if (!workspaceOpen) void setStageVisible(true);
   };
   const compareQuestion = session.questions.find(
@@ -347,10 +350,10 @@ export function App() {
     const question = session.questions.find((item) => item.id === questionId);
     const options =
       question?.type === "yes-no" ? ["Yes", "No"] : (question?.options ?? []);
-    showOnCanvas([
-      ...framesFor(questionId),
-      ...options.map((_, index) => `copy:${index}`),
-    ]);
+    showOnCanvas(
+      [...framesFor(questionId), ...options.map((_, index) => `copy:${index}`)],
+      "design",
+    );
   };
   // How each frame stands out for the question in hand.
   const inHand = session.questions.find(
@@ -553,7 +556,7 @@ export function App() {
       <div className={`workspace ${workspaceOpen ? "with-stage" : ""}`}>
         {questions}
         {workspaceOpen && (
-          <Canvas
+          <Workspace
             token={token}
             session={session}
             valuesFor={(artifactId) =>

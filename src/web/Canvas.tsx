@@ -392,6 +392,11 @@ const NODE_TYPES = { frame: FrameNode, row: RowNode };
 export interface FitRequest {
   ids: string[];
   key: number;
+  /**
+   * Showing them on purpose: "best" goes to the workspace tab that holds
+   * the first, "design" to the canvas. Otherwise the tab stays put.
+   */
+  reveal?: "best" | "design" | undefined;
 }
 
 export interface CanvasProps {

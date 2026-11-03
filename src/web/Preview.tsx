@@ -144,6 +144,11 @@ export function Preview({
   setCommenting,
   onClose,
   onPlace,
+  embedded = false,
+  picker,
+  tools,
+  landscape = false,
+  reloadKey = 0,
 }: {
   token: string;
   artifact: ArtifactView;
@@ -158,15 +163,28 @@ export function Preview({
   setFull(full: boolean): void;
   commenting: boolean;
   setCommenting(on: boolean): void;
-  onClose(): void;
+  /** Without it there's no Close button, as in a tab that is the preview. */
+  onClose?: () => void;
   onPlace(placed: Placed): void;
+  /** Shown in place of the column, rather than over the canvas. */
+  embedded?: boolean;
+  /** In place of the name, such as a choice between the tab's artifacts. */
+  picker?: React.ReactNode;
+  /** More buttons, after the device widths. */
+  tools?: React.ReactNode;
+  /** A tablet or phone turned on its side. */
+  landscape?: boolean;
+  /** Changing it reloads an html artifact. */
+  reloadKey?: number;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const catcherRef = useRef<HTMLDivElement>(null);
   const frame = useFrameValues(values);
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  // Which load of the frame the pins were sent to: a reload is a new page.
+  const [loaded, setLoaded] = useState<string | null>(null);
+  const frameKey = `${artifact.id}:${reloadKey}`;
   useLayoutEffect(() => {
     const body = bodyRef.current;
     if (!body) return;
@@ -180,15 +198,16 @@ export function Preview({
   const html = artifact.format === "html";
   const pinsKey = JSON.stringify(pins);
   useEffect(() => {
-    if (html && loaded)
+    if (html && loaded === frameKey)
       frame.ref.current?.contentWindow?.postMessage(
         { type: "kim-pins", pins: JSON.parse(pinsKey) as PinView[] },
         "*",
       );
-  }, [html, loaded, pinsKey]);
+  }, [html, loaded, frameKey, pinsKey]);
 
   const page = frameSize(artifact).w;
-  const dev = html ? DEVICES[device] : { w: page, h: 0, bezel: 0, radius: 0 };
+  const base = html ? DEVICES[device] : { w: page, h: 0, bezel: 0, radius: 0 };
+  const dev = landscape && base.h ? { ...base, w: base.h, h: base.w } : base;
   let geo: Geometry | null = null;
   if (box) {
     const pad = box.w < 560 ? 12 : 28;
@@ -197,6 +216,7 @@ export function Preview({
     if (
       html &&
       device === "mobile" &&
+      !landscape &&
       box.w < dev.w + 2 * dev.bezel + 2 * pad
     ) {
       // A phone-sized screen: the page itself, edge to edge, no device drawn.
@@ -268,14 +288,16 @@ export function Preview({
   const name = title.replace(/ · (Desktop|Mobile|Tablet)$/, "");
   return (
     <div
-      className={`preview${full ? " full" : ""}`}
-      role="dialog"
+      className={`preview${full ? " full" : ""}${embedded ? " embedded" : ""}`}
+      role={embedded ? "region" : "dialog"}
       aria-label={`Preview of ${title}`}
     >
       <div className="preview-bar">
-        <span className="preview-name" title={title}>
-          {name}
-        </span>
+        {picker ?? (
+          <span className="preview-name" title={title}>
+            {name}
+          </span>
+        )}
         {html && (
           <div className="seg" role="group" aria-label="Device width">
             {(Object.keys(DEVICES) as Device[]).map((key) => (
@@ -294,6 +316,7 @@ export function Preview({
             ))}
           </div>
         )}
+        {tools}
         <button
           type="button"
           className={`pbtn${commenting ? " on" : ""}`}
@@ -327,23 +350,25 @@ export function Preview({
             {full ? "Exit full screen" : "Open full screen"}
           </span>
         </button>
-        <button
-          type="button"
-          className="pbtn close"
-          title="Close (Esc)"
-          aria-label="Close preview"
-          onClick={onClose}
-        >
-          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-            <path
-              d="M2 2l8 8M10 2l-8 8"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-            />
-          </svg>
-          <span className="ptext">Close</span>
-        </button>
+        {onClose && (
+          <button
+            type="button"
+            className="pbtn close"
+            title="Close (Esc)"
+            aria-label="Close preview"
+            onClick={onClose}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+              <path
+                d="M2 2l8 8M10 2l-8 8"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+              />
+            </svg>
+            <span className="ptext">Close</span>
+          </button>
+        )}
       </div>
       <div
         className={`preview-body${geo?.kind === "bare" ? " bare" : ""}`}
@@ -382,7 +407,7 @@ export function Preview({
               >
                 {html ? (
                   <iframe
-                    key={artifact.id}
+                    key={frameKey}
                     ref={frame.ref}
                     title={`${title}, interactive preview`}
                     // Isolated by the server's CSP sandbox header, as on the canvas.
@@ -391,7 +416,7 @@ export function Preview({
                     })}
                     onLoad={() => {
                       frame.onLoad();
-                      setLoaded(true);
+                      setLoaded(frameKey);
                     }}
                   />
                 ) : (

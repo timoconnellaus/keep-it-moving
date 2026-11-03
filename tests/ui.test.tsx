@@ -976,12 +976,6 @@ describe("questionnaire UI seam", () => {
       fireEvent.click(
         frame("Layout A")!.querySelector('[aria-label="Preview Layout A"]')!,
       );
-      console.log(
-        "DBG",
-        frame("Layout A")!.outerHTML.slice(0, 700),
-        (document.querySelector(".react-flow__viewport") as HTMLElement)?.style
-          .transform,
-      );
       const preview = await screen.findByRole("dialog", {
         name: "Preview of Layout A",
       });
@@ -1121,6 +1115,104 @@ describe("questionnaire UI seam", () => {
       await vi.waitFor(() =>
         expect(posts("/stage/visibility")).toEqual([{ visible: true }]),
       );
+    });
+
+    describe("tabs", () => {
+      beforeEach(() => localStorage.clear());
+      const tab = (name: RegExp) => screen.getByRole("tab", { name });
+      const panel = () => screen.getByRole("tabpanel");
+
+      it("offers Document, HTML and Design, and remembers the one chosen", async () => {
+        serve(layoutQuestion(workspace()));
+        render(<App />);
+        await vi.waitFor(() => expect(frame("Plan")).toBeDefined());
+        expect(
+          screen.getAllByRole("tab").map((item) => item.textContent),
+        ).toEqual(["Document1", "HTML2", "Design3"]);
+        expect(tab(/Design/)).toHaveAttribute("aria-selected", "true");
+
+        fireEvent.click(tab(/Document/));
+        expect(within(panel()).getByText("Area").tagName).toBe("TH");
+        expect(panel().querySelector(".react-flow")).toBeNull();
+        expect(localStorage.getItem("kim.workspaceTab")).toBe("document");
+      });
+
+      it("hides a tab with nothing in it", async () => {
+        serve(withoutPlan(workspace()));
+        render(<App />);
+        await screen.findByRole("tab", { name: /HTML/ });
+        expect(screen.queryByRole("tab", { name: /Document/ })).toBeNull();
+      });
+
+      it("shows a page at a device's width, rotated, reloaded or on its own", async () => {
+        serve(layoutQuestion(workspace()));
+        render(<App />);
+        fireEvent.click(await screen.findByRole("tab", { name: /HTML/ }));
+        const page = within(panel());
+        // What's in hand first: the default option's mockup.
+        const picker = page.getByRole("combobox", { name: "Page" });
+        expect(picker).toHaveValue("a");
+        expect(panel().querySelector("iframe")!.getAttribute("src")).toMatch(
+          /\/artifacts\/a\/view\?/,
+        );
+        fireEvent.change(picker, { target: { value: "b" } });
+        expect(panel().querySelector("iframe")!.getAttribute("src")).toMatch(
+          /\/artifacts\/b\/view\?/,
+        );
+        expect(page.queryByRole("button", { name: /Rotate/ })).toBeNull();
+        fireEvent.click(page.getByRole("button", { name: /Mobile/ }));
+        fireEvent.click(page.getByRole("button", { name: /Rotate/ }));
+        expect(page.getByRole("button", { name: /Rotate/ })).toHaveAttribute(
+          "aria-pressed",
+          "true",
+        );
+        const before = panel().querySelector("iframe");
+        fireEvent.click(page.getByRole("button", { name: "Reload" }));
+        expect(panel().querySelector("iframe")).not.toBe(before);
+        expect(
+          page.getByRole("link", { name: "Open in a new tab" }),
+        ).toHaveAttribute(
+          "href",
+          expect.stringMatching(/\/artifacts\/b\/view\?/),
+        );
+        // The tab is the page: nothing to close.
+        expect(
+          page.queryByRole("button", { name: "Close preview" }),
+        ).toBeNull();
+      });
+
+      it("goes to the tab that holds what a question shows", async () => {
+        serve(layoutQuestion(workspace()));
+        render(<App />);
+        fireEvent.click(await screen.findByRole("tab", { name: /Document/ }));
+        fireEvent.click(
+          screen.getByRole("button", { name: "View Board on the canvas" }),
+        );
+        await vi.waitFor(() =>
+          expect(tab(/HTML/)).toHaveAttribute("aria-selected", "true"),
+        );
+        expect(within(panel()).getByRole("combobox")).toHaveValue("b");
+      });
+
+      it("pins a comment to a page in its tab", async () => {
+        serve(layoutQuestion(workspace()));
+        render(<App />);
+        fireEvent.click(await screen.findByRole("tab", { name: /HTML/ }));
+        fireEvent.click(
+          within(panel()).getByRole("button", { name: /Comment/ }),
+        );
+        fireEvent.click(panel().querySelector(".catcher")!);
+        expect(
+          await screen.findByText(
+            "Pin 1 · page · Layout A",
+            {},
+            { timeout: 2000 },
+          ),
+        ).toBeInTheDocument();
+        expect(
+          within(panel()).getByRole("button", { name: /Comment/ }),
+        ).toHaveAttribute("aria-pressed", "false");
+      });
     });
   });
 });
