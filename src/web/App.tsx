@@ -20,6 +20,7 @@ import { useOverview } from "./overview.js";
 import { QuestionCard } from "./QuestionCard.js";
 import { MoreBelow, QuestionProgress } from "./QuestionNav.js";
 import { liveSocket, probeStatus, STOP_MESSAGES } from "./liveSocket.js";
+import { plainText } from "./inline.js";
 import { Logo } from "./Logo.js";
 import { Switcher } from "./Switcher.js";
 import { Workspace } from "./Workspace.js";
@@ -393,7 +394,7 @@ export function App() {
       tag: picked
         ? { kind: "", text: "Selected" }
         : live
-          ? { kind: "live", text: live }
+          ? { kind: "live", text: plainText(live) }
           : null,
     };
   };

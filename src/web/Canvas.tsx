@@ -36,6 +36,7 @@ import type {
   SessionView,
 } from "../shared/schema.js";
 import { artifactViewUrl } from "../shared/workspace.js";
+import { plainText } from "./inline.js";
 import { labelSpace, layoutCanvas, PAGE_HEIGHT } from "./canvasLayout.js";
 import {
   ArtifactDocument,
@@ -191,7 +192,7 @@ function RowNode({ data }: NodeProps<RowNodeType>) {
     <div className="row-node">
       <div className="row-label">
         <b>{data.title}</b>
-        {data.note && <span>{data.note}</span>}
+        {data.note && <span>{plainText(data.note)}</span>}
       </div>
     </div>
   );
@@ -292,7 +293,7 @@ function FrameNode({
   const size = `${w} × ${Math.round(h ?? height ?? PAGE_HEIGHT)}`;
   const parts = labelParts(room, data.title, {
     ...(copy && !copy.selected.includes(option!)
-      ? { use: `Use ${option}` }
+      ? { use: `Use ${plainText(option!)}` }
       : {}),
     ...(highlight.tag ? { tag: highlight.tag.text } : {}),
     size,
@@ -344,7 +345,7 @@ function FrameNode({
               copy.onUse(option!);
             }}
           >
-            Use {option}
+            Use {plainText(option!)}
           </button>
         )}
       </div>

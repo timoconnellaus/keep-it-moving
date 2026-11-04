@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
+import { plainText } from "./inline.js";
 import remarkGfm from "remark-gfm";
 import type {
   ChatMessageView,
@@ -224,7 +225,7 @@ export function Chat({
               <span className="chat-chip">
                 <span>
                   {attached
-                    ? `Q${attached.number} · ${attached.prompt}`
+                    ? `Q${attached.number} · ${plainText(attached.prompt)}`
                     : "A removed question"}
                 </span>
                 <button
@@ -315,7 +316,7 @@ function Message({
           <span className="chat-chip">
             <span>
               {about
-                ? `Q${about.number} · ${about.prompt}`
+                ? `Q${about.number} · ${plainText(about.prompt)}`
                 : "A removed question"}
             </span>
           </span>

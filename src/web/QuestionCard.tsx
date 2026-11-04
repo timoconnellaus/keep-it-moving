@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
+import { Inline, plainText } from "./inline.js";
 import {
   choicesFor,
   composeAnswer,
@@ -303,13 +304,23 @@ export function QuestionCard({
               <TickIcon />
             </span>
           )}
-          <h2>{question.prompt}</h2>
+          <h2>
+            <Inline text={question.prompt} />
+          </h2>
           <span
             className={`answer-summary ${question.answer.skipped ? "skipped" : ""}`}
-            title={question.answer.skipped ? undefined : question.answer.text}
+            title={
+              question.answer.skipped
+                ? undefined
+                : plainText(question.answer.text)
+            }
           >
             <span className="answer-text">
-              {question.answer.skipped ? "Skipped" : question.answer.text}
+              {question.answer.skipped ? (
+                "Skipped"
+              ) : (
+                <Inline text={question.answer.text} />
+              )}
             </span>
             {!question.answer.skipped &&
               question.answer.text === defaultText && (
@@ -330,7 +341,9 @@ export function QuestionCard({
             </span>
             {actions}
           </div>
-          <h2>{question.prompt}</h2>
+          <h2>
+            <Inline text={question.prompt} />
+          </h2>
         </>
       )}
       {open && draft && !question.answer && (
@@ -386,7 +399,7 @@ export function QuestionCard({
                           )
                         )}
                         <span className="choice-card-label">
-                          {option}
+                          <Inline text={option} links={false} />
                           {isDefaultOption && (
                             <span className="default-mark">Recommended</span>
                           )}
@@ -397,7 +410,7 @@ export function QuestionCard({
                           type="button"
                           className="choice-card-view"
                           onClick={() => onShowArtifact(artifact.id)}
-                          aria-label={`View ${option} on the canvas`}
+                          aria-label={`View ${plainText(option)} on the canvas`}
                         >
                           View
                         </button>
@@ -424,7 +437,9 @@ export function QuestionCard({
                       {...hover(option)}
                     >
                       <span className="choice-mark" aria-hidden="true" />
-                      <span className="choice-label">{option}</span>
+                      <span className="choice-label">
+                        <Inline text={option} links={false} />
+                      </span>
                       {isDefaultOption && (
                         <span className="default-mark">Recommended</span>
                       )}
@@ -451,7 +466,7 @@ export function QuestionCard({
                     ? parseFloat(note)
                     : question.min
                 }
-                aria-label={`${question.prompt} (${question.control})`}
+                aria-label={`${plainText(question.prompt)} (${question.control})`}
                 onChange={(event) => setNote(event.target.value)}
               />
             )}

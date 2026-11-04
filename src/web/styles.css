@@ -400,6 +400,31 @@ h3 {
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
+/* Inline Markdown in prompts, options and answers. The prompt is already
+   semibold, so its bold goes heavier. */
+.question h2 strong {
+  font-weight: 700;
+}
+.question.done h2 strong,
+.choice-label strong,
+.choice-card-label strong,
+.answer-text strong {
+  font-weight: 700;
+}
+.question h2 code,
+.choice-label code,
+.choice-card-label code,
+.answer-text code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--panel);
+  font: 500 0.88em var(--mono);
+}
+.question h2 a {
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 /* Answered: one ticked row */
 .question.done {
