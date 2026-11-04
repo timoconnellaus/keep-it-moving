@@ -68,7 +68,7 @@ In a claude.ai cloud session, the CLI authenticates with the environment's `KEEP
 
 ## Workspace: plan, diagrams, mockups
 
-An interview exists to produce a plan, so build the plan alongside it where the user can see it. The workspace has three tabs: **Document** (the plan and Markdown documents, read one at a time), **HTML** (html pages such as mockups, used one at a time at desktop, tablet or phone width) and **Design**, a canvas of everything: every artifact is a frame the user can pan to, zoom, drag, open at full size on desktop, tablet and phone widths, and pin comments to. Frames lay themselves out in a row per question (the first question that names an artifact by `artifactId` or `optionArtifacts`), after a row of the plan and anything tied to no question.
+An interview exists to produce a plan, so build the plan alongside it where the user can see it. The workspace has three tabs: **Document** (the plan and Markdown documents, read one at a time), **HTML** (html pages such as mockups, used one at a time at desktop, tablet or phone width) and **Design**, a canvas of the designs (html pages and diagrams; documents stay on the Document tab): every design is a frame the user can pan to, zoom, drag, open at full size on desktop, tablet and phone widths, and pin comments to. Frames lay themselves out in a row per question (the first question that names an artifact by `artifactId` or `optionArtifacts`), after a row of designs tied to no question.
 
 ```sh
 kim plan <session-id> --file plan.md            # the one living plan (Markdown); replaces content

@@ -829,7 +829,7 @@ describe("questionnaire UI seam", () => {
       );
     });
 
-    it("lays every artifact out as a frame, the plan first and a row per question", async () => {
+    it("lays designs out as frames, a row per question, and leaves documents off", async () => {
       serve(layoutQuestion(workspace()));
       const { container } = render(<App />);
       await screen.findByText("Which layout?");
@@ -838,17 +838,17 @@ describe("questionnaire UI seam", () => {
         [...container.querySelectorAll(".row-label")].map(
           (row) => row.textContent,
         ),
-      ).toEqual(["Plankept by the agent", "Question 1Which layout?"]);
-      // The plan renders as a page; its table is there to read.
-      expect(within(frame("Plan")!).getByText("Area").tagName).toBe("TH");
+      ).toEqual(["Question 1Which layout?"]);
+      // The plan is a document: it's on the Document tab, not the canvas.
+      expect(frame("Plan")).toBeUndefined();
       const node = (id: string) =>
         (
           container.querySelector(
             `.react-flow__node[data-id="${id}"]`,
           ) as HTMLElement
         ).style.transform.replace(/,\s*/, ", ");
-      expect(node("a")).toBe("translate(0px, 1460px)");
-      expect(node("b")).toBe("translate(1400px, 1460px)");
+      expect(node("a")).toBe("translate(0px, 0px)");
+      expect(node("b")).toBe("translate(1400px, 0px)");
     });
 
     it("puts a frame where someone moved it, and the rest where they were", async () => {
@@ -864,7 +864,7 @@ describe("questionnaire UI seam", () => {
           ) as HTMLElement
         ).style.transform.replace(/,\s*/, ", ");
       expect(node("b")).toBe("translate(300px, -900px)");
-      expect(node("a")).toBe("translate(0px, 1460px)");
+      expect(node("a")).toBe("translate(0px, 0px)");
     });
 
     /** Without the plan, the mockups are the first row, in view in jsdom's unsized canvas. */
@@ -1030,17 +1030,21 @@ describe("questionnaire UI seam", () => {
     it("pins a comment to a frame and sends it with the message", async () => {
       serve(layoutQuestion(workspace()));
       render(<App />);
-      await vi.waitFor(() => expect(frame("Plan")).toBeDefined());
+      await vi.waitFor(() => expect(frame("Layout A")).toBeDefined());
       fireEvent.click(screen.getByRole("button", { name: /Comment/ }));
-      fireEvent.click(frame("Plan")!.querySelector(".frame-body")!, {
+      fireEvent.click(frame("Layout A")!.querySelector(".frame-body")!, {
         clientX: 120,
         clientY: 80,
       });
       expect(
-        await screen.findByText("Pin 1 · page · Plan"),
+        await screen.findByText(
+          "Pin 1 · page · Layout A",
+          {},
+          { timeout: 2000 },
+        ),
       ).toBeInTheDocument();
       // The pin shows on the frame before it's sent.
-      expect(frame("Plan")!.querySelector(".pin")?.textContent).toBe("1");
+      expect(frame("Layout A")!.querySelector(".pin")?.textContent).toBe("1");
       fireEvent.change(
         screen.getByRole("textbox", { name: "Message to the agent" }),
         {
@@ -1054,14 +1058,14 @@ describe("questionnaire UI seam", () => {
             text: "Shorter, please",
             questionId: null,
             pin: {
-              artifactId: "plan",
+              artifactId: "a",
               element: "page",
               selector: null,
               x: 120,
               y: 80,
               fx: 0,
               fy: 0,
-              width: 620,
+              width: 1280,
             },
           },
         ]),
@@ -1125,10 +1129,10 @@ describe("questionnaire UI seam", () => {
       it("offers Document, HTML and Design, and remembers the one chosen", async () => {
         serve(layoutQuestion(workspace()));
         render(<App />);
-        await vi.waitFor(() => expect(frame("Plan")).toBeDefined());
+        await vi.waitFor(() => expect(frame("Layout A")).toBeDefined());
         expect(
           screen.getAllByRole("tab").map((item) => item.textContent),
-        ).toEqual(["Document1", "HTML2", "Design3"]);
+        ).toEqual(["Document1", "HTML2", "Design2"]);
         expect(tab(/Design/)).toHaveAttribute("aria-selected", "true");
 
         fireEvent.click(tab(/Document/));

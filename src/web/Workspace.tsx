@@ -23,7 +23,11 @@ export const TABS = {
 } as const;
 export type Tab = keyof typeof TABS;
 
-/** The tab that shows an artifact by itself; diagrams are on the canvas only. */
+/**
+ * The tab that shows an artifact by itself: documents are only on the
+ * Document tab; html pages are on HTML and the Design canvas, diagrams only
+ * on the canvas.
+ */
 export function tabFor(artifact: ArtifactView): Tab {
   if (artifact.kind === "diagram") return "design";
   if (artifact.format === "html") return "html";
@@ -72,16 +76,22 @@ export function Workspace({
   onComment(pin: PlacedPin): void;
 }) {
   const inTab = (tab: Tab) =>
-    tab === "design"
-      ? session.artifacts
-      : session.artifacts.filter((artifact) => tabFor(artifact) === tab);
+    session.artifacts.filter((artifact) =>
+      tab === "design"
+        ? tabFor(artifact) !== "document"
+        : tabFor(artifact) === tab,
+    );
   const tabs = (Object.keys(TABS) as Tab[]).filter(
     (tab) => inTab(tab).length > 0,
   );
   const [chosenTab, setChosenTab] = useState<Tab>(
     () => rememberedTab() ?? "design",
   );
-  const tab = tabs.includes(chosenTab) ? chosenTab : "design";
+  const tab = tabs.includes(chosenTab)
+    ? chosenTab
+    : tabs.includes("design")
+      ? "design"
+      : tabs[0]!;
   const chooseTab = (next: Tab) => {
     setChosenTab(next);
     rememberTab(next);
@@ -111,10 +121,16 @@ export function Workspace({
       const artifact = session.artifacts.find((item) => item.id === id);
       return artifact ? tabFor(artifact) : null;
     };
+    // The canvas fits whatever it holds; the other tabs show one at a time.
+    if (
+      tab === "design" &&
+      fit.ids.some((id) => (owner(id) ?? "document") !== "document")
+    )
+      return;
     const here =
       tab === "design" ? undefined : fit.ids.find((id) => owner(id) === tab);
     if (here) return setChosen((current) => ({ ...current, [tab]: here }));
-    if (fit.reveal !== "best" || tab === "design") return;
+    if (fit.reveal !== "best") return;
     const first = fit.ids.find((id) => owner(id));
     if (!first) return;
     const target = owner(first)!;
@@ -152,7 +168,7 @@ export function Workspace({
         {tab === "design" ? (
           <Canvas
             token={token}
-            session={session}
+            session={{ ...session, artifacts: inTab("design") }}
             valuesFor={valuesFor}
             highlight={highlight}
             compare={compare}
