@@ -64,7 +64,7 @@ const state: SessionView = {
     {
       id: "m2",
       author: "agent",
-      text: "It means **no lost writes**.",
+      text: "It means **no lost writes**.\\n\\nEven offline.",
       questionId: null,
       replyTo: "m1",
       delivered: true,
@@ -137,6 +137,8 @@ describe("interview chat UI", () => {
     expect(
       screen.getByText("no lost writes", { selector: "strong" }),
     ).toBeInTheDocument();
+    // "\n" an agent typed through a shell is a line break.
+    expect(screen.getByText("Even offline.").tagName).toBe("P");
     expect(chat).toHaveTextContent("Agent is away");
     expect(container.querySelector(".chat-pending")).toBeNull();
   });

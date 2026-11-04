@@ -8,6 +8,7 @@ import type {
   InterviewEvent,
   SessionView,
 } from "../shared/schema.js";
+import { literalLineBreaks } from "../shared/schema.js";
 import { frameSize } from "../shared/workspace.js";
 import {
   ARTIFACT_VIEW_HEADERS,
@@ -1049,7 +1050,14 @@ export function createHub(options: HubOptions) {
     const message = store.addChatMessage(
       id,
       "user",
-      { text: input.text, questionId: about?.question.id ?? null },
+      {
+        // Their agent wrote it, often through a shell.
+        text:
+          typeof input.text === "string"
+            ? literalLineBreaks(input.text)
+            : input.text,
+        questionId: about?.question.id ?? null,
+      },
       respondentOf(c),
     );
     return c.json({

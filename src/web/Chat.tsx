@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
+import { literalLineBreaks } from "../shared/text.js";
 import { plainText } from "./inline.js";
 import remarkGfm from "remark-gfm";
 import type {
@@ -342,7 +343,12 @@ function Message({
         </span>
       )}
       <div className="markdown">
-        <Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown>
+        {/* Also mends replies sent before the hub mended them. */}
+        <Markdown remarkPlugins={[remarkGfm]}>
+          {message.author === "agent"
+            ? literalLineBreaks(message.text)
+            : message.text}
+        </Markdown>
       </div>
     </div>
   );

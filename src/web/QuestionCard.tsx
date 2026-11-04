@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
+import { literalLineBreaks } from "../shared/text.js";
 import { Inline, plainText } from "./inline.js";
 import {
   choicesFor,
@@ -588,7 +589,7 @@ function Recommendation({ markdown }: { markdown: string }) {
     <div className="recommendation">
       <span aria-hidden="true">→</span>
       <div className="markdown">
-        <Markdown>{markdown}</Markdown>
+        <Markdown>{literalLineBreaks(markdown)}</Markdown>
       </div>
     </div>
   );

@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { literalLineBreaks } from "./text.js";
+
+export { literalLineBreaks };
 import { CONTROL_PATTERN, UNIT_PATTERN } from "./bindings.js";
 
 export const questionTypes = [
@@ -52,8 +55,12 @@ const DefaultValueSchema = z.union([
 
 const questionFields = {
   type: QuestionTypeSchema,
-  prompt: z.string().trim().min(1).max(10_000),
-  recommendation: z.string().max(20_000).nullable(),
+  prompt: z.string().trim().min(1).max(10_000).transform(literalLineBreaks),
+  recommendation: z
+    .string()
+    .max(20_000)
+    .transform(literalLineBreaks)
+    .nullable(),
   /** The recommended answer: one option (or several for multiple-choice), a number, or suggested text. */
   default: z
     .union([DefaultValueSchema, z.array(DefaultValueSchema).min(1).max(100)])

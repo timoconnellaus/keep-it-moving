@@ -117,7 +117,7 @@ Run `kim wait <session-id>` in the background. In Claude Code, that means the Ba
 
 Handle `messages` first: the user is waiting on the reply. A message from the user wakes `wait` straight away.
 
-- **A clarification** ("what do you mean by sync?", "why recommend A?"): answer it with `kim chat reply <session-id> --text "…" --to <messageId>`. Replies are Markdown; keep them short. If it shows the question was unclear, also fix the question with `question update`.
+- **A clarification** ("what do you mean by sync?", "why recommend A?"): answer it with `kim chat reply <session-id> --text "…" --to <messageId>`. Replies are Markdown; keep them short. For more than one paragraph, pass real line breaks: `--file -` with a heredoc, not `\n` inside `--text`. If it shows the question was unclear, also fix the question with `question update`.
 - **A direction** ("actually, focus on the mobile app", "skip the pricing questions"): steer by it. Add, update or delete questions and rewrite the plan, then reply briefly to confirm what you changed.
 
 `kim chat list <session-id>` shows the whole thread.

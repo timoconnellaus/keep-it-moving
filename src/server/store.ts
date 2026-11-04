@@ -3,6 +3,7 @@ import {
   ARTIFACT_MAX_BYTES,
   ArtifactInputSchema,
   ChatInputSchema,
+  literalLineBreaks,
   ArtifactPatchSchema,
   FramePositionSchema,
   normalizeDefault,
@@ -636,6 +637,8 @@ export class InterviewStore {
   ): ChatMessageView {
     this.requireActive(sessionId);
     const parsed = ChatInputSchema.parse(input);
+    // The agent's text often comes through a shell; the user's is as typed.
+    if (author === "agent") parsed.text = literalLineBreaks(parsed.text);
     if (this.count("chat_messages", sessionId) >= LIMITS.chatMessages)
       throw new Error(
         `${LIMIT_REACHED}: an interview's chat holds at most ${LIMITS.chatMessages} messages; start a new interview`,
