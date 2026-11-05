@@ -3,3 +3,5 @@
 /docs/marketing/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+orca-plugin/vendor/
+orca-plugin/kit/

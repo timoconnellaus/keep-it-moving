@@ -128,7 +128,10 @@ function toOwner(
   request: Request,
 ) {
   const forwarded = new Request(
-    new URL(`/api/inbox/${share.token}${rest}`, request.url),
+    new URL(
+      `/api/inbox/${share.token}${rest}${new URL(request.url).search}`,
+      request.url,
+    ),
     request,
   );
   // Only the Worker may say who is asking.
