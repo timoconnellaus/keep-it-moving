@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { hubHarness } from "./helpers/harness.js";
 import { serveHarness } from "./helpers/serve.js";
 
@@ -335,8 +335,6 @@ describe("the CLI package", () => {
       "package/dist/cli.js",
       "package/dist/hook.js",
       "package/dist/hooks.js",
-      "package/dist/inlineImages.js",
-      "package/dist/shared/answers.js",
       "package/dist/shared/remote.js",
       "package/dist/skill.js",
       "package/dist/update.js",
@@ -442,7 +440,7 @@ describe("the inbox, as the assignee's agent", () => {
           new Request(new URL("/internal/inbox/socket", url), request),
         );
       const forwarded = new Request(
-        new URL(`/api/inbox/${inbox[1]}${url.search}`, url),
+        new URL(`/api/inbox/${inbox[1]}`, url),
         request,
       );
       forwarded.headers.set("x-kim-respondent", "bob@example.com");
@@ -618,31 +616,6 @@ describe("the inbox, as the assignee's agent", () => {
     });
   });
 
-  it("gives an artifact as written with the values to apply, and peeks without delivering", async () => {
-    const { run, store, session, mockup, questions, address } =
-      await inboxHarness();
-    store.answerQuestion(session.id, questions[1]!.id, { answer: "Welcome" });
-    const raw = await run(
-      "inbox",
-      "artifact",
-      session.token,
-      mockup.id,
-      "--raw",
-    );
-    expect(raw.content).toContain(">Hello</h1>");
-    expect(raw.content).not.toContain("<script>");
-    expect(raw.values).toEqual({ "#headline": "Welcome" });
-    // A peek leaves the news for the agent's wait.
-    await run("inbox", "show", session.token, "--peek");
-    const news = JSON.parse(
-      (await kim(address, "inbox", "wait", session.token, "--timeout", "5000"))
-        .stdout,
-    );
-    expect(news.interviews).toEqual([
-      expect.objectContaining({ id: session.token }),
-    ]);
-  }, 15_000);
-
   it("waits over a socket for what's new, delivering it once", async () => {
     const { store, session, mockup, address } = await inboxHarness();
     // The first look at a newly sent interview is news at once.
@@ -696,154 +669,4 @@ describe("the inbox, as the assignee's agent", () => {
       ),
     ).toEqual({ interviews: [], timedOut: true });
   }, 20_000);
-});
-
-describe("overview, answer and artifact get, for tools such as the Orca plugin", () => {
-  async function ownerHarness() {
-    const harness = hubHarness();
-    const { store } = harness;
-    const session = store.createSession("http://kim.test", {
-      title: "CRM data model",
-      origin: { branch: "crm", worktree: "crm-person-model" },
-    });
-    const mockup = store.addArtifact(session.id, {
-      kind: "mockup",
-      title: "Person page",
-      content:
-        '<!doctype html><html><body data-kim-layout="side"><img src="IMAGE"><div style="background:url(\'IMAGE\')">x</div><img src="https://fonts.gstatic.com/x.woff2"></body></html>',
-    });
-    const questions = store.addQuestions(session.id, [
-      {
-        prompt: "Which fields?",
-        type: "multiple-choice",
-        options: ["Email", "Phone", "Title"],
-      },
-      {
-        prompt: "Layout?",
-        type: "single-choice",
-        options: ["Side", "Tabs"],
-        artifactId: mockup.id,
-        optionValues: {
-          Side: { "@layout": "side" },
-          Tabs: { "@layout": "tabs" },
-        },
-      },
-    ]);
-    const served = await serveHarness(harness, (request) => {
-      const url = new URL(request.url);
-      if (url.pathname === "/image.png")
-        return new Response(PNG, { headers: { "content-type": "image/png" } });
-      if (url.pathname === "/api/sessions/inbox")
-        return Response.json({ interviews: [] });
-      return harness.app.fetch(request);
-    });
-    // The mockup's image is on this server.
-    store.updateArtifact(session.id, mockup.id, {
-      content: store
-        .artifactContent(session.id, mockup.id)
-        .content.replaceAll("IMAGE", `${served.address}/image.png`),
-    });
-    cleanups.push(async () => {
-      await served.close();
-      setTimeout(() => harness.sql.close(), 3_000).unref();
-    });
-    const run = (...args: string[]) =>
-      kim(served.address, ...args).then(({ stdout }) => JSON.parse(stdout));
-    return {
-      ...harness,
-      session,
-      mockup,
-      questions,
-      run,
-      address: served.address,
-    };
-  }
-
-  it("lists every interview with its url, what waits on the user and the inbox", async () => {
-    const { run, session } = await ownerHarness();
-    const overview = await run("overview");
-    expect(overview.inbox).toEqual([]);
-    expect(overview.sessions).toEqual([
-      expect.objectContaining({
-        id: session.id,
-        title: "CRM data model",
-        url: expect.stringMatching(new RegExp(`/s/${session.token}$`)),
-        open: 2,
-        agentWatching: false,
-        origin: expect.objectContaining({
-          branch: "crm",
-          worktree: "crm-person-model",
-        }),
-      }),
-    ]);
-  });
-
-  it("answers a question by number as the browser form would", async () => {
-    const { run, store, session } = await ownerHarness();
-    await run(
-      "answer",
-      session.id,
-      "1",
-      "--option",
-      "Email",
-      "--option",
-      "Title",
-      "--note",
-      "for now",
-    );
-    const answered = store.getSession(session.id, "").questions[0]!.answer;
-    expect(answered?.text).toBe("Email, Title — for now");
-    await expect(
-      kim(
-        (await ownerHarness()).address,
-        "answer",
-        session.id,
-        "1",
-        "--option",
-        "Fax",
-      ),
-    ).rejects.toThrow();
-  });
-
-  it("gets an artifact with its values, embedding web images but not fonts", async () => {
-    const { run, store, session, mockup, questions, address } =
-      await ownerHarness();
-    store.answerQuestion(session.id, questions[1]!.id, { answer: "Tabs" });
-    const got = await run(
-      "artifact",
-      "get",
-      session.id,
-      mockup.id,
-      "--inline-images",
-    );
-    expect(got.values).toEqual({ "@layout": "tabs" });
-    expect(got.images).toEqual({ embedded: 1, skipped: [] });
-    expect(got.content).not.toContain(`${address}/image.png`);
-    expect(got.content.match(/data:image\/png;base64,/g)).toHaveLength(2);
-    expect(got.content).toContain("https://fonts.gstatic.com/x.woff2");
-  });
-
-  it("prints the overview again only when it changes, with --watch", async () => {
-    const { store, session, address } = await ownerHarness();
-    const child = (await import("node:child_process")).spawn(
-      process.execPath,
-      [tsx, cli, "overview", "--watch", "--interval", "2000"],
-      { env: env(address), cwd: repo },
-    );
-    cleanups.push(() => void child.kill());
-    const lines: Array<{ sessions: Array<{ open: number }> }> = [];
-    let buffer = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString();
-      const parts = buffer.split("\n");
-      buffer = parts.pop()!;
-      for (const part of parts) if (part.trim()) lines.push(JSON.parse(part));
-    });
-    await vi.waitFor(() => expect(lines).toHaveLength(1), { timeout: 8000 });
-    store.addQuestions(session.id, [{ prompt: "Budget?" }]);
-    await vi.waitFor(() => expect(lines).toHaveLength(2), { timeout: 8000 });
-    expect(lines[1]!.sessions[0]!.open).toBe(3);
-    await new Promise((resolve) => setTimeout(resolve, 2_500));
-    expect(lines).toHaveLength(2);
-  }, 25_000);
 });

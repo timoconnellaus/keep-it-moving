@@ -21,9 +21,6 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import envPaths from "env-paths";
 import { checkbox } from "./checkbox.js";
-import { fetchImage, inlineImages } from "./inlineImages.js";
-import { composeParts } from "./shared/answers.js";
-import type { QuestionView } from "./shared/schema.js";
 import { normalizeRemote, projectName } from "./shared/remote.js";
 import {
   type AgentId,
@@ -103,14 +100,6 @@ async function main(args: string[]): Promise<void> {
   if (group === "cloud") return cloudCommand(action, rest);
   if (group === "skill") return skillCommand(action, rest);
   if (group === "inbox") return inboxCommand(action, rest);
-  if (group === "overview")
-    return overviewCommand(
-      [action, ...rest].filter((value): value is string => Boolean(value)),
-    );
-  if (group === "answer")
-    return answerCommand(
-      [action, ...rest].filter((value): value is string => Boolean(value)),
-    );
   if (group === "draft")
     return draftCommand(
       [action, ...rest].filter((value): value is string => Boolean(value)),
@@ -469,13 +458,6 @@ async function artifactCommand(action: string | undefined, args: string[]) {
     );
   }
   const artifactId = positional(args, 1);
-  if (action === "get")
-    return outputArtifact(
-      (await api(
-        `/api/sessions/${sessionId}/artifacts/${encodeURIComponent(artifactId)}`,
-      )) as { content: string; format?: string },
-      args,
-    );
   if (action === "update")
     return output(
       await api(`/api/sessions/${sessionId}/artifacts/${artifactId}`, {
@@ -634,100 +616,6 @@ async function chatCommand(action: string | undefined, args: string[]) {
   );
 }
 
-/**
- * Prints an artifact, or saves its content with --out. --inline-images
- * embeds the images an html page loads from the web, for a viewer that
- * can't fetch them.
- */
-async function outputArtifact(
-  artifact: { content: string; format?: string },
-  args: string[],
-) {
-  let embedded: { embedded: number; skipped: string[] } | undefined;
-  if (args.includes("--inline-images") && artifact.format === "html") {
-    const result = await inlineImages(artifact.content, fetchImage);
-    artifact = { ...artifact, content: result.html };
-    embedded = { embedded: result.embedded, skipped: result.skipped };
-  }
-  const images = embedded ? { images: embedded } : {};
-  const out = flag(args, "--out");
-  if (!out) return output({ ...artifact, ...images });
-  writeFileSync(out, artifact.content);
-  return output({
-    ...artifact,
-    ...images,
-    content: undefined,
-    file: resolve(out),
-  });
-}
-
-/**
- * `overview [--watch] [--interval MS]`: every interview at a glance (what
- * waits on the user, whether an agent is waiting on them) and the ones
- * sent to them. --watch prints it again, one JSON line each, whenever it
- * changes, for tools such as the Orca plugin.
- */
-async function overviewCommand(args: string[]) {
-  const read = async () => {
-    const [own, sent] = await Promise.all([
-      api("/api/sessions/overview") as Promise<{ sessions: unknown[] }>,
-      // An agent key can't read the inbox; it has none, then.
-      (api("/api/sessions/inbox") as Promise<{ interviews: unknown[] }>).catch(
-        () => ({ interviews: [] }),
-      ),
-    ]);
-    return { sessions: own.sessions, inbox: sent.interviews };
-  };
-  if (!args.includes("--watch")) return output(await read());
-  const interval = Math.max(2000, Number(flag(args, "--interval") ?? 5000));
-  let last = "";
-  for (;;) {
-    try {
-      const next = await read();
-      const key = JSON.stringify(next);
-      if (key !== last) {
-        last = key;
-        output({ ...next, at: new Date().toISOString() });
-      }
-    } catch (error) {
-      // Say so and keep going: the next look may work.
-      output({ error: error instanceof Error ? error.message : String(error) });
-    }
-    await new Promise((done) => setTimeout(done, interval));
-  }
-}
-
-/**
- * `answer <session> <question> [answer…] [--option <label>]… [--note <text>]
- * [--skip]`: answers one of the user's own interviews as the user, as the
- * browser form does. The question is its id or number.
- */
-async function answerCommand(args: string[]) {
-  const sessionId = positional(args, 0);
-  const ref = positional(args, 1);
-  const session = (await api(`/api/sessions/${sessionId}`)) as {
-    questions: QuestionView[];
-  };
-  const question =
-    session.questions.find((item) => item.id === ref) ??
-    (/^\d+$/.test(ref) ? session.questions[Number(ref) - 1] : undefined);
-  if (!question) throw new Error(`No question ${ref} in this interview`);
-  const note = flag(args, "--note");
-  const answer = positionals(args).slice(2).join(" ");
-  const body = composeParts(question, {
-    ...(answer ? { answer } : {}),
-    options: flags(args, "--option"),
-    ...(note !== undefined ? { note } : {}),
-    skipped: args.includes("--skip"),
-  });
-  return output(
-    await api(`/api/sessions/${sessionId}/questions/${question.id}/answer`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
-  );
-}
-
 /** An interview sent to the user, by its token or its page's URL. */
 function interviewRef(value: string): string {
   const token = /\/s\/([A-Za-z0-9_-]{32})(?:[/?#]|$)/.exec(value)?.[1] ?? value;
@@ -746,9 +634,7 @@ async function inboxCommand(action: string | undefined, args: string[]) {
   const interview = interviewRef(positional(args, 0));
   const base = `/api/sessions/inbox/${interview}`;
   if (action === "show") {
-    const view = (await api(
-      args.includes("--peek") ? `${base}?peek=1` : base,
-    )) as {
+    const view = (await api(base)) as {
       artifacts: Array<{ id: string; format: string; content?: string }>;
     };
     // What isn't inline is a command away.
@@ -762,13 +648,15 @@ async function inboxCommand(action: string | undefined, args: string[]) {
         });
     return output(view);
   }
-  if (action === "artifact")
-    return outputArtifact(
-      (await api(
-        `${base}/artifacts/${encodeURIComponent(positional(args, 1))}${args.includes("--raw") ? "?raw=1" : ""}`,
-      )) as { content: string; format?: string },
-      args,
-    );
+  if (action === "artifact") {
+    const artifact = (await api(
+      `${base}/artifacts/${encodeURIComponent(positional(args, 1))}`,
+    )) as { content: string };
+    const out = flag(args, "--out");
+    if (!out) return output(artifact);
+    writeFileSync(out, artifact.content);
+    return output({ ...artifact, content: undefined, file: resolve(out) });
+  }
   if (action === "screenshot") return inboxScreenshot(interview, args);
   if (action === "chat") {
     const text = positionals(args).slice(1).join(" ");
@@ -2027,10 +1915,6 @@ function optionValuesFromFlags(
 /** Flags that take no value, so the next argument stays positional. */
 const BOOLEAN_FLAGS = new Set([
   "--all",
-  "--watch",
-  "--inline-images",
-  "--raw",
-  "--peek",
   "--show",
   "--stdin",
   "--open-stage",
@@ -2112,18 +1996,11 @@ Commands:
   artifact show <session> <artifact|none>   choose what the workspace shows
   artifact delete <session> <artifact>
   stage open|close <session>   show or hide the workspace column
-  artifact get <session> <artifact> [--inline-images] [--out <file>]   its content, and the values saved answers apply
-  answer <session> <question> [answer…] [--option <label>]… [--note <text>] [--skip]
-    answer one of your own interviews as you, as the browser form does
-  overview [--watch] [--interval MS]   every interview at a glance and the ones sent to you;
-    --watch prints it again (one JSON line) whenever it changes, for tools such as the Orca plugin
 
 Interviews sent to you (someone assigned you one; your agent drafts, you send):
   inbox   the interviews sent to you (or a linked account) still open: url, sender, open and drafted counts
-  inbox show <interview> [--peek]   its questions with answers, drafts and threads, the chat, and the workspace
-    (--peek leaves what's new for \`inbox wait\`)
-  inbox artifact <interview> <artifact> [--out <file>] [--raw] [--inline-images]
-    the artifact as its frame serves it; --raw as written, with the values to apply
+  inbox show <interview>   its questions with answers, drafts and threads, the chat, and the workspace
+  inbox artifact <interview> <artifact> [--out <file>]   the artifact as its frame serves it
   inbox screenshot <interview> <artifact> [--width N] [--full-page] [--out <file.png>]
     renders an html artifact in the service's browser (Pro); saves the PNG and prints its path
   inbox chat <interview> [--question <question>] <text>   message the sender's agent, as you

@@ -549,17 +549,6 @@ export function createHub(options: HubOptions) {
   app.post("/api/sessions", async (c) =>
     c.json(forAgent(store.createSession(baseUrl, await body(c)))),
   );
-  // Every interview at a glance, for tools such as the Orca plugin: what
-  // waits on the user, and whether an agent is waiting on them.
-  app.get("/api/sessions/overview", (c) =>
-    c.json({
-      sessions: store.summaries().map((summary) => ({
-        ...summary,
-        url: `${baseUrl}/s/${summary.token}`,
-        agentWatching: watching(summary.id),
-      })),
-    }),
-  );
   app.get("/api/sessions", (c) =>
     c.json(
       store.listSessions(baseUrl, c.req.query("all") === "true").map(forAgent),
@@ -645,19 +634,6 @@ export function createHub(options: HubOptions) {
       ),
     ),
   );
-  // One artifact with its content, and the values its saved answers apply.
-  app.get("/api/sessions/:id/artifacts/:artifactId", (c) => {
-    const session = store.getSession(c.req.param("id"), baseUrl);
-    const artifact = session.artifacts.find(
-      (item) => item.id === c.req.param("artifactId"),
-    );
-    if (!artifact) return c.json({ error: "No such artifact" }, 404);
-    return c.json({
-      ...artifact,
-      content: store.artifactContent(session.id, artifact.id).content,
-      values: artifactValues(session.questions, artifact.id),
-    });
-  });
   app.delete("/api/sessions/:id/artifacts/:artifactId", (c) => {
     store.deleteArtifact(c.req.param("id"), c.req.param("artifactId"));
     return c.json({ ok: true });
@@ -987,9 +963,7 @@ export function createHub(options: HubOptions) {
   app.get("/api/inbox/:token", (c) => {
     const { id } = inboxTarget(c);
     const view = inboxView(store.getSession(id, baseUrl), store.drafts(id));
-    // A peek, such as the Orca plugin's, leaves the news for the agent.
-    if (c.req.query("peek") !== "1")
-      store.markInboxDelivered(id, store.inboxChanges(id).through);
+    store.markInboxDelivered(id, store.inboxChanges(id).through);
     return c.json(view);
   });
   app.post("/api/inbox/:token/take", (c) => {
@@ -1007,11 +981,6 @@ export function createHub(options: HubOptions) {
     );
     if (!artifact) throw new Error("Artifact not found");
     const { content } = store.artifactContent(id, artifact.id);
-    const values = artifactValues(session.questions, artifact.id);
-    // Raw: the page as written, with the values to apply, for a viewer
-    // that applies them itself (the Orca plugin).
-    if (c.req.query("raw") === "1")
-      return c.json({ ...artifactSummary(artifact), content, values });
     return c.json({
       ...artifactSummary(artifact),
       content:
