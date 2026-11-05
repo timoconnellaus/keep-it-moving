@@ -422,6 +422,16 @@ function card(ref: InterviewRef, item: OwnInterview | SentInterview): Node {
         },
         "Open in browser ↗",
       ),
+      h(
+        "button",
+        {
+          className: "link",
+          title: "Open it in an Orca browser tab and close this sidebar",
+          onClick: () =>
+            void open(item.url, own?.origin.worktree ?? null, true),
+        },
+        "Use the browser instead",
+      ),
       sent
         ? h(
             "button",
@@ -744,10 +754,10 @@ async function submit(
   }
 }
 
-async function open(url: string, worktree: string | null) {
+async function open(url: string, worktree: string | null, closePanel = false) {
   const workspacePath = worktree ? null : (state.workspace?.path ?? null);
   const { opened } = await orca.plugin
-    .request("open", { url, workspacePath })
+    .request("open", { url, workspacePath, closePanel })
     .catch(() => ({ opened: false }));
   // No orca CLI to open a tab with: the default browser, then.
   if (!opened) await orca.shell?.openExternal(url).catch(() => undefined);

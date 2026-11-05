@@ -63,6 +63,7 @@
   },
   "capabilities": [
     { "kind": "workspace:read" },
+    { "kind": "workspace:write" },
     { "kind": "agent:launch" },
     { "kind": "notifications:show" },
     { "kind": "storage:own" },

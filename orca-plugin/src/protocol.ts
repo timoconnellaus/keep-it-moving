@@ -105,7 +105,12 @@ declare module "orca" {
     };
     answer: { input: AnswerInput; output: { ok: true } };
     open: {
-      input: { url: string; workspacePath?: string | null };
+      input: {
+        url: string;
+        workspacePath?: string | null;
+        /** Close the right sidebar after: the browser instead of the panel. */
+        closePanel?: boolean;
+      };
       output: { opened: boolean };
     };
     "agent.start": {
