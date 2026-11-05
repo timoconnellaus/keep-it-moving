@@ -240,18 +240,12 @@ export default async function activate(orca: OrcaWorkerApi) {
     return { ok: true as const };
   });
 
-  orca.panels.handle("open", async ({ url, workspacePath, closePanel }) => {
-    const opened = await openInOrca(
+  orca.panels.handle("open", async ({ url, workspacePath }) => ({
+    opened: await openInOrca(
       url,
       workspacePath ?? focusedWorkspace(workspaces, context)?.path ?? null,
-    );
-    // The sidebar holds the panel: toggled from open, it closes.
-    if (opened && closePanel)
-      await orca.host
-        .call("commands.run", { action: "sidebar.right.toggle" })
-        .catch((error: Error) => orca.log(`close panel: ${error.message}`));
-    return { opened };
-  });
+    ),
+  }));
 
   orca.panels.handle("agent.start", async ({ url, title }) => {
     const workspace = focusedWorkspace(workspaces, context);

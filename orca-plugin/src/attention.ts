@@ -57,8 +57,7 @@ export function statusItem(overview: Overview): StatusItem {
       waiting.length === 1
         ? `${clip(titles[0]!, 32)} needs you`
         : `${waiting.length} interviews need you`,
-    // Orca allows 256 characters.
-    tooltip: clip(`Keep it moving: ${titles.join(" · ")}. Click to open.`, 250),
+    tooltip: `Keep it moving: ${titles.join(" · ")}. Click to open.`,
   };
 }
 
