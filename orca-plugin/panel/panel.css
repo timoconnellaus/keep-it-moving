@@ -1,0 +1,345 @@
+/* Orca's theme reaches the panel as --orca-* variables; these fall back
+   to a dark theme when they're missing (a preview outside Orca). */
+:root {
+  color-scheme: light dark;
+  --bg: var(--orca-background, #16171a);
+  --fg: var(--orca-foreground, #e6e7ea);
+  --card: var(--orca-card, #1d1f23);
+  --muted: var(--orca-muted-foreground, #8d9097);
+  --line: var(--orca-border, #2a2c31);
+  --input: var(--orca-input, #2f3136);
+  --primary: var(--orca-primary, #5b8cff);
+  --primary-fg: var(--orca-primary-foreground, #fff);
+  --accent: var(--orca-accent, #24262b);
+  --danger: var(--orca-destructive, #e5484d);
+  --radius: var(--orca-radius, 8px);
+  --warn: #e0a42b;
+  --ok: #3fb972;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    13px/1.45 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+#app {
+  height: 100%;
+  overflow: auto;
+  padding: 12px;
+}
+h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 2px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+h3:first-child {
+  margin-top: 2px;
+}
+h3 .link {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+.pad {
+  padding: 0 2px;
+}
+.error {
+  color: var(--danger);
+}
+code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--accent);
+  font:
+    12px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+code.block {
+  display: block;
+  margin: 6px 0;
+  padding: 6px 8px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.problem,
+.notice {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.problem p {
+  margin: 6px 0 0;
+}
+.notice {
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--line));
+}
+.card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 2px);
+  background: var(--card);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.title {
+  font-weight: 600;
+}
+.card-head .badge {
+  margin-left: auto;
+}
+.progress {
+  height: 4px;
+  margin: 8px 0 4px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.progress i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--primary);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.card-body {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.q-number {
+  margin-bottom: 2px;
+}
+.q {
+  margin-bottom: 8px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.then {
+  margin-top: 10px;
+}
+.rec-text {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.badge {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.badge.wait {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  color: var(--warn);
+}
+.badge.work {
+  background: color-mix(in srgb, var(--ok) 20%, transparent);
+  color: var(--ok);
+}
+.badge.sent {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  color: var(--primary);
+}
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 12px;
+}
+.link.small {
+  font-size: 11px;
+}
+.button {
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+.button.primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-fg);
+}
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  text-align: left;
+}
+.option:hover {
+  background: var(--accent);
+}
+.option.on {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.mark {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+}
+.option.multiple .mark {
+  border-radius: 3px;
+}
+.option.on .mark {
+  border-color: var(--primary);
+  background: radial-gradient(var(--primary) 45%, transparent 50%);
+}
+.option.multiple.on .mark {
+  background: var(--primary);
+}
+.rec {
+  margin-left: auto;
+  color: var(--warn);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+}
+.option-card {
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.option-card:hover {
+  background: var(--accent);
+}
+.option-card.on {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.option-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-weight: 600;
+}
+.option-label .rec {
+  margin-left: 0;
+}
+.option-label .view {
+  margin-left: auto;
+}
+.shot {
+  display: grid;
+  place-items: center;
+  min-height: 80px;
+  overflow: hidden;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--accent);
+}
+.shot.wide {
+  margin-bottom: 4px;
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  text-align: left;
+}
+.row:hover {
+  background: var(--accent);
+}
+.swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 2px;
+}
+.row-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.row-title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

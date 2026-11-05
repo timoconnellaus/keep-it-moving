@@ -1,0 +1,71 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "id": "keep-it-moving",
+  "name": "Keep it moving",
+  "version": "0.1.0",
+  "description": "Answer your agents' Keep it moving interviews from Orca: the workspace's interview in a panel, mockups drawn live, and a nudge when one needs you.",
+  "author": { "name": "Tim O'Connell" },
+  "homepage": "https://keep-it-moving.zerobsai.com",
+  "engines": { "orca": ">=1.4.248" },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "interviews",
+        "title": "Interviews",
+        "icon": "bot",
+        "entry": "panel/index.html",
+        "ui": "html"
+      }
+    ],
+    "commands": [
+      {
+        "id": "openWaiting",
+        "title": "Keep it moving: Open the interview waiting on you"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "waiting",
+        "icon": "bell",
+        "tone": "warning",
+        "text": "",
+        "tooltip": "Keep it moving",
+        "command": "openWaiting"
+      }
+    ],
+    "events": [
+      { "on": "workspace.changed" },
+      { "on": "workspace.created" },
+      { "on": "workspace.removed" }
+    ],
+    "settings": [
+      {
+        "key": "kimCommand",
+        "title": "kim command",
+        "description": "Leave empty to run kim from your shell's PATH, or give its full path.",
+        "type": "string",
+        "default": "",
+        "placeholder": "kim"
+      },
+      {
+        "key": "agent",
+        "title": "Agent for Start an Agent",
+        "description": "The agent Orca starts to draft answers to interviews sent to you.",
+        "type": "string",
+        "default": "claude",
+        "placeholder": "claude"
+      }
+    ]
+  },
+  "capabilities": [
+    { "kind": "workspace:read" },
+    { "kind": "agent:launch" },
+    { "kind": "notifications:show" },
+    { "kind": "storage:own" },
+    { "kind": "settings:own" }
+  ]
+}
