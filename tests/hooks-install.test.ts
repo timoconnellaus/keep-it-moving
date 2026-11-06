@@ -57,7 +57,13 @@ describe("installing the hooks into Claude Code's settings.json", () => {
     expect(result).toMatchObject({
       file,
       changed: true,
-      events: ["SessionStart", "UserPromptSubmit", "PostToolUse"],
+      events: [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd",
+      ],
     });
     const text = readFileSync(file, "utf8");
     expect(text).toMatch(/^\{\n {4}"model"/);
@@ -79,6 +85,22 @@ describe("installing the hooks into Claude Code's settings.json", () => {
         ],
         SessionStart: [hookEntry("SessionStart")],
         UserPromptSubmit: [hookEntry("UserPromptSubmit")],
+        // Claude Code's waits in the background and wakes the model.
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: "kim hook stop",
+                asyncRewake: true,
+                timeout: 86_400,
+                rewakeMessage: "Keep it moving:",
+                rewakeSummary: "Keep it moving: new answers",
+              },
+            ],
+          },
+        ],
+        SessionEnd: [hookEntry("SessionEnd")],
       },
     });
     // Again: nothing changes, not even the bytes.
@@ -177,7 +199,13 @@ describe("kim hooks and kim skill install", () => {
       expect.objectContaining({ agent: "claude", events: [] }),
       expect.objectContaining({
         agent: "codex",
-        events: ["SessionStart", "UserPromptSubmit", "PostToolUse"],
+        events: [
+          "SessionStart",
+          "UserPromptSubmit",
+          "PostToolUse",
+          "Stop",
+          "SessionEnd",
+        ],
       }),
     ]);
     await kim(home, "hooks", "uninstall");
@@ -198,7 +226,7 @@ describe("kim hooks and kim skill install", () => {
     expect(result.hooks).toEqual([
       expect.objectContaining({ agent: "claude", changed: true }),
     ]);
-    expect(hooksStatus("claude", home, bare).events).toHaveLength(3);
+    expect(hooksStatus("claude", home, bare).events).toHaveLength(5);
     const other = tempHome();
     const without = await kim(
       other,
@@ -253,7 +281,7 @@ describe("keeping the hooks current on every run", () => {
     rmSync(stateFile(home));
 
     await ordinaryRun(home);
-    expect(hooksStatus("codex", home, bare).events).toHaveLength(3);
+    expect(hooksStatus("codex", home, bare).events).toHaveLength(5);
     // Claude Code wasn't chosen, though it's here.
     expect(existsSync(join(home, ".claude", "settings.json"))).toBe(false);
   }, 30_000);
@@ -279,9 +307,23 @@ describe("keeping the hooks current on every run", () => {
     await ordinaryRun(home);
     expect(JSON.parse(readFileSync(codexFile(home), "utf8"))).toEqual({
       hooks: {
-        SessionStart: [hookEntry("SessionStart")],
-        UserPromptSubmit: [hookEntry("UserPromptSubmit")],
-        PostToolUse: [hookEntry("PostToolUse")],
+        SessionStart: [hookEntry("SessionStart", "codex")],
+        UserPromptSubmit: [hookEntry("UserPromptSubmit", "codex")],
+        PostToolUse: [hookEntry("PostToolUse", "codex")],
+        // Codex can't be woken, so its Stop hook holds the turn.
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: "kim hook stop --hold",
+                timeout: 3_600,
+                statusMessage: "Waiting for answers in Keep it moving",
+              },
+            ],
+          },
+        ],
+        SessionEnd: [hookEntry("SessionEnd", "codex")],
       },
     });
   }, 30_000);
@@ -304,7 +346,7 @@ describe("keeping the hooks current on every run", () => {
     delete state.installed;
     writeFileSync(stateFile(home), JSON.stringify(state));
     await ordinaryRun(home);
-    expect(hooksStatus("codex", home, bare).events).toHaveLength(3);
+    expect(hooksStatus("codex", home, bare).events).toHaveLength(5);
   }, 30_000);
 
   it("leaves a broken settings.json alone, and the command still works", async () => {

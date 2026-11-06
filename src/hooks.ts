@@ -20,6 +20,8 @@ export const HOOK_EVENTS = {
   SessionStart: "session-start",
   UserPromptSubmit: "user-prompt-submit",
   PostToolUse: "post-tool-use",
+  Stop: "stop",
+  SessionEnd: "session-end",
 } as const;
 export type HookEvent = keyof typeof HOOK_EVENTS;
 export type HookArgument = (typeof HOOK_EVENTS)[HookEvent];
@@ -31,6 +33,17 @@ export const hookEventFor = (argument: string): HookEvent | null =>
 
 /** Seconds the agent gives a hook; `kim hook` itself gives up after two. */
 const HOOK_TIMEOUT_S = 5;
+/**
+ * Claude Code's Stop hook runs in the background (asyncRewake) and wakes
+ * the model when answers arrive; it gives up a little before this, waking
+ * the model once to say it's still waiting, so the next stop re-arms it.
+ */
+export const STOP_WAIT_TIMEOUT_S = 24 * 60 * 60;
+/**
+ * Codex can't be woken, so its Stop hook holds the turn open: it waits up
+ * to about this long, then hands the model the answers or a "still waiting".
+ */
+export const STOP_HOLD_TIMEOUT_S = 60 * 60;
 
 /**
  * The agents whose hooks can add to the model's context on these events.
@@ -57,8 +70,10 @@ export type HookAgentId = (typeof HOOK_AGENTS)[number]["id"];
 export const isHookAgent = (id: string): id is HookAgentId =>
   HOOK_AGENTS.some((agent) => agent.id === id);
 
-const command = (event: HookEvent) => `kim hook ${HOOK_EVENTS[event]}`;
-const OURS = /^kim hook (session-start|user-prompt-submit|post-tool-use)$/;
+const command = (event: HookEvent, agent: HookAgentId) =>
+  `kim hook ${HOOK_EVENTS[event]}${event === "Stop" && agent === "codex" ? " --hold" : ""}`;
+const OURS =
+  /^kim hook (session-start|user-prompt-submit|post-tool-use|stop|session-end)( --hold)?$/;
 
 interface Handler {
   type?: string;
@@ -74,12 +89,41 @@ type HooksFile = Record<string, unknown> & {
   hooks?: Record<string, MatcherGroup[]>;
 };
 
-/** The matcher group `kim hooks install` adds for an event. */
-export const hookEntry = (event: HookEvent): MatcherGroup => ({
-  hooks: [
-    { type: "command", command: command(event), timeout: HOOK_TIMEOUT_S },
-  ],
-});
+/** The matcher group `kim hooks install` adds for an event, for an agent. */
+export const hookEntry = (
+  event: HookEvent,
+  agent: HookAgentId = "claude",
+): MatcherGroup => {
+  if (event !== "Stop")
+    return {
+      hooks: [
+        {
+          type: "command",
+          command: command(event, agent),
+          timeout: HOOK_TIMEOUT_S,
+        },
+      ],
+    };
+  return {
+    hooks: [
+      agent === "claude"
+        ? {
+            type: "command",
+            command: command(event, agent),
+            asyncRewake: true,
+            timeout: STOP_WAIT_TIMEOUT_S,
+            rewakeMessage: "Keep it moving:",
+            rewakeSummary: "Keep it moving: new answers",
+          }
+        : {
+            type: "command",
+            command: command(event, agent),
+            timeout: STOP_HOLD_TIMEOUT_S,
+            statusMessage: "Waiting for answers in Keep it moving",
+          },
+    ],
+  };
+};
 
 const ours = (handler: Handler) =>
   typeof handler.command === "string" && OURS.test(handler.command.trim());
@@ -178,7 +222,7 @@ export function installHooks(
   const cleaned = withoutOurs(settings);
   const hooks = { ...cleaned.hooks };
   for (const event of Object.keys(HOOK_EVENTS) as HookEvent[])
-    hooks[event] = [...(hooks[event] ?? []), hookEntry(event)];
+    hooks[event] = [...(hooks[event] ?? []), hookEntry(event, agent)];
   const next = { ...cleaned, hooks };
   const changed =
     JSON.stringify(next) !== JSON.stringify(settings) || !existsSync(file);
@@ -228,13 +272,13 @@ export function hooksStatus(
  * differs from the one recorded for a file, that file's entries are
  * rewritten.
  */
-export const hooksHash = () =>
+export const hooksHash = (agent: HookAgentId = "claude") =>
   createHash("sha256")
     .update(
       JSON.stringify(
         (Object.keys(HOOK_EVENTS) as HookEvent[]).map((event) => [
           event,
-          hookEntry(event),
+          hookEntry(event, agent),
         ]),
       ),
     )
@@ -311,9 +355,9 @@ export function refreshHooks(
   { env = process.env, force = false } = {},
 ): HookRefreshResult[] {
   const state = readHooksState(stateFile);
-  const hash = hooksHash();
   const installed = { ...state.installed };
   const results = agents.flatMap((agent): HookRefreshResult[] => {
+    const hash = hooksHash(agent);
     const file = agentFile(agent, home, env);
     if (state.optedOut?.includes(agent))
       return [{ agent, file, optedOut: true }];

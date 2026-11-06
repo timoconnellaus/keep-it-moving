@@ -90,6 +90,9 @@ const ATTRIBUTION_COLUMNS = [
   // The last event the assignee's agent has been given (see inboxChanges);
   // null until it has seen the interview at all.
   ["sessions", "inbox_delivered"],
+  // When an answer or the user's chat message reached the agent ("read").
+  ["answers", "delivered_at"],
+  ["chat_messages", "delivered_at"],
 ] as const;
 
 type Binding = Pick<QuestionView, "optionValues" | "control" | "unit">;
@@ -417,6 +420,24 @@ export class InterviewStore {
     );
   }
 
+  /** When an agent's hook last asked, or null; cleared when its session ends. */
+  hookSeenAt(sessionId: string): string | null {
+    const row = first(
+      this.sql,
+      "SELECT hook_seen_at FROM sessions WHERE id = ?",
+      sessionId,
+    );
+    return row ? optional(row.hook_seen_at) : null;
+  }
+
+  /** The agent's session ended: nothing keeps it looking present. */
+  clearHook(sessionId: string): void {
+    this.sql.all(
+      "UPDATE sessions SET hook_seen_at = NULL WHERE id = ?",
+      sessionId,
+    );
+  }
+
   /**
    * Active interviews with questions still unanswered whose hook asked for
    * answers since `since`, whoever the questions wait on.
@@ -500,7 +521,7 @@ export class InterviewStore {
     if (!session) throw new Error("Session not found");
     const questions = this.sql.all(
       `SELECT q.*, a.text answer_text, a.skipped, a.revision, a.delivered, a.updated_at answer_updated_at,
-        a.answered_by
+        a.answered_by, a.delivered_at answer_delivered_at
       FROM questions q LEFT JOIN answers a ON a.question_id = q.id
       WHERE q.session_id = ? AND q.deleted = 0 ORDER BY q.position, q.created_at`,
       id,
@@ -544,6 +565,7 @@ export class InterviewStore {
                 skipped: Boolean(row.skipped),
                 revision: Number(row.revision),
                 delivered: Boolean(row.delivered),
+                deliveredAt: optional(row.answer_delivered_at),
                 updatedAt: String(row.answer_updated_at),
                 answeredBy: optional(row.answered_by),
               },
@@ -618,6 +640,7 @@ export class InterviewStore {
         questionId: optional(row.question_id),
         replyTo: optional(row.reply_to),
         delivered: Boolean(row.delivered),
+        deliveredAt: optional(row.delivered_at),
         createdAt: String(row.created_at),
         authorEmail: optional(row.author_email),
         pin: row.pin ? json<PinView>(row.pin) : null,
@@ -1032,7 +1055,7 @@ export class InterviewStore {
     );
     this.sql.all(
       `INSERT INTO answers (question_id,text,skipped,revision,delivered,event_id,updated_at,answered_by) VALUES (?,?,?,?,0,?,?,?)
-      ON CONFLICT(question_id) DO UPDATE SET text=excluded.text, skipped=excluded.skipped, revision=excluded.revision, delivered=0, event_id=excluded.event_id, updated_at=excluded.updated_at, answered_by=excluded.answered_by`,
+      ON CONFLICT(question_id) DO UPDATE SET text=excluded.text, skipped=excluded.skipped, revision=excluded.revision, delivered=0, delivered_at=NULL, event_id=excluded.event_id, updated_at=excluded.updated_at, answered_by=excluded.answered_by`,
       questionId,
       parsed.answer,
       parsed.skipped ? 1 : 0,
@@ -1585,18 +1608,21 @@ export class InterviewStore {
   }
 
   markDelivered(sessionId: string, throughId: number): void {
+    const at = now();
     this.sql.all(
       "UPDATE events SET delivered=1 WHERE session_id=? AND id<=?",
       sessionId,
       throughId,
     );
     this.sql.all(
-      `UPDATE answers SET delivered=1 WHERE event_id IN (SELECT id FROM events WHERE session_id=? AND id<=? AND delivered=1)`,
+      `UPDATE answers SET delivered=1, delivered_at=? WHERE delivered=0 AND event_id IN (SELECT id FROM events WHERE session_id=? AND id<=? AND delivered=1)`,
+      at,
       sessionId,
       throughId,
     );
     this.sql.all(
-      "UPDATE chat_messages SET delivered=1 WHERE session_id=? AND event_id<=? AND delivered=0",
+      "UPDATE chat_messages SET delivered=1, delivered_at=? WHERE session_id=? AND event_id<=? AND delivered=0",
+      at,
       sessionId,
       throughId,
     );

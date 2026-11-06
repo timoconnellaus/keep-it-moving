@@ -36,14 +36,23 @@ import {
   uninstallSkill,
 } from "./skill.js";
 import {
+  armWaiter,
+  disarmWaiter,
+  liveBinding,
+  readBindings,
   runHook,
+  runStop,
+  waiterArmed,
   type HookPayload,
   type InboxNews,
+  type StopWaitOutcome,
   type TakeOutcome,
 } from "./hook.js";
 import {
   HOOK_AGENTS,
   hookEventFor,
+  STOP_HOLD_TIMEOUT_S,
+  STOP_WAIT_TIMEOUT_S,
   forgetInstalledHooks,
   hooksStatus,
   isHookAgent,
@@ -126,6 +135,7 @@ async function main(args: string[]): Promise<void> {
 
 async function sessionCommand(action: string | undefined, args: string[]) {
   if (action === "create") {
+    await refuseSecondInterview();
     const session = await api("/api/sessions", {
       method: "POST",
       body: JSON.stringify({
@@ -159,6 +169,7 @@ async function sessionCommand(action: string | undefined, args: string[]) {
   if (action === "delete") return deleteSessions(args);
   const id = positional(args, 0);
   if (action === "show") return output(await api(`/api/sessions/${id}`));
+  if (action === "resume") await refuseSecondInterview(id);
   if (action === "stop" || action === "resume") {
     const result = await api(`/api/sessions/${id}/${action}`, {
       method: "POST",
@@ -991,6 +1002,7 @@ async function ask(args: string[]) {
     (flag(args, "--prompt") ? questionFromFlags(args) : null);
   if (!questions)
     throw new Error("--json <questions|-> or --prompt is required");
+  await refuseSecondInterview();
   const session = (await api("/api/sessions", {
     method: "POST",
     body: JSON.stringify({
@@ -1433,6 +1445,9 @@ const TAKE_TIMEOUT_MS = 1_500;
  * prints something, exits 0, and is done within the budget.
  */
 async function hookCommand(argument: string | undefined) {
+  if (argument === "stop")
+    return stopHookCommand(process.argv.includes("--hold"));
+  if (argument === "session-end") return sessionEndHookCommand();
   let response: Record<string, unknown> = {};
   try {
     const event = hookEventFor(argument ?? "");
@@ -1442,6 +1457,10 @@ async function hookCommand(argument: string | undefined) {
           const payload = JSON.parse(
             (await readStdin()).trim() || "{}",
           ) as HookPayload;
+          // The user took the turn: a background Stop hook still waiting
+          // gives up, so this turn's own hooks bring the answers in.
+          if (event === "UserPromptSubmit")
+            disarmWaiter(waitersDir(), payload.session_id ?? "");
           return runHook(event, payload, {
             stateFile: configFile("hooks.json"),
             take: (id, binding) =>
@@ -1461,6 +1480,158 @@ async function hookCommand(argument: string | undefined) {
     // Likewise.
   }
   process.stdout.write(`${JSON.stringify(response)}\n`, () => process.exit(0));
+}
+
+const waitersDir = () => configFile("waiters");
+/** The background waiter wakes the model this long before its hook's timeout. */
+const STOP_WAIT_MARGIN_MS = 15 * 60_000;
+/** Codex's hold hands back this long before its hook's timeout. */
+const STOP_HOLD_MARGIN_MS = 2 * 60_000;
+/** How often a background waiter checks it's still the session's newest. */
+const WAITER_CHECK_MS = 2_000;
+
+/**
+ * `kim hook stop`: the agent is ending its turn. While the session's
+ * interview is live it waits for the user: in Claude Code in the
+ * background (asyncRewake), waking the model with the answers on stderr
+ * and exit code 2; in Codex (`--hold`) by holding the stop and handing the
+ * answers back as `decision: block`. Anything going wrong lets it stop.
+ */
+async function stopHookCommand(hold: boolean) {
+  let text: string | null = null;
+  try {
+    const payload = JSON.parse(
+      (await readStdin()).trim() || "{}",
+    ) as HookPayload;
+    const sessionId = payload.session_id ?? "";
+    const stateFile = configFile("hooks.json");
+    if (liveBinding(readBindings(stateFile), sessionId)) {
+      const controller = new AbortController();
+      let checker: NodeJS.Timeout | undefined;
+      if (!hold) {
+        const token = armWaiter(waitersDir(), sessionId);
+        checker = setInterval(() => {
+          if (!waiterArmed(waitersDir(), sessionId, token)) controller.abort();
+        }, WAITER_CHECK_MS);
+      }
+      try {
+        const result = await runStop(payload, {
+          stateFile,
+          waitMs: hold
+            ? STOP_HOLD_TIMEOUT_S * 1000 - STOP_HOLD_MARGIN_MS
+            : STOP_WAIT_TIMEOUT_S * 1000 - STOP_WAIT_MARGIN_MS,
+          wait: (id, deadline) => stopWait(id, deadline, controller.signal),
+        });
+        // Given up for a newer waiter or the user's own prompt: say nothing.
+        text = controller.signal.aborted ? null : (result?.text ?? null);
+      } finally {
+        clearInterval(checker);
+      }
+    }
+  } catch {
+    text = null;
+  }
+  if (hold) {
+    const response = text ? { decision: "block", reason: text } : {};
+    process.stdout.write(`${JSON.stringify(response)}\n`, () =>
+      process.exit(0),
+    );
+    return;
+  }
+  if (!text) return process.exit(0);
+  process.stderr.write(`${text}\n`, () => process.exit(2));
+}
+
+/** One batch for the Stop hook, as `kim wait` gets it, or why there's none. */
+async function stopWait(
+  id: string,
+  deadline: number,
+  signal: AbortSignal,
+): Promise<StopWaitOutcome> {
+  let batch: unknown;
+  try {
+    await watchSocket(
+      `/api/sessions/${encodeURIComponent(id)}/socket`,
+      () => ({
+        mode: "wait",
+        idle: "15000",
+        timeout: String(Math.max(0, deadline - Date.now())),
+      }),
+      (message) => {
+        if (message.type !== "batch") return;
+        batch = message.batch;
+        return "done";
+      },
+      { signal },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/replaced/i.test(message)) return "replaced";
+    if (/not found/i.test(message)) return "gone";
+    throw error;
+  }
+  if (signal.aborted) return "replaced";
+  return batch ? { batch: batch as StopWaitBatch } : null;
+}
+type StopWaitBatch = Extract<StopWaitOutcome, { batch: unknown }>["batch"];
+
+/**
+ * `kim hook session-end`: the agent session closed. Its waiter gives up,
+ * and the interview's page shows the agent away at once; the interview
+ * stays open for the next session.
+ */
+async function sessionEndHookCommand() {
+  try {
+    const payload = JSON.parse(
+      (await readStdin()).trim() || "{}",
+    ) as HookPayload;
+    const sessionId = payload.session_id ?? "";
+    disarmWaiter(waitersDir(), sessionId);
+    const binding = liveBinding(
+      readBindings(configFile("hooks.json")),
+      sessionId,
+    );
+    if (binding)
+      await authorizedFetch(
+        `/api/sessions/${encodeURIComponent(binding.interviewId)}/away`,
+        { method: "POST", signal: AbortSignal.timeout(TAKE_TIMEOUT_MS) },
+      ).catch(() => null);
+  } catch {
+    // Closing the session matters more.
+  }
+  process.stdout.write("{}\n", () => process.exit(0));
+}
+
+/**
+ * One interview of the user's own per agent session at a time: starting or
+ * resuming another while one is live is refused, naming it, so the agent
+ * stops it first. Knows the session from CLAUDE_CODE_SESSION_ID, so only in
+ * Claude Code; elsewhere the hooks follow the newest.
+ */
+async function refuseSecondInterview(resuming?: string) {
+  const sessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  if (!sessionId) return;
+  const binding = liveBinding(
+    readBindings(configFile("hooks.json")),
+    sessionId,
+  );
+  if (!binding || binding.interviewId === resuming) return;
+  const running = (await api(
+    `/api/sessions/${encodeURIComponent(binding.interviewId)}`,
+  ).catch(() => null)) as {
+    id: string;
+    title: string;
+    url: string;
+    status: string;
+  } | null;
+  if (!running || running.status !== "active") return;
+  throw new ApiError(
+    `This session already has a live interview, "${running.title}" (${running.id}). One interview per session at a time: stop it first with \`kim session stop ${running.id}\`.`,
+    {
+      code: "interview_running",
+      running: { id: running.id, title: running.title, url: running.url },
+    },
+  );
 }
 
 async function readStdin(): Promise<string> {

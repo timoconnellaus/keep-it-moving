@@ -1,5 +1,12 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { randomBytes } from "node:crypto";
+import { dirname, join } from "node:path";
 import type { HookEvent } from "./hooks.js";
 
 /**
@@ -131,16 +138,20 @@ export function bindingChanges(payload: HookPayload): {
   unbind: string[];
   /** Interviews sent to the user that the command worked on, by token. */
   inbox: string[];
+  /** Interviews the command started or resumed, which the session moves to. */
+  started?: string[];
 } {
   const bind: string[] = [];
   const unbind: string[] = [];
   const inbox: string[] = [];
+  const started: string[] = [];
   const raw = payload.tool_input?.command;
   const command = Array.isArray(raw) ? raw.join(" ") : raw;
   if (typeof command !== "string") return { bind, unbind, inbox };
   const invocations = kimInvocations(command);
   if (!invocations.length) return { bind, unbind, inbox };
   let printsSession = false;
+  let startsNew = false;
   for (const [group, action, ...rest] of invocations) {
     const sent =
       group === "draft"
@@ -159,29 +170,37 @@ export function bindingChanges(payload: HookPayload): {
     if (group === "session" && (action === "stop" || action === "delete"))
       unbind.push(...ids);
     else if (ids[0]) bind.push(ids[0]);
+    if (group === "session" && action === "resume" && ids[0])
+      started.push(ids[0]);
     if (group === "session" && ["create", "resume", "show"].includes(action!))
       printsSession = true;
+    if (group === "ask" || (group === "session" && action === "create"))
+      startsNew = true;
   }
   for (const line of responseText(payload.tool_response).split("\n")) {
     if (!line.trim().startsWith("{")) continue;
     try {
       const value = JSON.parse(line) as { interviewId?: unknown; id?: unknown };
-      if (typeof value.interviewId === "string" && UUID.test(value.interviewId))
-        bind.push(value.interviewId);
-      else if (
-        printsSession &&
-        typeof value.id === "string" &&
-        UUID.test(value.id)
-      )
-        bind.push(value.id);
+      const id =
+        typeof value.interviewId === "string" && UUID.test(value.interviewId)
+          ? value.interviewId
+          : printsSession && typeof value.id === "string" && UUID.test(value.id)
+            ? value.id
+            : null;
+      if (!id) continue;
+      bind.push(id);
+      if (startsNew) started.push(id);
     } catch {
       // Not kim's JSON.
     }
   }
+  const kept = (ids: string[]) =>
+    [...new Set(ids)].filter((id) => !unbind.includes(id));
   return {
-    bind: [...new Set(bind)].filter((id) => !unbind.includes(id)),
+    bind: kept(bind),
     unbind: [...new Set(unbind)],
     inbox: [...new Set(inbox)],
+    ...(kept(started).length ? { started: kept(started) } : {}),
   };
 }
 
@@ -189,6 +208,8 @@ const ARRIVED: Record<HookEvent, string> = {
   PostToolUse: "arrived while you were working",
   UserPromptSubmit: "arrived since you last checked",
   SessionStart: "arrived while no session was watching",
+  Stop: "arrived while you were waiting",
+  SessionEnd: "arrived as the session ended",
 };
 
 /** A batch as the agent reads it: `kim wait`'s JSON, after one line saying where it came from. */
@@ -246,7 +267,20 @@ export async function runHook(
   let changed = bindings.length !== before.length;
 
   if (event === "PostToolUse") {
-    const { bind, unbind, inbox } = bindingChanges(payload);
+    const changes = bindingChanges(payload);
+    const { unbind, inbox } = changes;
+    // One interview of the user's own per agent session. Starting or
+    // resuming one moves the session to it; other commands only renew it,
+    // or bind the first, so looking at an old interview doesn't move it.
+    const current = liveBinding(bindings, sessionId);
+    const next =
+      changes.started?.at(-1) ??
+      (current && !unbind.includes(current.interviewId)
+        ? changes.bind.includes(current.interviewId)
+          ? current.interviewId
+          : undefined
+        : changes.bind.at(-1));
+    const bind = next ? [next] : [];
     if (bind.length || unbind.length || inbox.length) {
       changed = true;
       const touched = new Set([...bind, ...unbind, ...inbox]);
@@ -254,7 +288,15 @@ export async function runHook(
         bindings.map((binding) => [binding.interviewId, binding]),
       );
       bindings = [
-        ...bindings.filter((binding) => !touched.has(binding.interviewId)),
+        ...bindings.filter(
+          (binding) =>
+            !touched.has(binding.interviewId) &&
+            !(
+              bind.length &&
+              !binding.inbox &&
+              binding.agentSessionId === sessionId
+            ),
+        ),
         ...bind.map((interviewId) => ({
           interviewId,
           agentSessionId: sessionId,
@@ -282,7 +324,10 @@ export async function runHook(
     event === "SessionStart"
       ? binding.cwd === cwd
       : binding.agentSessionId === sessionId &&
+        // The session's own interview at every step; one sent to the user,
+        // whose changes are rarely urgent, at most every 15 s.
         (event === "UserPromptSubmit" ||
+          !binding.inbox ||
           now - (binding.takenAt ?? 0) >= TAKE_THROTTLE_MS),
   );
   if (!targets.length) {
@@ -331,4 +376,117 @@ export async function runHook(
         },
       }
     : {};
+}
+
+/** The interview of the user's own that an agent session is on, if any. */
+export const liveBinding = (
+  bindings: Binding[],
+  sessionId: string,
+): Binding | undefined =>
+  sessionId
+    ? bindings
+        .filter(
+          (binding) => !binding.inbox && binding.agentSessionId === sessionId,
+        )
+        .at(-1)
+    : undefined;
+
+/** What a wait for the Stop hook found. */
+export type StopWaitOutcome =
+  | { batch: Batch }
+  | "gone"
+  | "replaced"
+  /** The deadline passed with nothing from the user. */
+  | null;
+
+/** Whether a batch has anything from the user, not only the agent's own edits. */
+const fromUser = (batch: Batch) =>
+  Boolean(
+    (Array.isArray(batch.answers) && batch.answers.length) ||
+    (Array.isArray(batch.messages) && batch.messages.length),
+  );
+
+/**
+ * What the Stop hook does: Claude Code's waits in the background and wakes
+ * the model (`wake`), Codex's holds the turn open and hands the model the
+ * answers as its next prompt (`block`). Either way the agent can't leave a
+ * live interview behind: only stopping it ends the waiting. `null` lets the
+ * agent stop: there's no interview, it ended, or a newer waiter took over.
+ */
+export async function runStop(
+  payload: HookPayload,
+  deps: {
+    stateFile: string;
+    /** Waits until `deadline` for a batch, as `kim wait` does. */
+    wait: (interviewId: string, deadline: number) => Promise<StopWaitOutcome>;
+    /** How long to wait before saying "still waiting". */
+    waitMs: number;
+    now?: number;
+    /** The time, to tell a wait that ran its course from one cut short. */
+    clock?: () => number;
+  },
+): Promise<{ text: string } | null> {
+  const now = deps.now ?? Date.now();
+  const clock = deps.clock ?? Date.now;
+  const binding = liveBinding(
+    readBindings(deps.stateFile),
+    payload.session_id ?? "",
+  );
+  if (!binding) return null;
+  const { interviewId } = binding;
+  const started = clock();
+  // A refusal (the Free plan's limit, signed out) lets it stop: waking the
+  // model to say "still waiting" would only fail the same way again.
+  const outcome = await deps
+    .wait(interviewId, now + deps.waitMs)
+    .catch((): StopWaitOutcome | "failed" => "failed");
+  if (outcome === "replaced" || outcome === "failed") return null;
+  if (outcome === "gone" || (outcome && outcome.batch.status === "stopped")) {
+    writeBindings(
+      deps.stateFile,
+      readBindings(deps.stateFile).filter(
+        (known) => known.interviewId !== interviewId,
+      ),
+    );
+    return null;
+  }
+  if (outcome && fromUser(outcome.batch))
+    return { text: formatBatch("Stop", interviewId, outcome.batch) };
+  // Nothing from the user. Only a wait that ran its course says so, so a
+  // wait that ends early for any reason can't wake the model over and over.
+  if (clock() - started < deps.waitMs / 2) return null;
+  return {
+    text: `Keep it moving: interview ${interviewId} is still running and nothing new has arrived. If you have nothing else to do, end your turn again to keep waiting; when the interview is done, stop it with \`kim session stop ${interviewId}\`.`,
+  };
+}
+
+/**
+ * The background Stop hook's claim on an agent session: a file holding the
+ * newest waiter's token. A newer stop replaces it, and the user's prompt or
+ * the session's end removes it; a waiter whose token is gone gives up.
+ */
+const waiterFile = (dir: string, sessionId: string) =>
+  join(dir, `${sessionId.replace(/[^A-Za-z0-9_-]/g, "_")}.waiter`);
+
+export function armWaiter(dir: string, sessionId: string): string {
+  const token = randomBytes(8).toString("hex");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(waiterFile(dir, sessionId), token);
+  return token;
+}
+
+export function waiterArmed(
+  dir: string,
+  sessionId: string,
+  token: string,
+): boolean {
+  try {
+    return readFileSync(waiterFile(dir, sessionId), "utf8") === token;
+  } catch {
+    return false;
+  }
+}
+
+export function disarmWaiter(dir: string, sessionId: string): void {
+  if (sessionId) rmSync(waiterFile(dir, sessionId), { force: true });
 }

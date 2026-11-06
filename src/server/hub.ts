@@ -8,7 +8,7 @@ import type {
   InterviewEvent,
   SessionView,
 } from "../shared/schema.js";
-import { literalLineBreaks } from "../shared/schema.js";
+import { agentConnected, literalLineBreaks } from "../shared/schema.js";
 import { frameSize } from "../shared/workspace.js";
 import {
   ARTIFACT_VIEW_HEADERS,
@@ -256,7 +256,9 @@ export function createHub(options: HubOptions) {
     }
     const events = store.undeliveredEvents(id);
     const due = batchDue(events, unanswered(store, id), idle);
-    if ((due !== null && due <= now) || deadline <= now) {
+    // Stopped while it waited: nothing more is coming, so it ends now.
+    const stopped = events.some((event) => event.type === "session.stopped");
+    if ((due !== null && due <= now) || deadline <= now || stopped) {
       sendBatch(socket);
       return null;
     }
@@ -336,6 +338,7 @@ export function createHub(options: HubOptions) {
   const browserView = (sessionId: string): SessionView => ({
     ...forBrowser(store.getSession(sessionId, baseUrl)),
     agentWatching: watching(sessionId),
+    agentSeenAt: store.hookSeenAt(sessionId),
   });
   /** The assignee's page: the interview, and their agent's drafts. */
   const respondentView = (sessionId: string): SessionView => ({
@@ -561,6 +564,15 @@ export function createHub(options: HubOptions) {
     store.setSessionStatus(c.req.param("id"), "stopped");
     return c.json({ ok: true });
   });
+  // The agent's session ended (its SessionEnd hook): show it away at once.
+  app.post("/api/sessions/:id/away", (c) => {
+    const id = c.req.param("id");
+    store.getSession(id, baseUrl);
+    store.clearHook(id);
+    watchedUntil.delete(id);
+    later(() => broadcast(id));
+    return c.json({ ok: true });
+  });
   app.post("/api/sessions/:id/resume", (c) => {
     store.setSessionStatus(c.req.param("id"), "active");
     return c.json({ ok: true });
@@ -755,7 +767,13 @@ export function createHub(options: HubOptions) {
   app.post("/api/sessions/:id/take", (c) => {
     const id = c.req.param("id");
     store.getSession(id, baseUrl);
+    // The page's connected dot turns on when a hook first asks.
+    const wasPresent = agentConnected({
+      agentWatching: watching(id),
+      agentSeenAt: store.hookSeenAt(id),
+    });
     store.touchHook(id);
+    if (!wasPresent) later(() => broadcast(id));
     const waiting = watchers.has(id) || Boolean(agentSockets?.list(id).length);
     const events = store.undeliveredEvents(id);
     const due = batchDue(
@@ -1591,7 +1609,7 @@ const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
   [
     "POST",
     new RegExp(
-      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat|assign|take)$`,
+      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat|assign|take|away)$`,
     ),
   ],
   ["PATCH", new RegExp(`^/api/sessions/${ID}/(questions|artifacts)/${ID}$`)],

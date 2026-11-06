@@ -46,7 +46,7 @@ When the drafts are in, tell the user to review and send them at the interview's
 
 When the user wants another person to fill in an interview (a client, a colleague), assign it to that person's email: `kim session create … --assign <email>`, or `kim session assign <session-id> <email>` for an existing one (`--clear` takes it back; one assignee at a time). Give the user the returned `url` to send them; nothing is emailed. That person signs in with Google as exactly that email and sees only this interview: its questions, the workspace items you show, and the chat. Write the questions for them, not the user.
 
-Then wait as usual. Their answers and chat messages come back in `wait` batches with `answeredBy` (on answers) and `from` (on messages) set to their email; reply in the chat as you would to the user. They may take hours or days, so keep the background `kim wait` loop going while your session lasts, and before you stop, tell the user the session ID and that `kim wait <session-id>` picks up their answers later. The user's home page shows the interview as waiting on the assignee, and their phone is notified when answers arrive.
+Then wait as usual. Their answers and chat messages come back in `wait` batches with `answeredBy` (on answers) and `from` (on messages) set to their email; reply in the chat as you would to the user. They may take hours or days. With the hooks, ending your turn waits for them. Before you stop the interview or the session, tell the user the session ID, and that `kim wait <session-id>` picks up the assignee's answers later. The user's home page shows the interview as waiting on the assignee, and their phone is notified when answers arrive.
 
 Question types are `text`, `single-choice`, `multiple-choice`, `yes-no`, and `number`. Every widget accepts a free-text answer; for choice questions a typed note arrives appended as `Option — note`.
 
@@ -107,7 +107,13 @@ Artifact ids come back from `artifact add`. `session show` lists artifacts witho
 
 ## Watch and adapt
 
-Run `kim wait <session-id>` in the background. In Claude Code, that means the Bash tool with `run_in_background`: you keep working, and you're woken with its output when the batch arrives. Elsewhere, run it as a background process, or loop on it in the foreground when background processes are unavailable. It exits with one JSON batch when the user pauses (15 s by default, `--idle` to change), or finishes every open question. An empty `events` list means the wait timed out with nothing new. Each batch contains:
+In Claude Code and Codex, kim's hooks connect your session to its interview. kim installs them and keeps them current, unless the user ran `kim hooks uninstall`. A session has one interview of the user's own at a time: `session create`, `ask` or `resume` for another is refused with `"code": "interview_running"`, naming the live one. Stop that one first, or carry on in it.
+
+- **While you work**, answers and messages reach you after each tool call, and when the user types to you. They arrive as a line starting `Keep it moving: answers to interview <id>`, followed by a batch in `wait`'s JSON.
+- **When you have nothing else to do, end your turn.** The Stop hook waits for the user. In Claude Code, the turn ends and you're woken with the next batch. In Codex, the turn is held open until the batch arrives. You can't leave a live interview behind: the only way out is `kim session stop <session-id>`.
+- **Wait on purpose** with `kim wait <session-id>`, when you need the answers before your next step mid-task, or where the hooks aren't installed. In Claude Code, run it through the Bash tool with `run_in_background`. Elsewhere, run it as a background process, or loop on it in the foreground. It exits with one JSON batch when the user pauses (15 s by default, `--idle` to change), finishes every open question, or stops the interview. An empty `events` list means it timed out with nothing new.
+
+Act on a batch the same way however it reached you. It has been delivered, and the user sees it marked read, so the next one brings only later answers. Each batch contains:
 
 - `answers`: the latest answer to each question touched, with `acceptedDefault`. A false value means the user departed from your suggestion, so treat it as a signal to probe.
 - `events`: everything queued, including your own edits.
@@ -122,9 +128,7 @@ Handle `messages` first: the user is waiting on the reply. A message from the us
 
 `kim chat list <session-id>` shows the whole thread.
 
-Then handle the rest of the batch: update the plan, adapt the questions, and add or revise visuals. Then run `wait` again. One watcher holds a session at a time; a new one takes over and the old one exits with "Replaced by a newer watcher", so run one `wait` per session. `kim attach` (NDJSON stream) and `kim events next` remain available.
-
-Answers also reach you between your own steps. In Claude Code and Codex, kim's hooks (which kim installs and keeps current itself, unless the user ran `kim hooks uninstall`) bring answers the user gave while you were working, or since your last turn, into your context as a line starting `Keep it moving: answers to interview <id>`, followed by a batch in `wait`'s JSON. Act on an injected batch exactly as on `kim wait` output: it has been delivered, so the next `wait` brings only later answers.
+Then handle the rest of the batch: update the plan, adapt the questions, and add or revise visuals. Then end your turn, or run `wait` again where the hooks aren't installed. One watcher holds a session at a time; a new one takes over and the old one exits with "Replaced by a newer watcher", so run one `wait` per session. `kim attach` (NDJSON stream) and `kim events next` remain available.
 
 Answers can arrive while detached and appear in the next batch. Treat `answer.revised` as a fresh decision point. Decide whether later questions should remain, change, or be deleted; there is no automatic dependency system.
 

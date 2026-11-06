@@ -158,3 +158,49 @@ describe("the Free plan's live interviews, with hooks", () => {
       expect((await take(session.id)).statusCode).toBe(200);
   });
 });
+
+describe("read receipts and presence", () => {
+  const page = async (
+    harness: ReturnType<typeof setup>,
+    token = harness.sessions[0]!.token,
+  ) =>
+    (
+      await harness.app.inject({
+        method: "GET",
+        url: `/api/browser/${token}/session`,
+      })
+    ).json() as import("../src/shared/schema.js").SessionView;
+
+  it("stamps when a hook took each answer and message, and clears it on revision", async () => {
+    const harness = setup();
+    const { take, answer, store, sessions } = harness;
+    answer(0, "Yes");
+    store.addChatMessage(sessions[0]!.id, "user", { text: "Why?" });
+    expect((await page(harness)).questions[0]!.answer!.deliveredAt).toBeNull();
+    const at = new Date(Date.now() + 60_000).toISOString();
+    vi.setSystemTime(Date.parse(at));
+    await take();
+    const read = await page(harness);
+    expect(read.questions[0]!.answer!.deliveredAt).toBe(at);
+    expect(read.chat[0]!.deliveredAt).toBe(at);
+    answer(0, "No");
+    expect((await page(harness)).questions[0]!.answer!.deliveredAt).toBeNull();
+  });
+
+  it("shows when a hook last asked, and forgets it when the agent's session ends", async () => {
+    const harness = setup();
+    const { take, app, sessions } = harness;
+    expect((await page(harness)).agentSeenAt ?? null).toBeNull();
+    await take();
+    expect((await page(harness)).agentSeenAt).toEqual(expect.any(String));
+    const away = await app.inject({
+      method: "POST",
+      url: `/api/sessions/${sessions[0]!.id}/away`,
+    });
+    expect(away.statusCode).toBe(200);
+    expect(await page(harness)).toMatchObject({
+      agentSeenAt: null,
+      agentWatching: false,
+    });
+  });
+});

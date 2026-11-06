@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { literalLineBreaks } from "../shared/text.js";
 import { Inline, plainText } from "./inline.js";
+import { readLabel, useNow } from "./presence.js";
 import {
   choicesFor,
   composeAnswer,
@@ -125,6 +126,7 @@ export function QuestionCard({
   const [note, setNote] = useState(initial.note);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const now = useNow();
   /** The option under the pointer or keyboard focus, previewed in the artifact. */
   const [hovered, setHovered] = useState<string | null>(null);
   const reset = () => {
@@ -300,7 +302,11 @@ export function QuestionCard({
             <span
               className="status-icon saved"
               aria-label="Saved"
-              title={question.answer.delivered ? "Sent to the agent" : "Saved"}
+              title={
+                question.answer.deliveredAt
+                  ? readLabel(question.answer.deliveredAt, now)
+                  : "Saved"
+              }
             >
               <TickIcon />
             </span>
@@ -329,6 +335,14 @@ export function QuestionCard({
               )}
             {question.answer.answeredBy && (
               <span className="tag">by {question.answer.answeredBy}</span>
+            )}
+            {question.answer.deliveredAt && (
+              <span
+                className="read-receipt"
+                title={readLabel(question.answer.deliveredAt, now)}
+              >
+                ✓ Read
+              </span>
             )}
           </span>
           {/* Over the end of the row on hover or focus, so the answer gets the room. */}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { literalLineBreaks } from "../shared/text.js";
 import { plainText } from "./inline.js";
+import { readLabel, useAgentConnected, useNow } from "./presence.js";
 import remarkGfm from "remark-gfm";
 import type {
   ChatMessageView,
@@ -62,6 +63,7 @@ export function Chat({
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const active = session.status === "active";
+  const connected = useAgentConnected(session);
 
   useEffect(() => {
     if (chat.open) setSeen(replies);
@@ -156,9 +158,14 @@ export function Chat({
         <header className="chat-header">
           <h2>Chat</h2>
           <span
-            className={`chat-presence ${session.agentWatching ? "on" : ""}`}
+            className={`chat-presence ${connected ? "on" : ""}`}
+            title={
+              connected
+                ? "The agent sees your answers and messages as they arrive."
+                : "No agent is connected. It sees everything when it next checks in."
+            }
           >
-            {session.agentWatching ? "Agent is watching" : "Agent is away"}
+            {connected ? "Connected" : "Agent is away"}
           </span>
           <button
             type="button"
@@ -194,7 +201,7 @@ export function Chat({
             <p className="chat-pending" role="status">
               {pending.delivered
                 ? "The agent has it. Waiting for a reply…"
-                : session.agentWatching
+                : connected
                   ? "Waiting for the agent…"
                   : "No agent is watching right now. It will see this when it next checks in."}
             </p>
@@ -307,6 +314,7 @@ function Message({
   pinned: string | null;
   quoted: ChatMessageView | undefined;
 }) {
+  const now = useNow();
   if (message.author === "user")
     return (
       <div className="chat-message user">
@@ -330,6 +338,11 @@ function Message({
           </span>
         )}
         <p>{message.text}</p>
+        {message.deliveredAt && (
+          <span className="read-receipt" title={message.deliveredAt}>
+            ✓ {readLabel(message.deliveredAt, now)}
+          </span>
+        )}
       </div>
     );
   return (

@@ -175,7 +175,7 @@ kim wait <session-id>
 - no open questions remain; or
 - the user writes in the chat, which ends it after a short settle.
 
-The batch holds every queued event, the latest answer to each question it touched (with `acceptedDefault`), the open-question count, and whether the workspace is open. The agent's own edits ride along but never end a wait early. `--timeout` (default 600000) bounds the whole wait; an empty batch means nothing happened. Run it as a background process (in Claude Code, a background Bash command, which wakes the agent when it exits), handle the batch, then run it again.
+The batch holds every queued event, the latest answer to each question it touched (with `acceptedDefault`), the open-question count, and whether the workspace is open. The agent's own edits ride along but never end a wait early. `--timeout` (default 600000) bounds the whole wait; an empty batch means nothing happened. A wait also ends when the interview is stopped. Run it as a background process (in Claude Code, a background Bash command, which wakes the agent when it exits), handle the batch, then run it again. With the hooks, ending the turn does this for the agent.
 
 ### Answers while the agent works
 
@@ -216,18 +216,49 @@ A `wait` only delivers while it runs. With the hooks, which kim installs for Cla
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kim hook stop",
+            "asyncRewake": true,
+            "timeout": 86400,
+            "rewakeMessage": "Keep it moving:",
+            "rewakeSummary": "Keep it moving: new answers"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kim hook session-end",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }
 ```
 
-Codex runs a new hook only once it's trusted: open `/hooks` in Codex after installing.
+Codex gets the same entries, except that its Stop hook is `kim hook stop --hold` with a 3600-second timeout and a `statusMessage`. Codex runs a new hook only once it's trusted: open `/hooks` in Codex after installing.
 
-`kim hook <event>` reads the hook's JSON payload on stdin and prints its JSON response. When the agent runs a kim command that names an interview (`kim ask`, `session create`, `question add <id>`, `wait <id>`…), the PostToolUse hook binds that interview to the agent's session, in `hooks.json` in kim's config folder; `session stop` or `delete`, or an interview that turns out stopped or gone, unbinds it. Then:
+`kim hook <event>` reads the hook's JSON payload on stdin and prints its JSON response. When the agent runs a kim command that names an interview (`kim ask`, `session create`, `question add <id>`, `wait <id>`…), the PostToolUse hook binds that interview to the agent's session, in `hooks.json` in kim's config folder. `session stop` or `delete`, or an interview that turns out stopped or gone, unbinds it.
 
-- **PostToolUse**, after each tool call: for the session's interviews, at most every 15 seconds each, it takes any answers and chat messages the user has given since the last delivery.
-- **UserPromptSubmit**: the same on every prompt, so typing in the terminal brings them in.
+A session follows **one interview of the user's own** at a time. `create`, `ask` or `resume` moves it to that interview; other commands only renew the one it's on, so reading an old interview doesn't move it. In Claude Code, which tells kim the session through `CLAUDE_CODE_SESSION_ID`, `session create`, `ask` and `resume` refuse a second live interview with `"code": "interview_running"` and name the first. Interviews sent to the user don't count. Then:
+
+- **PostToolUse**, after each tool call, takes any answers and chat messages the user has given since the last delivery: for the session's interview at every call, and for interviews sent to the user at most every 15 seconds.
+- **UserPromptSubmit**: the same on every prompt, so typing in the terminal brings them in. It also tells a waiting Stop hook to give up, so the hooks of the turn the user started bring the answers in.
 - **SessionStart**: the same for interviews bound in this folder in the last 7 days, from any session.
+- **Stop**, as the agent ends its turn with an interview live, waits on the interview's socket the way `kim wait` does. Waiting costs nothing while the interview's object hibernates. In Claude Code the hook runs in the background (`asyncRewake`): the turn ends and the prompt stays free, and when a batch with the user's answers or messages comes, the hook prints it on stderr and exits 2, which wakes the model with it. In Codex, which can't be woken, the hook holds the turn and answers `{"decision": "block", "reason": <the batch>}`, which Codex takes as the next prompt. Shortly before its timeout, or when only the agent's own edits came, it says the interview is still running, so the next stop waits again. It lets the agent stop once the interview is stopped or gone, or when a newer waiter took over (a file per session in `waiters/` in kim's config folder, which the user's next prompt and the session's end remove).
+- **SessionEnd** tells the service the agent left (`POST /api/sessions/<id>/away`), so the page shows it away at once. The interview stays open for the next session.
+
+The page's chat shows a green **Connected** dot while an agent waits on the interview, or a hook asked in the last 5 minutes, and **Agent is away** otherwise. Each answer and message the agent has been given shows **Read**, with when it was read: the service stamps `deliveredAt` as it delivers them, and a revised answer is unread again until the agent has the new one.
 
 What it takes arrives as `hookSpecificOutput.additionalContext`: a line saying the answers arrived while the agent was working, then the batch as `wait` prints it. A take is `POST /api/sessions/<id>/take`, which returns `{"type": "batch", "batch": …}` like the socket and marks it delivered, or an empty batch; while an agent is waiting on the interview it leaves the batch to that `wait` (`"watched": true`), so nothing arrives twice. The hook never holds the agent up: a session with no interviews costs one small file read and no network, the network gets 2 seconds in all, and whatever happens it prints `{}` at worst and exits 0. It skips the skill refresh other runs do.
 

@@ -202,6 +202,8 @@ export interface ChatMessageView {
   replyTo: string | null;
   /** A user's message reached the agent, as an answer does. */
   delivered: boolean;
+  /** When it reached the agent ("read"); null until then. */
+  deliveredAt: string | null;
   createdAt: string;
   /** The assignee who wrote it; null for the owner and the agent. */
   authorEmail: string | null;
@@ -215,6 +217,8 @@ export interface AnswerView {
   skipped: boolean;
   revision: number;
   delivered: boolean;
+  /** When this revision reached the agent ("read"); null until then. */
+  deliveredAt: string | null;
   updatedAt: string;
   /** The assignee who answered; null when the owner did. */
   answeredBy: string | null;
@@ -324,6 +328,11 @@ export interface SessionView {
   chat: ChatMessageView[];
   /** Browser views only: whether an agent is waiting on this interview now. */
   agentWatching?: boolean;
+  /**
+   * Browser views only: when an agent's hook last asked for answers, which
+   * shows it connected for a while (AGENT_PRESENT_MS) even between waits.
+   */
+  agentSeenAt?: string | null;
   /** Someone else answers this interview: the owner sends them the link. */
   assignee: string | null;
   /** The owner's name (or email) as the assignee sees it. */
@@ -380,3 +389,15 @@ export function normalizeDefault(
   });
   return choices.filter((choice) => normalized.includes(choice));
 }
+
+/** A hook that asked this recently shows the agent connected. */
+export const AGENT_PRESENT_MS = 5 * 60_000;
+
+/** Whether the interview's page shows its agent connected. */
+export const agentConnected = (
+  session: Pick<SessionView, "agentWatching" | "agentSeenAt">,
+  now = Date.now(),
+): boolean =>
+  Boolean(session.agentWatching) ||
+  (session.agentSeenAt != null &&
+    now - Date.parse(session.agentSeenAt) < AGENT_PRESENT_MS);

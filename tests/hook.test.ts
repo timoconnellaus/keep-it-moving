@@ -4,10 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  armWaiter,
   bindingChanges,
+  disarmWaiter,
   readBindings,
   runHook,
+  runStop,
   TAKE_THROTTLE_MS,
+  waiterArmed,
+  type StopWaitOutcome,
   type Batch,
   type HookPayload,
   type TakeOutcome,
@@ -71,7 +76,7 @@ describe("binding interviews to an agent session", () => {
           `${JSON.stringify({ id: ID, url: "https://k/s/t", questions: [] })}\n`,
         ),
       ),
-    ).toEqual({ bind: [ID], unbind: [], inbox: [] });
+    ).toEqual({ bind: [ID], unbind: [], inbox: [], started: [ID] });
     expect(
       bindingChanges(
         bash(
@@ -168,22 +173,18 @@ describe("kim hook", () => {
     ]);
   });
 
-  it("takes at most every 15 s between tool calls, and on every prompt", async () => {
+  it("takes the session's own interview at every tool call, and only its own", async () => {
     const { run, take } = setup();
     const start = Date.parse("2026-10-30T09:00:00Z");
     await run("PostToolUse", bash(`kim wait ${ID}`), start);
     expect(take).toHaveBeenCalledTimes(1);
-    await run("PostToolUse", bash("ls"), start + 5_000);
-    expect(take).toHaveBeenCalledTimes(1);
+    await run("PostToolUse", bash("ls"), start + 1_000);
+    expect(take).toHaveBeenCalledTimes(2);
     await run(
       "UserPromptSubmit",
       { session_id: "s1", cwd: "/repo" },
-      start + 6_000,
+      start + 2_000,
     );
-    expect(take).toHaveBeenCalledTimes(2);
-    await run("PostToolUse", bash("ls"), start + 6_000 + TAKE_THROTTLE_MS - 1);
-    expect(take).toHaveBeenCalledTimes(2);
-    await run("PostToolUse", bash("ls"), start + 6_000 + TAKE_THROTTLE_MS);
     expect(take).toHaveBeenCalledTimes(3);
     // Another agent session's calls don't take this one's interviews.
     await run(
@@ -192,6 +193,32 @@ describe("kim hook", () => {
       start + 60_000,
     );
     expect(take).toHaveBeenCalledTimes(3);
+  });
+
+  it("follows one interview per session: starting another moves it, looking at one doesn't", async () => {
+    const { run, stateFile } = setup();
+    const own = () =>
+      readBindings(stateFile)
+        .filter((binding) => binding.agentSessionId === "s1")
+        .map((binding) => binding.interviewId);
+    await run(
+      "PostToolUse",
+      bash("kim session create --title A", JSON.stringify({ id: ID })),
+    );
+    expect(own()).toEqual([ID]);
+    // Reading an old interview leaves the session on its own.
+    await run("PostToolUse", bash(`kim session show ${OTHER}`));
+    expect(own()).toEqual([ID]);
+    await run("PostToolUse", bash(`kim question add ${ID} --prompt P`));
+    expect(own()).toEqual([ID]);
+    // Resuming one moves the session to it.
+    await run("PostToolUse", bash(`kim session resume ${OTHER}`));
+    expect(own()).toEqual([OTHER]);
+    // Stopped, the session has none, and the next one it names binds.
+    await run("PostToolUse", bash(`kim session stop ${OTHER}`));
+    expect(own()).toEqual([]);
+    await run("PostToolUse", bash(`kim wait ${ID}`));
+    expect(own()).toEqual([ID]);
   });
 
   it("brings in answers for the folder's recent interviews at session start, from any session", async () => {
@@ -268,16 +295,18 @@ describe("kim hook, end to end", () => {
     event: string,
     stdin: string,
     env: NodeJS.ProcessEnv,
-  ): Promise<{ stdout: string; code: number; ms: number }> =>
+    extra: string[] = [],
+  ): Promise<{ stdout: string; stderr: string; code: number; ms: number }> =>
     new Promise((resolve) => {
       const started = Date.now();
       const child = execFile(
         process.execPath,
-        [tsx, cli, "hook", event],
+        [tsx, cli, "hook", event, ...extra],
         { env },
-        (error, stdout) =>
+        (error, stdout, stderr) =>
           resolve({
             stdout,
+            stderr,
             code: error ? Number(error.code ?? 1) : 0,
             ms: Date.now() - started,
           }),
@@ -356,11 +385,130 @@ describe("kim hook, end to end", () => {
     expect(store.undeliveredEvents(session.id)).toEqual([]);
   }, 30_000);
 
+  it("wakes Claude from the Stop hook with the answers, or hands them to Codex's hold", async () => {
+    const { store, env } = await served();
+    const session = store.createSession("", { title: "Plan" });
+    const [one, two] = store.addQuestions(session.id, [
+      { type: "text", prompt: "Ship it?" },
+      { type: "text", prompt: "When?" },
+    ]);
+    const bind = (agent: string) =>
+      hook(
+        "post-tool-use",
+        JSON.stringify({
+          session_id: agent,
+          cwd: "/repo",
+          tool_name: "Bash",
+          tool_input: { command: `kim wait ${session.id}` },
+          tool_response: { stdout: "" },
+        }),
+        env,
+      );
+    const stopping = (agent: string, extra: string[] = []) =>
+      hook(
+        "stop",
+        JSON.stringify({ session_id: agent, hook_event_name: "Stop" }),
+        env,
+        extra,
+      );
+
+    await bind("claude-1");
+    const woken = stopping("claude-1");
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    store.answerQuestion(session.id, one!.id, { answer: "Yes" });
+    store.answerQuestion(session.id, two!.id, { answer: "Friday" });
+    const claude = await woken;
+    expect(claude.code).toBe(2);
+    expect(claude.stderr).toContain(
+      `Keep it moving: answers to interview ${session.id} arrived while you were waiting`,
+    );
+    expect(claude.stderr).toContain('"answer":"Friday"');
+
+    await bind("codex-1");
+    const held = stopping("codex-1", ["--hold"]);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    store.answerQuestion(session.id, one!.id, { answer: "No" });
+    const codex = await held;
+    expect(codex.code).toBe(0);
+    const response = JSON.parse(codex.stdout);
+    expect(response.decision).toBe("block");
+    expect(response.reason).toContain('"answer":"No"');
+  }, 60_000);
+
+  it("refuses a second live interview in the same Claude session, naming the first", async () => {
+    const { store, env } = await served();
+    const session = store.createSession("", { title: "Plan" });
+    await hook(
+      "post-tool-use",
+      JSON.stringify({
+        session_id: "claude-1",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_input: { command: `kim wait ${session.id}` },
+        tool_response: { stdout: "" },
+      }),
+      env,
+    );
+    const kim = (session: string, ...args: string[]) =>
+      new Promise<{ stdout: string; stderr: string; code: number }>((resolve) =>
+        execFile(
+          process.execPath,
+          [tsx, cli, ...args],
+          { env: { ...env, CLAUDE_CODE_SESSION_ID: session } },
+          (error, stdout, stderr) =>
+            resolve({
+              stdout,
+              stderr,
+              code: error ? Number(error.code ?? 1) : 0,
+            }),
+        ),
+      );
+    const refused = await kim("claude-1", "session", "create", "--title", "B");
+    expect(refused.code).toBe(1);
+    expect(JSON.parse(refused.stderr)).toMatchObject({
+      code: "interview_running",
+      running: { id: session.id, title: "Plan" },
+    });
+    // Another session, or resuming the same one, is fine.
+    expect(
+      (await kim("claude-2", "session", "create", "--title", "C")).code,
+    ).toBe(0);
+    expect((await kim("claude-1", "session", "resume", session.id)).code).toBe(
+      0,
+    );
+    // Once it's stopped, the session can start another.
+    store.setSessionStatus(session.id, "stopped");
+    expect(
+      (await kim("claude-1", "session", "create", "--title", "D")).code,
+    ).toBe(0);
+  }, 30_000);
+
+  it("lets the agent stop once the interview is stopped", async () => {
+    const { store, env } = await served();
+    const session = store.createSession("", { title: "Plan" });
+    store.addQuestions(session.id, [{ type: "text", prompt: "Ship it?" }]);
+    await hook(
+      "post-tool-use",
+      JSON.stringify({
+        session_id: "claude-1",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_input: { command: `kim wait ${session.id}` },
+        tool_response: { stdout: "" },
+      }),
+      env,
+    );
+    const woken = hook("stop", JSON.stringify({ session_id: "claude-1" }), env);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    store.setSessionStatus(session.id, "stopped");
+    expect(await woken).toMatchObject({ code: 0, stderr: "" });
+  }, 30_000);
+
   it("prints {} and exits 0 on garbage, an unknown event, or a service that's down", async () => {
     const { env } = await served();
     for (const [event, stdin] of [
       ["post-tool-use", "not json"],
-      ["stop", "{}"],
+      ["nonsense", "{}"],
     ] as const)
       expect(await hook(event, stdin, env)).toMatchObject({
         stdout: "{}\n",
@@ -398,6 +546,33 @@ describe("interviews sent to the user", () => {
     expect(
       bindingChanges(bash("kim inbox wait --timeout 600000")).inbox,
     ).toEqual([]);
+  });
+
+  it("are taken at most every 15 s between tool calls, and on every prompt", async () => {
+    const { run, take } = setup();
+    const start = Date.parse("2026-10-30T09:00:00Z");
+    await run("PostToolUse", bash(`kim inbox show ${TOKEN}`), start);
+    expect(take).toHaveBeenCalledTimes(1);
+    await run("PostToolUse", bash("ls"), start + TAKE_THROTTLE_MS - 1);
+    expect(take).toHaveBeenCalledTimes(1);
+    await run(
+      "UserPromptSubmit",
+      { session_id: "s1", cwd: "/repo" },
+      start + 1,
+    );
+    expect(take).toHaveBeenCalledTimes(2);
+    await run("PostToolUse", bash("ls"), start + 1 + TAKE_THROTTLE_MS);
+    expect(take).toHaveBeenCalledTimes(3);
+  });
+
+  it("don't count as the session's interview, so the Stop hook lets it stop", async () => {
+    const { run, stateFile } = setup();
+    await run("PostToolUse", bash(`kim inbox show ${TOKEN}`));
+    const wait = vi.fn();
+    expect(
+      await runStop({ session_id: "s1" }, { stateFile, wait, waitMs: 1_000 }),
+    ).toBeNull();
+    expect(wait).not.toHaveBeenCalled();
   });
 
   it("bring the sender's changes in through the hook, like inbox wait's output", async () => {
@@ -445,5 +620,118 @@ describe("interviews sent to the user", () => {
       Date.parse("2026-10-30T09:15:00Z"),
     );
     expect(take).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Stop hook", () => {
+  async function bound() {
+    const { run, stateFile } = setup();
+    await run(
+      "PostToolUse",
+      bash("kim session create --title A", JSON.stringify({ id: ID })),
+    );
+    return stateFile;
+  }
+  const stop = (
+    stateFile: string,
+    outcome: StopWaitOutcome,
+    session = "s1",
+  ) => {
+    let time = 1_000;
+    // The wait runs its course: the clock moves on by its length.
+    const wait = vi.fn(async () => {
+      time += 60_000;
+      return outcome;
+    });
+    return {
+      wait,
+      result: runStop(
+        { session_id: session },
+        { stateFile, wait, waitMs: 60_000, now: 1_000, clock: () => time },
+      ),
+    };
+  };
+
+  it("lets a session with no interview stop, without asking the service", async () => {
+    const stateFile = join(tempDir(), "hooks.json");
+    const { wait, result } = stop(stateFile, null);
+    expect(await result).toBeNull();
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("waits on the session's interview and hands the user's answers back", async () => {
+    const stateFile = await bound();
+    const { wait, result } = stop(stateFile, {
+      batch: batch([{ type: "answer.submitted" }]),
+    });
+    const text = (await result)?.text;
+    expect(wait).toHaveBeenCalledWith(ID, 61_000);
+    expect(text).toMatch(
+      new RegExp(
+        `^Keep it moving: answers to interview ${ID} arrived while you were waiting`,
+      ),
+    );
+    expect(text).toContain('"answer":"Yes"');
+  });
+
+  it("says it's still waiting when only the agent's own edits came, or nothing did", async () => {
+    const stateFile = await bound();
+    for (const outcome of [
+      { batch: batch([{ type: "question.added" }], { answers: [] }) },
+      null,
+    ]) {
+      const text = (await stop(stateFile, outcome).result)?.text;
+      expect(text).toContain("still running and nothing new has arrived");
+      expect(text).toContain(`kim session stop ${ID}`);
+    }
+  });
+
+  it("lets it stop, rather than wake the model, when the wait fails or ends early", async () => {
+    const stateFile = await bound();
+    for (const wait of [
+      vi.fn(async () => {
+        throw new Error("plan_limit");
+      }),
+      vi.fn(async (): Promise<StopWaitOutcome> => null),
+    ])
+      expect(
+        await runStop(
+          { session_id: "s1" },
+          { stateFile, wait, waitMs: 60_000, clock: () => 0 },
+        ),
+      ).toBeNull();
+    expect(readBindings(stateFile)).toHaveLength(1);
+  });
+
+  it("lets it stop once the interview ends, and forgets it; or when a newer waiter took over", async () => {
+    let stateFile = await bound();
+    expect(await stop(stateFile, "replaced").result).toBeNull();
+    expect(readBindings(stateFile)).toHaveLength(1);
+    expect(
+      await stop(stateFile, { batch: batch([], { status: "stopped" }) }).result,
+    ).toBeNull();
+    expect(readBindings(stateFile)).toEqual([]);
+    stateFile = await bound();
+    expect(await stop(stateFile, "gone").result).toBeNull();
+    expect(readBindings(stateFile)).toEqual([]);
+  });
+
+  it("only follows its own session's interview", async () => {
+    const stateFile = await bound();
+    const { wait, result } = stop(stateFile, null, "s2");
+    expect(await result).toBeNull();
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("keeps one waiter per session: a newer one, or the user's prompt, disarms the last", () => {
+    const dir = tempDir();
+    const first = armWaiter(dir, "s1");
+    expect(waiterArmed(dir, "s1", first)).toBe(true);
+    const second = armWaiter(dir, "s1");
+    expect(waiterArmed(dir, "s1", first)).toBe(false);
+    expect(waiterArmed(dir, "s1", second)).toBe(true);
+    expect(waiterArmed(dir, "s2", second)).toBe(false);
+    disarmWaiter(dir, "s1");
+    expect(waiterArmed(dir, "s1", second)).toBe(false);
   });
 });

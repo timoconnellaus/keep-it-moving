@@ -5,7 +5,11 @@ import {
   isBound,
   type ControlValues,
 } from "../shared/bindings.js";
-import type { PinView, SessionView } from "../shared/schema.js";
+import {
+  agentConnected,
+  type PinView,
+  type SessionView,
+} from "../shared/schema.js";
 import { Account } from "./Account.js";
 import { Assign } from "./Assign.js";
 import type {
@@ -52,7 +56,7 @@ function agentActivity(
     return busy
       ? { label: "Agent is replying…", busy }
       : { label: "Waiting on the agent", busy };
-  if (session.agentWatching || session.questions.length === 0) return null;
+  if (agentConnected(session) || session.questions.length === 0) return null;
   if (session.questions.every((question) => question.answer?.delivered))
     return busy
       ? { label: "Agent is working on your answers…", busy }
