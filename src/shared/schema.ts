@@ -3,6 +3,7 @@ import { literalLineBreaks } from "./text.js";
 
 export { literalLineBreaks };
 import { CONTROL_PATTERN, UNIT_PATTERN } from "./bindings.js";
+import { isPublicKey, isSealed, type PublicKey } from "./crypto.js";
 
 export const questionTypes = [
   "text",
@@ -260,7 +261,8 @@ export interface ArtifactView {
   /** Agent responses to an edit: bound questions whose controls it no longer declares. */
   warnings?: string[];
 }
-export type ArtifactFormat = "markdown" | "html" | "svg" | "text";
+export const artifactFormats = ["markdown", "html", "svg", "text"] as const;
+export type ArtifactFormat = (typeof artifactFormats)[number];
 export type StageSource = "agent" | "user";
 /** A codebase interviews belong to, with a colour that stays the same everywhere. */
 export interface ProjectView {
@@ -281,6 +283,10 @@ export interface OriginView {
 export interface SessionSummary {
   id: string;
   token: string;
+  /** The interview key's id when it is end-to-end encrypted; null when not. */
+  kid: string | null;
+  /** An encrypted interview's grants, by the fingerprint each is wrapped to. */
+  grants?: string[];
   title: string;
   status: SessionStatus;
   project: ProjectView | null;
@@ -301,6 +307,12 @@ export interface SessionView {
   id: string;
   title: string;
   token: string;
+  /** The interview key's id when it is end-to-end encrypted; null when not. */
+  kid: string | null;
+  /** An encrypted interview: whose keys hold a grant, by fingerprint. */
+  grants?: string[];
+  /** An encrypted interview: whether the assignee's key holds a grant yet. */
+  assigneeKey?: boolean;
   status: SessionStatus;
   url: string;
   createdAt: string;
@@ -380,3 +392,152 @@ export function normalizeDefault(
   });
   return choices.filter((choice) => normalized.includes(choice));
 }
+
+// ------------------------------------------------------------ encryption
+
+/**
+ * The longest envelope a field of `max` characters can seal to: up to 3
+ * UTF-8 bytes a character, a flag byte, IV and tag, in base64url, and the
+ * `kim1.<kid>.` prefix.
+ */
+export const sealedMax = (max: number) =>
+  Math.ceil(((max * 3 + 1 + 12 + 16) * 4) / 3) + 17;
+
+const ENCRYPT_HINT =
+  "must be encrypted in this interview; update kim (`kim update`) and try again";
+
+/** A field sealed under the interview's key (see crypto.ts). */
+export const sealedText = (max: number) =>
+  z
+    .string()
+    .max(sealedMax(max))
+    .refine((value) => isSealed(value), ENCRYPT_HINT);
+
+const sealedQuestionFields = {
+  ...questionFields,
+  prompt: sealedText(10_000),
+  recommendation: sealedText(20_000).nullable(),
+  default: z.array(sealedText(10_000)).min(1).max(100).nullable(),
+  options: z.array(sealedText(1_000)).max(100),
+  optionArtifacts: z.record(sealedText(1_000), z.string().uuid()),
+  optionValues: z.record(
+    sealedText(1_000),
+    z.record(ControlSchema, sealedText(500)),
+  ),
+};
+
+/** A question in an encrypted interview: its words sealed, its shape plain. */
+export const SealedQuestionInputSchema = z
+  .object(sealedQuestionFields)
+  .partial()
+  .extend({
+    type: questionFields.type.default("text"),
+    prompt: sealedQuestionFields.prompt,
+    options: sealedQuestionFields.options.default([]),
+  });
+export const SealedQuestionPatchSchema = z
+  .object(sealedQuestionFields)
+  .partial()
+  .extend({ id: z.string().uuid().optional() });
+
+/** Content may compress below its own size; this bounds what one row takes. */
+const sealedContent = z
+  .string()
+  .max(ARTIFACT_MAX_BYTES)
+  .refine((value) => isSealed(value), ENCRYPT_HINT);
+
+const sealedArtifactFields = {
+  /** The client says how it renders: the service can't read it to tell. */
+  format: z.enum(artifactFormats),
+  title: sealedText(200),
+  content: sealedContent,
+  description: sealedText(5_000).nullable(),
+  source: sealedContent.nullable(),
+  show: z.boolean(),
+};
+export const SealedArtifactInputSchema = z
+  .object(sealedArtifactFields)
+  .partial()
+  .extend({
+    kind: z.enum(artifactKinds),
+    format: sealedArtifactFields.format,
+    title: sealedArtifactFields.title,
+    content: sealedArtifactFields.content,
+    show: sealedArtifactFields.show.default(false),
+  });
+export const SealedArtifactPatchSchema = z
+  .object(sealedArtifactFields)
+  .partial();
+
+export const SealedAnswerInputSchema = z
+  .object({
+    answer: z.union([z.literal(""), sealedText(100_000)]).default(""),
+    skipped: z.boolean().default(false),
+  })
+  .refine((value) => value.skipped || value.answer !== "", {
+    message: "An answer is required unless the question is skipped",
+    path: ["answer"],
+  });
+
+export const SealedChatInputSchema = ChatInputSchema.extend({
+  text: sealedText(20_000),
+  pin: PinInputSchema.extend({
+    element: sealedText(300),
+    selector: sealedText(1_000).nullable().default(null),
+  })
+    .nullable()
+    .optional(),
+});
+
+/** An interview key wrapped to one member's public key. */
+export const GrantSchema = z.object({
+  /** The fingerprint of the public key it is wrapped to. */
+  fp: z.string().regex(/^[A-Za-z0-9_-]{16}$/),
+  wrapped: z
+    .string()
+    .regex(/^w1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
+    .max(400),
+  /** Whose key: the owner's (or an account linked to it), or the assignee's. */
+  role: z.enum(["owner", "assignee"]).default("owner"),
+});
+export type Grant = z.output<typeof GrantSchema>;
+
+export const KidSchema = z.string().regex(/^[A-Za-z0-9_-]{11}$/);
+
+export const SealedSessionInputSchema = SessionInputSchema.extend({
+  title: sealedText(200),
+  origin: SessionInputSchema.shape.origin
+    .unwrap()
+    .extend({
+      branch: sealedText(300).optional(),
+      worktree: sealedText(300).optional(),
+      agentSession: sealedText(200).optional(),
+    })
+    .default({}),
+  encryption: z.object({
+    kid: KidSchema,
+    grants: z.array(GrantSchema).min(1).max(20),
+  }),
+});
+
+export const PublicKeySchema = z.custom<PublicKey>(isPublicKey, {
+  message: "Not a P-256 public key",
+});
+
+export const UnlockSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
+  method: z.enum(["passkey", "recovery"]),
+  credentialId: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{8,1400}$/)
+    .optional(),
+  salt: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  wrapped: z.string().regex(/^[A-Za-z0-9_-]{100,400}$/),
+  label: z.string().trim().max(100).optional(),
+});
+
+/** Setting up encryption: the public key, and how devices unlock the private key. */
+export const AccountKeyInputSchema = z.object({
+  publicKey: PublicKeySchema,
+  unlocks: z.array(UnlockSchema).min(1).max(20),
+});

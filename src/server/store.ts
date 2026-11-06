@@ -6,10 +6,21 @@ import {
   literalLineBreaks,
   ArtifactPatchSchema,
   FramePositionSchema,
+  GrantSchema,
   normalizeDefault,
   QuestionInputSchema,
   QuestionPatchSchema,
+  SealedAnswerInputSchema,
+  SealedArtifactInputSchema,
+  SealedArtifactPatchSchema,
+  SealedChatInputSchema,
+  SealedQuestionInputSchema,
+  SealedQuestionPatchSchema,
+  SealedSessionInputSchema,
   SessionInputSchema,
+  UnlockSchema,
+  type ArtifactFormat,
+  type Grant,
   type ArtifactView,
   type ChatAuthor,
   type ChatMessageView,
@@ -24,12 +35,14 @@ import {
   type QuestionView,
   type SessionView,
 } from "../shared/schema.js";
+import { boundControls } from "../shared/bindings.js";
+import { kidsIn, type PublicKey, type Unlock } from "../shared/crypto.js";
 import {
-  boundControls,
-  controlKind,
-  isBound,
-  missingControls,
-} from "../shared/bindings.js";
+  bindingWarnings,
+  checkBinding,
+  checkLinks,
+  type ArtifactRef,
+} from "../shared/questions.js";
 import { projectName } from "../shared/remote.js";
 import { artifactFormat } from "../shared/workspace.js";
 import { first, type Row, type Sql } from "./sql.js";
@@ -90,6 +103,10 @@ const ATTRIBUTION_COLUMNS = [
   // The last event the assignee's agent has been given (see inboxChanges);
   // null until it has seen the interview at all.
   ["sessions", "inbox_delivered"],
+  // An end-to-end encrypted interview's key id; null for a plain one.
+  ["sessions", "kid"],
+  // How a sealed artifact renders, which the service can't tell from it.
+  ["artifacts", "format"],
 ] as const;
 
 type Binding = Pick<QuestionView, "optionValues" | "control" | "unit">;
@@ -104,9 +121,6 @@ function readBinding(column: unknown): Binding {
 }
 const writeBinding = (binding: Binding) =>
   boundControls(binding).length ? JSON.stringify(binding) : null;
-
-const undeclared = (title: string, missing: string[]) =>
-  `artifact "${title}" doesn't declare ${missing.join(", ")}. Define a variable (--accent: …), use data-kim-nav for @nav, or mark an element data-kim-text="headline" for #headline`;
 
 /** Just enough to catch a typo; Google checks the address at sign-in. */
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -228,6 +242,18 @@ export class InterviewStore {
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         endpoint TEXT PRIMARY KEY, created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS grants (
+        session_id TEXT NOT NULL, fp TEXT NOT NULL, role TEXT NOT NULL, wrapped TEXT NOT NULL,
+        created_at TEXT NOT NULL, PRIMARY KEY (session_id, fp)
+      );
+      CREATE TABLE IF NOT EXISTS account_key (
+        id INTEGER PRIMARY KEY CHECK (id = 1), public_key TEXT NOT NULL, fp TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS unlocks (
+        id TEXT PRIMARY KEY, method TEXT NOT NULL, credential_id TEXT, salt TEXT NOT NULL,
+        wrapped TEXT NOT NULL, label TEXT, created_at TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS questions_session ON questions(session_id);
       CREATE INDEX IF NOT EXISTS events_session ON events(session_id, delivered);
       CREATE INDEX IF NOT EXISTS artifacts_session ON artifacts(session_id);
@@ -251,7 +277,14 @@ export class InterviewStore {
   }
 
   createSession(baseUrl: string, input: unknown = {}): SessionView {
-    const { title, stageVisible, origin } = SessionInputSchema.parse(input);
+    const sealed =
+      input && typeof input === "object" && "encryption" in input
+        ? SealedSessionInputSchema.parse(input)
+        : null;
+    const { title, stageVisible, origin } =
+      sealed ?? SessionInputSchema.parse(input);
+    const kid = sealed?.encryption.kid ?? null;
+    if (sealed) sealedUnder(kid!, { title, origin });
     if (this.count("sessions") >= LIMITS.interviews)
       throw new Error(
         `${LIMIT_REACHED}: a workspace holds at most ${LIMITS.interviews} interviews; delete some (kim session delete --stopped) to make room`,
@@ -261,8 +294,8 @@ export class InterviewStore {
     const projectId = this.resolveProject(origin);
     this.sql.all(
       `INSERT INTO sessions (id, title, token, stage_visible, stage_visibility_source, created_at, updated_at,
-        project_id, branch, worktree, agent, agent_session, location)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        project_id, branch, worktree, agent, agent_session, location, kid)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       title,
       sessionToken(),
@@ -276,7 +309,9 @@ export class InterviewStore {
       origin.agent ?? null,
       origin.agentSession ?? null,
       origin.location ?? null,
+      kid,
     );
+    if (sealed) this.addGrants(id, sealed.encryption.grants);
     this.emit(id, "session.created", { id });
     return this.getSession(id, baseUrl);
   }
@@ -358,7 +393,8 @@ export class InterviewStore {
           (SELECT json_object('text', text, 'at', created_at) FROM chat_messages c
             WHERE c.session_id = s.id AND c.author = 'agent' ORDER BY created_at DESC, rowid DESC LIMIT 1) last_reply,
           (SELECT author FROM chat_messages c
-            WHERE c.session_id = s.id ORDER BY created_at DESC, rowid DESC LIMIT 1) last_author
+            WHERE c.session_id = s.id ORDER BY created_at DESC, rowid DESC LIMIT 1) last_author,
+          (SELECT json_group_array(fp) FROM grants g WHERE g.session_id = s.id) grant_fps
         FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
         ORDER BY COALESCE(last_event, s.updated_at) DESC LIMIT 200`,
       )
@@ -369,6 +405,8 @@ export class InterviewStore {
         return {
           id: String(row.id),
           token: String(row.token),
+          kid: optional(row.kid),
+          ...(row.kid ? { grants: json<string[]>(row.grant_fps ?? "[]") } : {}),
           title: String(row.title),
           status,
           project: row.p_id
@@ -509,10 +547,13 @@ export class InterviewStore {
       "SELECT * FROM artifacts WHERE session_id = ? AND deleted = 0 ORDER BY kind = 'plan' DESC, created_at, rowid",
       id,
     );
+    const kid = optional(session.kid);
     return {
       id: String(session.id),
       title: String(session.title),
       token: String(session.token),
+      kid,
+      ...(kid ? this.grantSummary(id) : {}),
       status: session.status as "active" | "stopped",
       url: `${baseUrl}/s/${String(session.token)}`,
       createdAt: String(session.created_at),
@@ -636,9 +677,14 @@ export class InterviewStore {
     by: string | null = null,
   ): ChatMessageView {
     this.requireActive(sessionId);
-    const parsed = ChatInputSchema.parse(input);
+    const kid = this.kidOf(sessionId);
+    const parsed = kid
+      ? sealedUnder(kid, SealedChatInputSchema.parse(input))
+      : ChatInputSchema.parse(input);
     // The agent's text often comes through a shell; the user's is as typed.
-    if (author === "agent") parsed.text = literalLineBreaks(parsed.text);
+    // A sealed message had this done before it was sealed.
+    if (author === "agent" && !kid)
+      parsed.text = literalLineBreaks(parsed.text);
     if (this.count("chat_messages", sessionId) >= LIMITS.chatMessages)
       throw new Error(
         `${LIMIT_REACHED}: an interview's chat holds at most ${LIMITS.chatMessages} messages; start a new interview`,
@@ -737,6 +783,7 @@ export class InterviewStore {
       );
       for (const table of [
         "drafts",
+        "grants",
         "questions",
         "events",
         "artifacts",
@@ -773,6 +820,12 @@ export class InterviewStore {
         id,
       );
       this.sql.all("DELETE FROM drafts WHERE session_id = ?", id);
+      // The old assignee's key no longer opens it; the new one's is added
+      // by the owner's client, which holds the interview key.
+      this.sql.all(
+        "DELETE FROM grants WHERE session_id = ? AND role = 'assignee'",
+        id,
+      );
     }
     this.sql.all(
       "UPDATE sessions SET assignee = ?, assigned_by = ?, updated_at = ? WHERE id = ?",
@@ -797,32 +850,35 @@ export class InterviewStore {
 
   addQuestions(sessionId: string, inputs: unknown[]): QuestionView[] {
     this.requireActive(sessionId);
+    const kid = this.kidOf(sessionId);
     const parsed = inputs.map((item) => {
-      const input = QuestionInputSchema.parse(item);
+      // A sealed question was checked and normalised by the client.
+      const input = kid
+        ? sealedUnder(kid, SealedQuestionInputSchema.parse(item))
+        : QuestionInputSchema.parse(item);
       this.validateLinks(
         sessionId,
         input.artifactId ?? null,
         input.optionArtifacts ?? {},
         input.options,
+        Boolean(kid),
       );
       const binding = {
         optionValues: input.optionValues ?? {},
         control: input.control ?? null,
         unit: input.unit ?? null,
       };
-      this.validateBinding(sessionId, {
-        ...input,
-        ...binding,
-        artifactId: input.artifactId ?? null,
-      });
+      this.validateBinding(
+        sessionId,
+        { ...input, ...binding, artifactId: input.artifactId ?? null },
+        Boolean(kid),
+      );
       return {
         ...input,
         binding,
-        default: normalizeDefault(
-          input.type,
-          input.options,
-          input.default ?? null,
-        ),
+        default: kid
+          ? (input.default ?? null)
+          : normalizeDefault(input.type, input.options, input.default ?? null),
       };
     });
     if (this.count("questions", sessionId) + parsed.length > LIMITS.questions)
@@ -875,7 +931,10 @@ export class InterviewStore {
   ): QuestionView {
     this.requireActive(sessionId);
     const current = this.questionRow(sessionId, questionId);
-    const parsed = QuestionPatchSchema.parse(patch);
+    const kid = this.kidOf(sessionId);
+    const parsed = kid
+      ? sealedUnder(kid, SealedQuestionPatchSchema.parse(patch))
+      : QuestionPatchSchema.parse(patch);
     // An omitted field keeps the stored value; an explicit null clears it.
     const keep = <T>(
       value: T | null | undefined,
@@ -889,29 +948,36 @@ export class InterviewStore {
         : value;
     const type = parsed.type ?? (String(current.type) as QuestionView["type"]);
     const options = parsed.options ?? json<string[]>(current.options);
-    const defaultAnswer = normalizeDefault(
-      type,
-      options,
-      keep(parsed.default, current.default_answer, (v) => json<string[]>(v)),
+    const kept = keep(parsed.default, current.default_answer, (v) =>
+      json<string[]>(v),
     );
+    const defaultAnswer = kid ? kept : normalizeDefault(type, options, kept);
     // Options may have been renamed; links to vanished labels are dropped.
+    // Sealed labels can't be compared: the client sends them whole.
+    const labelled = (label: string) => Boolean(kid) || options.includes(label);
     const optionArtifacts = Object.fromEntries(
       Object.entries(
         parsed.optionArtifacts ??
           json<Record<string, string>>(current.option_artifacts),
-      ).filter(([label]) => options.includes(label)),
+      ).filter(([label]) => labelled(label)),
     );
     const artifactId = keep<string>(
       parsed.artifactId,
       current.artifact_id,
       String,
     );
-    this.validateLinks(sessionId, artifactId, optionArtifacts, options);
+    this.validateLinks(
+      sessionId,
+      artifactId,
+      optionArtifacts,
+      options,
+      Boolean(kid),
+    );
     const stored = readBinding(current.binding);
     const binding = {
       optionValues: Object.fromEntries(
         Object.entries(parsed.optionValues ?? stored.optionValues).filter(
-          ([label]) => options.includes(label),
+          ([label]) => labelled(label),
         ),
       ),
       control: parsed.control === undefined ? stored.control : parsed.control,
@@ -919,14 +985,11 @@ export class InterviewStore {
     };
     const min = keep(parsed.min, current.min, Number);
     const max = keep(parsed.max, current.max, Number);
-    this.validateBinding(sessionId, {
-      type,
-      options,
-      artifactId,
-      min,
-      max,
-      ...binding,
-    });
+    this.validateBinding(
+      sessionId,
+      { type, options, artifactId, min, max, ...binding },
+      Boolean(kid),
+    );
     this.sql.all(
       `UPDATE questions SET type=?, prompt=?, recommendation=?, default_answer=?, options=?, artifact_id=?, option_artifacts=?, binding=?, min=?, max=?, step=?, position=?, updated_at=? WHERE id=?`,
       type,
@@ -1012,7 +1075,10 @@ export class InterviewStore {
   ): { revision: number; event: InterviewEvent } {
     this.requireActive(sessionId);
     this.questionRow(sessionId, questionId);
-    const parsed = AnswerInputSchema.parse(input);
+    const kid = this.kidOf(sessionId);
+    const parsed = kid
+      ? sealedUnder(kid, SealedAnswerInputSchema.parse(input))
+      : AnswerInputSchema.parse(input);
     const previous = first(
       this.sql,
       "SELECT revision FROM answers WHERE question_id=?",
@@ -1085,6 +1151,8 @@ export class InterviewStore {
   ): DraftView {
     this.requireActive(sessionId);
     const question = this.questionRow(sessionId, questionId);
+    const kid = this.kidOf(sessionId);
+    if (kid) sealedUnder(kid, SealedAnswerInputSchema.parse(answer));
     if (
       first(this.sql, "SELECT 1 FROM answers WHERE question_id=?", questionId)
     )
@@ -1274,7 +1342,12 @@ export class InterviewStore {
   /** Adds an artifact. A session has one plan, so adding another plan replaces its content. */
   addArtifact(sessionId: string, input: unknown): ArtifactView {
     this.requireActive(sessionId);
-    const parsed = ArtifactInputSchema.parse(input);
+    const kid = this.kidOf(sessionId);
+    const parsed: { format?: ArtifactFormat } & ReturnType<
+      typeof ArtifactInputSchema.parse
+    > = kid
+      ? sealedUnder(kid, SealedArtifactInputSchema.parse(input))
+      : ArtifactInputSchema.parse(input);
     if (parsed.kind === "plan") {
       const plan = first(
         this.sql,
@@ -1289,6 +1362,7 @@ export class InterviewStore {
             ? { description: parsed.description }
             : {}),
           ...(parsed.source !== undefined ? { source: parsed.source } : {}),
+          ...(parsed.format ? { format: parsed.format } : {}),
           show: parsed.show,
         });
     }
@@ -1300,7 +1374,7 @@ export class InterviewStore {
     const id = crypto.randomUUID();
     const time = now();
     this.sql.all(
-      "INSERT INTO artifacts (id,session_id,kind,title,content,description,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO artifacts (id,session_id,kind,title,content,description,source,created_at,updated_at,format) VALUES (?,?,?,?,?,?,?,?,?,?)",
       id,
       sessionId,
       parsed.kind,
@@ -1310,6 +1384,7 @@ export class InterviewStore {
       parsed.source ?? null,
       time,
       time,
+      parsed.format ?? null,
     );
     this.emit(sessionId, "artifact.added", {
       artifactId: id,
@@ -1328,7 +1403,12 @@ export class InterviewStore {
     this.requireActive(sessionId);
     const current = this.liveArtifact(sessionId, artifactId);
     if (!current) throw new Error("Artifact not found");
-    const parsed = ArtifactPatchSchema.parse(patch);
+    const kid = this.kidOf(sessionId);
+    const parsed: { format?: ArtifactFormat } & ReturnType<
+      typeof ArtifactPatchSchema.parse
+    > = kid
+      ? sealedUnder(kid, SealedArtifactPatchSchema.parse(patch))
+      : ArtifactPatchSchema.parse(patch);
     const changed =
       parsed.title !== undefined ||
       parsed.content !== undefined ||
@@ -1340,13 +1420,14 @@ export class InterviewStore {
         parsed.source === undefined ? optional(current.source) : parsed.source,
       );
       this.sql.all(
-        "UPDATE artifacts SET title=?, content=?, description=?, source=?, revision=revision+1, updated_at=? WHERE id=?",
+        "UPDATE artifacts SET title=?, content=?, description=?, source=?, format=?, revision=revision+1, updated_at=? WHERE id=?",
         parsed.title ?? String(current.title),
         parsed.content ?? String(current.content),
         parsed.description === undefined
           ? optional(current.description)
           : parsed.description,
         parsed.source === undefined ? optional(current.source) : parsed.source,
+        parsed.format ?? optional(current.format),
         now(),
         artifactId,
       );
@@ -1356,8 +1437,9 @@ export class InterviewStore {
       });
     }
     if (parsed.show) this.showArtifact(sessionId, artifactId, "agent");
+    // The client warns for a sealed artifact: only it can read the markup.
     const warnings =
-      parsed.content === undefined
+      parsed.content === undefined || kid
         ? []
         : this.bindingWarnings(sessionId, artifactId);
     return {
@@ -1436,10 +1518,9 @@ export class InterviewStore {
     id: String(row.id),
     kind: row.kind as ArtifactView["kind"],
     title: String(row.title),
-    format: artifactFormat(
-      row.kind as ArtifactView["kind"],
-      String(row.content),
-    ),
+    format:
+      (optional(row.format) as ArtifactFormat | null) ??
+      artifactFormat(row.kind as ArtifactView["kind"], String(row.content)),
     content: String(row.content),
     size: String(row.content).length,
     description: optional(row.description),
@@ -1464,115 +1545,214 @@ export class InterviewStore {
     artifactId: string | null,
     optionArtifacts: Record<string, string>,
     options: string[],
+    sealed: boolean,
   ): void {
-    // Worded to avoid "not found", which the HTTP layer reports as a 404.
-    if (artifactId && !this.liveArtifact(sessionId, artifactId))
-      throw new Error(`No artifact ${artifactId} in this session`);
-    for (const [label, id] of Object.entries(optionArtifacts)) {
-      if (!options.includes(label))
-        throw new Error(
-          `optionArtifacts names "${label}", which is not an option`,
-        );
-      if (!this.liveArtifact(sessionId, id))
-        throw new Error(`No artifact ${id} in this session`);
-    }
+    checkLinks(
+      (id) => this.artifactRef(sessionId, id),
+      artifactId,
+      optionArtifacts,
+      options,
+      sealed,
+    );
   }
 
-  /**
-   * Checks a question's binding: its artifact is html and declares every
-   * control, and the controls suit the question type.
-   */
   private validateBinding(
     sessionId: string,
-    question: Binding & {
-      type: QuestionView["type"];
-      options: string[];
-      artifactId: string | null;
-      min?: number | null | undefined;
-      max?: number | null | undefined;
-    },
+    question: Parameters<typeof checkBinding>[1],
+    sealed: boolean,
   ): void {
-    const controls = boundControls(question);
-    if (!controls.length) {
-      if (question.unit) throw new Error("unit needs a control to apply to");
-      return;
-    }
-    if (!question.artifactId)
-      throw new Error(
-        "optionValues and control need artifactId: the html artifact they change",
-      );
-    const row = this.liveArtifact(sessionId, question.artifactId);
-    if (!row)
-      throw new Error(`No artifact ${question.artifactId} in this session`);
-    const artifact = this.mapArtifact(row);
-    if (artifact.format !== "html")
-      throw new Error(
-        `Artifact "${artifact.title}" is ${artifact.format}; only html artifacts have controls`,
-      );
-    const choices =
-      question.type === "yes-no"
-        ? ["Yes", "No"]
-        : question.type === "single-choice" ||
-            question.type === "multiple-choice"
-          ? question.options
-          : null;
-    if (choices) {
-      if (question.control)
-        throw new Error(
-          "control is for number and text questions; give a choice optionValues",
-        );
-      for (const label of Object.keys(question.optionValues))
-        if (!choices.includes(label))
-          throw new Error(
-            `optionValues names "${label}", which is not an option`,
-          );
-    } else {
-      if (Object.keys(question.optionValues).length)
-        throw new Error("optionValues is for choice questions");
-      const kind = controlKind(question.control!);
-      if (question.type === "number" && kind !== "variable")
-        throw new Error(
-          `A number question sets a CSS variable such as --radius, not ${question.control}`,
-        );
-      if (
-        question.type === "number" &&
-        (question.min == null || question.max == null)
-      )
-        throw new Error(
-          `A number question bound to ${question.control} needs min and max, for its slider`,
-        );
-      if (question.type === "text" && kind !== "text")
-        throw new Error(
-          `A text question sets a text slot such as #headline, not ${question.control}`,
-        );
-      if (question.type === "text" && question.unit)
-        throw new Error("unit is for number questions");
-    }
-    const missing = missingControls(artifact.content!, controls);
-    if (missing.length) throw new Error(undeclared(artifact.title, missing));
+    checkBinding((id) => this.artifactRef(sessionId, id), question, sealed);
+  }
+
+  private artifactRef(
+    sessionId: string,
+    artifactId: string,
+  ): ArtifactRef | undefined {
+    const row = this.liveArtifact(sessionId, artifactId);
+    return row ? this.mapArtifact(row) : undefined;
   }
 
   /** Bound questions an edited artifact no longer serves, as warnings. */
   private bindingWarnings(sessionId: string, artifactId: string): string[] {
     const artifact = this.artifactView(sessionId, artifactId);
-    return this.getSession(sessionId, "")
-      .questions.filter(
-        (question) => question.artifactId === artifactId && isBound(question),
+    return bindingWarnings(this.getSession(sessionId, "").questions, {
+      ...artifact,
+      content: artifact.content!,
+    });
+  }
+
+  // ------------------------------------------------------------ encryption
+
+  /** The interview's key id when it is end-to-end encrypted, else null. */
+  kidOf(sessionId: string): string | null {
+    const row = first(
+      this.sql,
+      "SELECT kid FROM sessions WHERE id = ?",
+      sessionId,
+    );
+    if (!row) throw new Error("Session not found");
+    return optional(row.kid);
+  }
+
+  /** Who holds the interview key: each grant, by the fingerprint it is wrapped to. */
+  grants(sessionId: string): Grant[] {
+    return this.sql
+      .all(
+        "SELECT fp, role, wrapped FROM grants WHERE session_id = ? ORDER BY created_at, rowid",
+        sessionId,
       )
-      .flatMap((question) => {
-        const where = `Question "${question.prompt}"`;
-        if (artifact.format !== "html")
-          return [
-            `${where} sets controls, but "${artifact.title}" is no longer html`,
-          ];
-        const missing = missingControls(
-          artifact.content!,
-          boundControls(question),
-        );
-        return missing.length
-          ? [`${where}: ${undeclared(artifact.title, missing)}`]
-          : [];
-      });
+      .map((row) => ({
+        fp: String(row.fp),
+        role: row.role as Grant["role"],
+        wrapped: String(row.wrapped),
+      }));
+  }
+
+  private grantSummary(sessionId: string) {
+    const grants = this.grants(sessionId);
+    return {
+      grants: grants.map((grant) => grant.fp),
+      assigneeKey: grants.some((grant) => grant.role === "assignee"),
+    };
+  }
+
+  /** The grants to one key, for these key ids (or every interview's). */
+  grantsTo(
+    fp: string,
+    kids: string[] | null,
+  ): Array<{ kid: string; wrapped: string; sessionId: string }> {
+    return this.sql
+      .all(
+        "SELECT s.id, s.kid, g.wrapped FROM grants g JOIN sessions s ON s.id = g.session_id WHERE g.fp = ?",
+        fp,
+      )
+      .filter((row) => !kids || kids.includes(String(row.kid)))
+      .map((row) => ({
+        kid: String(row.kid),
+        wrapped: String(row.wrapped),
+        sessionId: String(row.id),
+      }));
+  }
+
+  /**
+   * Adds members' grants; a grant to a key already holding one replaces
+   * it. Only the owner's clients, which hold the key, make them.
+   */
+  addGrants(sessionId: string, input: unknown[]): Grant[] {
+    if (!this.kidOf(sessionId))
+      throw new Error("This interview isn't encrypted");
+    const grants = input.map((grant) => GrantSchema.parse(grant));
+    if (this.grants(sessionId).length + grants.length > 40)
+      throw new Error(`${LIMIT_REACHED}: an interview has at most 40 grants`);
+    for (const grant of grants)
+      this.sql.all(
+        `INSERT INTO grants (session_id, fp, role, wrapped, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (session_id, fp) DO UPDATE SET role=excluded.role, wrapped=excluded.wrapped`,
+        sessionId,
+        grant.fp,
+        grant.role,
+        grant.wrapped,
+        now(),
+      );
+    return this.grants(sessionId);
+  }
+
+  /** The account's key: its public half, and how devices unlock the private half. */
+  accountKey(): {
+    publicKey: PublicKey;
+    fingerprint: string;
+    createdAt: string;
+    unlocks: Unlock[];
+  } | null {
+    const row = first(this.sql, "SELECT * FROM account_key WHERE id = 1");
+    if (!row) return null;
+    return {
+      publicKey: json<PublicKey>(row.public_key),
+      fingerprint: String(row.fp),
+      createdAt: String(row.created_at),
+      unlocks: this.sql
+        .all("SELECT * FROM unlocks ORDER BY created_at, rowid")
+        .map((unlock) => ({
+          id: String(unlock.id),
+          method: unlock.method as Unlock["method"],
+          ...(unlock.credential_id
+            ? { credentialId: String(unlock.credential_id) }
+            : {}),
+          salt: String(unlock.salt),
+          wrapped: String(unlock.wrapped),
+          ...(unlock.label ? { label: String(unlock.label) } : {}),
+          createdAt: String(unlock.created_at),
+        })),
+    };
+  }
+
+  /**
+   * Sets up encryption: once. Replacing the key would strand every
+   * encrypted interview, so that's a separate, deliberate reset.
+   */
+  setAccountKey(
+    publicKey: PublicKey,
+    fingerprint: string,
+    unlocks: unknown[],
+  ): void {
+    if (this.accountKey())
+      throw new Error("Encryption is already set up for this account");
+    this.sql.transaction(() => {
+      this.sql.all(
+        "INSERT INTO account_key (id, public_key, fp, created_at) VALUES (1, ?, ?, ?)",
+        JSON.stringify(publicKey),
+        fingerprint,
+        now(),
+      );
+      for (const unlock of unlocks) this.insertUnlock(unlock);
+    });
+  }
+
+  addUnlock(unlock: unknown): void {
+    if (!this.accountKey()) throw new Error("Set up encryption first");
+    if (Number(first(this.sql, "SELECT COUNT(*) n FROM unlocks")!.n) >= 20)
+      throw new Error(`${LIMIT_REACHED}: at most 20 ways to unlock`);
+    this.insertUnlock(unlock);
+  }
+
+  private insertUnlock(input: unknown): void {
+    const unlock = UnlockSchema.parse(input);
+    if (unlock.method === "passkey" && !unlock.credentialId)
+      throw new Error("A passkey unlock needs its credential id");
+    this.sql.all(
+      `INSERT INTO unlocks (id, method, credential_id, salt, wrapped, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET method=excluded.method, credential_id=excluded.credential_id,
+         salt=excluded.salt, wrapped=excluded.wrapped, label=excluded.label`,
+      unlock.id,
+      unlock.method,
+      unlock.credentialId ?? null,
+      unlock.salt,
+      unlock.wrapped,
+      unlock.label ?? null,
+      now(),
+    );
+  }
+
+  /** Removes a way to unlock; the last one stays, or nothing could. */
+  removeUnlock(id: string): void {
+    const count = Number(first(this.sql, "SELECT COUNT(*) n FROM unlocks")!.n);
+    if (!first(this.sql, "SELECT 1 FROM unlocks WHERE id = ?", id))
+      throw new Error("Unlock not found");
+    if (count <= 1) throw new Error("That's the only way left to unlock");
+    this.sql.all("DELETE FROM unlocks WHERE id = ?", id);
+  }
+
+  /**
+   * Starts encryption over with no key: for someone who lost every
+   * device and their recovery code. Encrypted interviews stay, unreadable.
+   */
+  resetAccountKey(): void {
+    this.sql.transaction(() => {
+      const old = first(this.sql, "SELECT fp FROM account_key WHERE id = 1");
+      if (old) this.sql.all("DELETE FROM grants WHERE fp = ?", String(old.fp));
+      this.sql.all("DELETE FROM unlocks");
+      this.sql.all("DELETE FROM account_key");
+    });
   }
 
   undeliveredEvents(sessionId: string): InterviewEvent[] {
@@ -1661,6 +1841,17 @@ export class InterviewStore {
     if (!row) throw new Error("Question not found");
     return row;
   }
+}
+
+/**
+ * Checks that every sealed field in a value is under this interview's key,
+ * so a client can't slip in one it couldn't open itself. Returns the value.
+ */
+function sealedUnder<T>(kid: string, value: T): T {
+  for (const found of kidsIn(value))
+    if (found !== kid)
+      throw new Error("A field is sealed with another interview's key");
+  return value;
 }
 
 /** An artifact's content and source share a row, which holds at most 2 MB. */

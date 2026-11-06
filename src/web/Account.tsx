@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { EncryptionMenu } from "./Encryption.js";
 import { useMe, type PlanView } from "./me.js";
 
 interface Links {
@@ -77,6 +78,7 @@ export function Account() {
             <span>{me.email}</span>
           </div>
           {me.plan && <Plan plan={me.plan} />}
+          <EncryptionMenu onAction={() => setOpen(false)} />
           {links && links.linked.length > 0 && (
             <div className="account-links" aria-label="Linked accounts">
               <span className="account-links-head">

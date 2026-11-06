@@ -20,6 +20,7 @@ import {
 import { PLAN_HEADER } from "../server/plans.js";
 import type { Env } from "./env.js";
 import { ttlCache } from "./cache.js";
+import { pubkeys, trackAccountKey } from "./directory.js";
 import { hubFor } from "./hubs.js";
 import { inbox, isInbox } from "./inbox.js";
 import { isAdmin, listUsers } from "./users.js";
@@ -153,6 +154,9 @@ const agentApi: ExportedHandler<Env> = {
     const path = new URL(request.url).pathname;
     if (path === CLI_PACKAGE_PATH)
       return env.ASSETS.fetch(new Request(new URL("/cli.tgz", request.url)));
+    // Anyone's public keys, from the directory, not a hub.
+    const keys = await pubkeys(request, env, email);
+    if (keys) return keys;
     // Interviews sent to this user live in their senders' hubs.
     if (isInbox(path))
       return inbox(forwardable(request), env, email, props.via);
@@ -269,6 +273,8 @@ const site: ExportedHandler<Env> = {
     if (limited) return limited;
     if (url.pathname === "/api/browser/shared")
       return Response.json({ interviews: await sharedWith(env, user.email) });
+    const keys = await pubkeys(request, env, user.email);
+    if (keys) return keys;
     // An interview someone else assigned to this user lives in their hub.
     const token = interviewToken(url.pathname);
     const share = token ? await shareFor(env, token) : null;
@@ -295,10 +301,17 @@ const site: ExportedHandler<Env> = {
     if (
       url.pathname.startsWith("/api/browser/") ||
       url.pathname.startsWith("/ws/")
-    )
-      return toHub(env, workspace, forwardable(request));
+    ) {
+      const response = await toHub(env, workspace, forwardable(request));
+      await trackAccountKey(request, env, user.email, response);
+      return response;
+    }
     // The interview list and each interview are the same app.
-    if (url.pathname === "/" || url.pathname.startsWith("/s/"))
+    if (
+      url.pathname === "/" ||
+      url.pathname === "/cli-key" ||
+      url.pathname.startsWith("/s/")
+    )
       return env.ASSETS.fetch(new Request(new URL("/index.html", url)));
     return env.ASSETS.fetch(request);
   },

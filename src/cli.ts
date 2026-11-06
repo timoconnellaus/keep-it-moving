@@ -23,6 +23,12 @@ import envPaths from "env-paths";
 import { checkbox } from "./checkbox.js";
 import { normalizeRemote, projectName } from "./shared/remote.js";
 import { NoBrowser, renderScreenshot } from "./render.js";
+import { encodeContentKey, Encryption } from "./sealedApi.js";
+import {
+  importAccountKey,
+  newAccountKey,
+  unwrapWith,
+} from "./shared/crypto.js";
 import {
   type AgentId,
   canonicalSkill,
@@ -650,8 +656,8 @@ async function inboxCommand(action: string | undefined, args: string[]) {
     return output(view);
   }
   if (action === "artifact") {
-    const artifact = (await api(
-      `${base}/artifacts/${encodeURIComponent(positional(args, 1))}`,
+    const artifact = (await encryption.inboxArtifact(
+      await api(`${base}/artifacts/${encodeURIComponent(positional(args, 1))}`),
     )) as { content: string };
     const out = flag(args, "--out");
     if (!out) return output(artifact);
@@ -710,8 +716,10 @@ async function draftCommand(args: string[]) {
  */
 async function inboxScreenshot(interview: string, args: string[]) {
   const id = positional(args, 1);
-  const artifact = (await api(
-    `/api/sessions/inbox/${interview}/artifacts/${encodeURIComponent(id)}`,
+  const artifact = (await encryption.inboxArtifact(
+    await api(
+      `/api/sessions/inbox/${interview}/artifacts/${encodeURIComponent(id)}`,
+    ),
   )) as {
     title: string;
     format: string;
@@ -816,11 +824,18 @@ async function inboxWait(args: string[]) {
 async function attach(args: string[]) {
   const id = positional(args, 0);
   process.stdout.on("error", () => process.exit(0));
+  // Lines are opened in order: each waits for the one before it.
+  let printed = Promise.resolve();
   await watchInterview(
     id,
     () => ({ mode: "attach" }),
     (message, line) => {
-      process.stdout.write(`${line}\n`);
+      printed = printed.then(async () => {
+        const opened = await encryption.open(message).catch(() => message);
+        process.stdout.write(
+          `${opened === message ? line : JSON.stringify(opened)}\n`,
+        );
+      });
       // The interview ends this watch; a newer watcher took over.
       return message.type === "replaced" ? "done" : undefined;
     },
@@ -840,7 +855,7 @@ async function eventsNext(args: string[]) {
       return "done";
     },
   );
-  output(result);
+  output(await encryption.open(result));
 }
 
 async function waitForBatch(args: string[]) {
@@ -866,7 +881,7 @@ async function nextBatch(id: string, args: string[]): Promise<unknown> {
       return "done";
     },
   );
-  return batch;
+  return encryption.open(batch);
 }
 
 /** How often the CLI pings an idle socket, so proxies keep it open. */
@@ -1032,11 +1047,27 @@ async function ask(args: string[]) {
 const shellQuote = (value: string) =>
   /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 
-async function api(path: string, init?: RequestInit): Promise<unknown> {
+/** A request to the service, through end-to-end encryption (see sealedApi.ts). */
+const api = (path: string, init?: RequestInit): Promise<unknown> =>
+  encryption.api(path, init);
+
+/** A request as the service sees it: sealed fields stay sealed. */
+async function rawApi(path: string, init?: RequestInit): Promise<unknown> {
   const response = await authorizedFetch(path, init);
   if (!response.ok) throw await apiError(response);
   return response.json();
 }
+
+/**
+ * The account's private key, which opens encrypted interviews: from the
+ * environment in a cloud session, else as `kim login` stored it.
+ */
+const storedContentKey = () =>
+  process.env.KEEP_IT_MOVING_CONTENT_KEY?.trim() ||
+  readCredentials()[defaultBase]?.contentKey ||
+  null;
+
+const encryption = new Encryption(rawApi, storedContentKey);
 
 /**
  * A refusal from the service. A plan limit (402, code "plan_limit") keeps
@@ -1093,6 +1124,8 @@ interface Credentials {
   accessToken: string;
   refreshToken: string | null;
   expiresAt: number;
+  /** The account's encryption key (PKCS #8, base64url), from `kim login`. */
+  contentKey?: string;
 }
 
 const credentialsFile = () => configFile("credentials.json");
@@ -1215,8 +1248,15 @@ async function cloudCommand(action: string | undefined, args: string[]) {
     body: JSON.stringify({ name: keyName }),
   })) as { key: string };
   const host = new URL(defaultBase).host;
+  // Encrypted interviews open with the account's key: the environment needs it too.
+  const contentKey = (
+    (await rawApi("/api/sessions/kim/account")) as { publicKey: unknown }
+  ).publicKey
+    ? storedContentKey()
+    : null;
   const environment = [
     `KEEP_IT_MOVING_TOKEN=${key}`,
+    ...(contentKey ? [`KEEP_IT_MOVING_CONTENT_KEY=${contentKey}`] : []),
     // Another deployment (such as wrangler dev) has to be named too.
     ...(defaultBase === "https://keep-it-moving.zerobsai.com"
       ? []
@@ -1499,7 +1539,7 @@ async function takeAnswers(id: string): Promise<TakeOutcome> {
   );
   if (response.status === 404) return "gone";
   if (!response.ok) return null;
-  return (await response.json()) as TakeOutcome;
+  return encryption.open((await response.json()) as TakeOutcome);
 }
 
 /** What changed in an interview sent to the user since its agent last looked. */
@@ -1511,7 +1551,12 @@ async function takeInbox(token: string): Promise<TakeOutcome> {
   // Unassigned or deleted: it is no longer the agent's to follow.
   if (response.status === 403 || response.status === 404) return "gone";
   if (!response.ok) return null;
-  return { news: (await response.json()) as InboxNews };
+  return {
+    news: await encryption.open({
+      ...((await response.json()) as InboxNews),
+      id: decodeURIComponent(token),
+    }),
+  };
 }
 
 /** Starts kim updating itself, detached, with its output in update.log. */
@@ -1738,6 +1783,7 @@ function credentialsFrom(
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token ?? previous?.refreshToken ?? null,
     expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+    ...(previous?.contentKey ? { contentKey: previous.contentKey } : {}),
   };
 }
 
@@ -1749,23 +1795,57 @@ async function login() {
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   const state = randomBytes(16).toString("base64url");
+  // The encryption key comes back from the browser wrapped to this one-off
+  // key, straight to this loopback server: never through the service.
+  const handoff = await newAccountKey();
+  const handoffState = randomBytes(16).toString("base64url");
   let finish!: (result: { code?: string; error?: string }) => void;
   const result = new Promise<{ code?: string; error?: string }>((resolve) => {
     finish = resolve;
   });
+  let keyArrived!: (wrapped: string | null) => void;
+  const keyResult = new Promise<string | null>((resolve) => {
+    keyArrived = resolve;
+  });
+  const page = (status: number, text: string) =>
+    `<!doctype html><meta charset="utf-8"><title>kim</title><p style="font:16px system-ui;margin:3rem">${text}</p>`;
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (url.pathname === "/key") {
+      const ok = url.searchParams.get("state") === handoffState;
+      response
+        .writeHead(ok ? 200 : 400, { "content-type": "text/html" })
+        .end(
+          page(
+            ok ? 200 : 400,
+            ok
+              ? "Signed in. You can close this tab."
+              : "That didn't come from this sign-in. Check the terminal.",
+          ),
+        );
+      if (ok) keyArrived(url.searchParams.get("w"));
+      return;
+    }
     if (url.pathname !== "/callback") {
       response.writeHead(404).end();
       return;
     }
     const code = url.searchParams.get("code");
     const ok = url.searchParams.get("state") === state && code !== null;
-    response
-      .writeHead(ok ? 200 : 400, { "content-type": "text/html" })
-      .end(
-        `<!doctype html><meta charset="utf-8"><p style="font:16px system-ui;margin:3rem">${ok ? "Signed in. You can close this tab." : "Sign-in failed. Check the terminal."}</p>`,
-      );
+    if (ok) {
+      // On to the page that hands over the encryption key; what follows
+      // the # never reaches a server.
+      const next = new URL(`${defaultBase}/cli-key`);
+      next.hash = new URLSearchParams({
+        port: String(port),
+        state: handoffState,
+        pub: `${handoff.publicKey.x}.${handoff.publicKey.y}`,
+      }).toString();
+      response.writeHead(302, { location: next.toString() }).end();
+    } else
+      response
+        .writeHead(400, { "content-type": "text/html" })
+        .end(page(400, "Sign-in failed. Check the terminal."));
     finish(
       ok
         ? { code }
@@ -1835,10 +1915,47 @@ async function login() {
     });
     if (!response.ok)
       throw new Error(`Token exchange failed: ${await response.text()}`);
-    writeCredentials(
-      credentialsFrom(clientId, (await response.json()) as TokenResponse),
+    const credentials = credentialsFrom(
+      clientId,
+      (await response.json()) as TokenResponse,
     );
-    return output({ ok: true, url: defaultBase });
+    writeCredentials(credentials);
+    process.stderr.write(
+      "Signed in. If your browser asks, unlock or set up encryption to give kim your key.\n",
+    );
+    const keyTimeout = setTimeout(() => keyArrived(null), 600_000);
+    const wrapped = await keyResult;
+    clearTimeout(keyTimeout);
+    const { publicKey, fingerprint } = (await rawApi(
+      "/api/sessions/kim/account",
+    )) as { publicKey: unknown; fingerprint?: string };
+    let encryptionState: "on" | "off" | "not given" = publicKey
+      ? "not given"
+      : "off";
+    if (wrapped) {
+      const account = await importAccountKey(
+        await unwrapWith(handoff.privateKey, wrapped),
+      );
+      if (account.fingerprint !== fingerprint)
+        throw new Error(
+          "The browser handed over a key that isn't this account's; run kim login again",
+        );
+      writeCredentials({
+        ...credentials,
+        contentKey: encodeContentKey(account),
+      });
+      encryptionState = "on";
+    }
+    return output({
+      ok: true,
+      url: defaultBase,
+      encryption: encryptionState,
+      ...(encryptionState === "not given"
+        ? {
+            note: "Your account encrypts interviews, and this CLI didn't get your key, so it can't open them. Run kim login again and unlock in the browser.",
+          }
+        : {}),
+    });
   } finally {
     server.close();
   }
@@ -1866,9 +1983,24 @@ async function logout() {
 async function whoami() {
   const stored = readCredentials()[defaultBase];
   const signedIn = (await authorizedFetch("/api/sessions")).ok;
+  const account = signedIn
+    ? ((await rawApi("/api/sessions/kim/account").catch(() => null)) as {
+        fingerprint?: string;
+      } | null)
+    : null;
+  const mine = await encryption.accountKey().catch(() => null);
   return output({
     url: defaultBase,
     signedIn,
+    ...(account
+      ? {
+          encryption: account.fingerprint
+            ? mine?.fingerprint === account.fingerprint
+              ? "on"
+              : "on, but this CLI doesn't have your key (run kim login)"
+            : "off",
+        }
+      : {}),
     ...(stored
       ? { tokenExpiresAt: new Date(stored.expiresAt).toISOString() }
       : {}),

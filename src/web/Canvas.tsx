@@ -35,7 +35,6 @@ import type {
   QuestionView,
   SessionView,
 } from "../shared/schema.js";
-import { artifactViewUrl } from "../shared/workspace.js";
 import { plainText } from "./inline.js";
 import { labelSpace, layoutCanvas, PAGE_HEIGHT } from "./canvasLayout.js";
 import {
@@ -43,6 +42,7 @@ import {
   pickIn,
   spotInDocument,
   useFrameEscape,
+  useFrameSource,
   useFrameValues,
   type Spot,
 } from "./frames.js";
@@ -254,6 +254,11 @@ function FrameNode({
       ? live.valuesFor(artifact.id)
       : undefined;
   const frame = useFrameValues(values);
+  const source = useFrameSource(
+    live.token,
+    artifact,
+    artifact.kind === "diagram",
+  );
   const pageRef = useRef<HTMLDivElement>(null);
 
   const highlight: FrameHighlight = copy
@@ -368,10 +373,9 @@ function FrameNode({
             onLoad={frame.onLoad}
             title={data.title}
             tabIndex={-1}
-            // No sandbox attribute: the server's CSP sandbox header isolates it.
-            src={artifactViewUrl(live.token, artifact, {
-              embed: artifact.kind === "diagram",
-            })}
+            // A served page needs no sandbox attribute: the server's CSP
+            // sandbox header isolates it. A sealed one gets the attribute.
+            {...source}
           />
         ) : (
           <div className="frame-placeholder">

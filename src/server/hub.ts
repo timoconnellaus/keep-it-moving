@@ -1,14 +1,17 @@
 import { Hono, type Context } from "hono";
-import { composeParts, defaultAnswerText } from "../shared/answers.js";
-import { artifactValues, isBound, savedValues } from "../shared/bindings.js";
+import { composeParts } from "../shared/answers.js";
+import { artifactValues, isBound } from "../shared/bindings.js";
+import { fingerprint } from "../shared/crypto.js";
+import { answerExtras } from "../shared/questions.js";
 import type {
   ArtifactView,
   ChatMessageView,
   DraftView,
   InterviewEvent,
+  QuestionView,
   SessionView,
 } from "../shared/schema.js";
-import { literalLineBreaks } from "../shared/schema.js";
+import { AccountKeyInputSchema, literalLineBreaks } from "../shared/schema.js";
 import { frameSize } from "../shared/workspace.js";
 import {
   ARTIFACT_VIEW_HEADERS,
@@ -458,6 +461,15 @@ export function createHub(options: HubOptions) {
       input.email ? String(input.email) : null,
       by ? decodeURIComponent(by) : null,
     );
+    // The assignee's keys, wrapped by the owner's client, which can.
+    if (assignee && Array.isArray(input.grants) && input.grants.length)
+      store.addGrants(
+        id,
+        input.grants.map((grant: unknown) => ({
+          ...(grant as object),
+          role: "assignee",
+        })),
+      );
     if (previous && previous !== assignee) sockets.closeRespondents?.(id);
     const session = store.getSession(id, baseUrl);
     return {
@@ -541,8 +553,50 @@ export function createHub(options: HubOptions) {
 
   // Agent keys, mounted before the :id routes.
   const keys = agentKeys(options.sql);
-  app.route("/api/sessions/kim", keys.agentRoutes);
   app.route("/internal", keys.internalRoutes);
+  /** This account's public key, as the key directory would list it. */
+  const ownPublicKeys = () => {
+    const key = store.accountKey();
+    return {
+      keys: key ? [{ fp: key.fingerprint, publicKey: key.publicKey }] : [],
+    };
+  };
+  /** The grants to one key for these key ids (`?kid=…&fp=…`). */
+  const grantsByKid = (c: Context) => {
+    const fp = c.req.query("fp") ?? "";
+    const kids = c.req.queries("kid") ?? [];
+    return {
+      grants: store
+        .grantsTo(fp, kids.length ? kids.slice(0, 200) : null)
+        .map(({ kid, wrapped }) => ({ kid, wrapped })),
+    };
+  };
+  /** An interview's key id, its grant to `?fp=`, and who holds one. */
+  const grantOf = (c: Context, sessionId: string) => {
+    const kid = store.kidOf(sessionId);
+    if (!kid) return { kid: null };
+    const grants = store.grants(sessionId);
+    const fp = c.req.query("fp");
+    return {
+      kid,
+      wrapped: grants.find((grant) => grant.fp === fp)?.wrapped ?? null,
+      grants: grants.map(({ fp, role }) => ({ fp, role })),
+    };
+  };
+
+  // Encryption, for the CLI: whether this account has a key, its own
+  // public key (the Worker answers for other people's), and grants.
+  app.get("/api/sessions/kim/account", (c) => {
+    const key = store.accountKey();
+    return c.json(
+      key
+        ? { publicKey: key.publicKey, fingerprint: key.fingerprint }
+        : { publicKey: null },
+    );
+  });
+  app.get("/api/sessions/kim/pubkeys", (c) => c.json(ownPublicKeys()));
+  app.get("/api/sessions/kim/grants", (c) => c.json(grantsByKid(c)));
+  app.route("/api/sessions/kim", keys.agentRoutes);
 
   // Agent routes. Fixed paths go before /api/sessions/:id.
   app.get("/api/sessions/projects", (c) => c.json(store.listProjects()));
@@ -556,6 +610,21 @@ export function createHub(options: HubOptions) {
   );
   app.get("/api/sessions/:id", (c) =>
     c.json(forAgent(store.getSession(c.req.param("id"), baseUrl))),
+  );
+  app.get("/api/sessions/:id/grant", (c) =>
+    c.json(grantOf(c, c.req.param("id"))),
+  );
+  app.post("/api/sessions/:id/grants", async (c) => {
+    const input = await body(c);
+    const grants = store.addGrants(
+      c.req.param("id"),
+      Array.isArray(input.grants) ? input.grants : [],
+    );
+    return c.json({ grants: grants.map(({ fp, role }) => ({ fp, role })) });
+  });
+  // The artifact as stored, for the CLI's own checks in an encrypted interview.
+  app.get("/api/sessions/:id/artifacts/:artifactId/content", (c) =>
+    c.json(store.artifactContent(c.req.param("id"), c.req.param("artifactId"))),
   );
   app.post("/api/sessions/:id/stop", (c) => {
     store.setSessionStatus(c.req.param("id"), "stopped");
@@ -849,7 +918,52 @@ export function createHub(options: HubOptions) {
     await notify();
     return c.json({ ok: true, devices: store.pushSubscriptions().length });
   });
+  // Encryption in the browser: setting up, the ways to unlock, grants.
+  app.get("/api/browser/account/key", (c) =>
+    c.json(store.accountKey() ?? { publicKey: null }),
+  );
+  app.post("/api/browser/account/key", async (c) => {
+    const { publicKey, unlocks } = AccountKeyInputSchema.parse(await body(c));
+    const fp = await fingerprint(publicKey);
+    store.setAccountKey(publicKey, fp, unlocks);
+    // The Worker lists the public key in the directory from this reply.
+    return c.json({ ok: true, publicKey, fingerprint: fp });
+  });
+  app.post("/api/browser/account/unlocks", async (c) => {
+    store.addUnlock((await body(c)).unlock);
+    return c.json(store.accountKey());
+  });
+  app.delete("/api/browser/account/unlocks/:id", (c) => {
+    store.removeUnlock(c.req.param("id"));
+    return c.json(store.accountKey());
+  });
+  app.post("/api/browser/account/reset", (c) => {
+    store.resetAccountKey();
+    return c.json({ ok: true });
+  });
+  app.get("/api/browser/pubkeys", (c) => c.json(ownPublicKeys()));
+  app.get("/api/browser/grants", (c) => c.json(grantsByKid(c)));
   // The rest are addressed by the session's secret token.
+  app.get("/api/browser/:token/grant", (c) =>
+    c.json(grantOf(c, tokenSession(c.req.param("token")))),
+  );
+  app.post("/api/browser/:token/grants", async (c) => {
+    const input = await body(c);
+    const grants = store.addGrants(
+      tokenSession(c.req.param("token")),
+      Array.isArray(input.grants) ? input.grants : [],
+    );
+    return c.json({ grants: grants.map(({ fp, role }) => ({ fp, role })) });
+  });
+  // A sealed html artifact: the page opens it and frames it itself.
+  app.get("/api/browser/:token/artifacts/:artifactId/content", (c) =>
+    c.json(
+      store.artifactContent(
+        tokenSession(c.req.param("token")),
+        c.req.param("artifactId"),
+      ),
+    ),
+  );
   app.get("/api/browser/:token/session", (c) => {
     const id = tokenSession(c.req.param("token"));
     return c.json(respondentOf(c) ? respondentView(id) : browserView(id));
@@ -886,6 +1000,8 @@ export function createHub(options: HubOptions) {
       return c.text("Open this from its interview's page.", 403);
     const sessionId = tokenSession(c.req.param("token"));
     const artifactId = c.req.param("artifactId");
+    if (store.kidOf(sessionId))
+      throw new Error("An encrypted artifact is opened by its page");
     const { format, content } = store.artifactContent(sessionId, artifactId);
     if (format !== "html") throw new Error("Only html artifacts have a view");
     const values = artifactValues(
@@ -981,25 +1097,55 @@ export function createHub(options: HubOptions) {
     );
     if (!artifact) throw new Error("Artifact not found");
     const { content } = store.artifactContent(id, artifact.id);
+    // Sealed, the agent's CLI applies the answers: it sends the questions.
+    const sealed = Boolean(store.kidOf(id));
     return c.json({
       ...artifactSummary(artifact),
       content:
-        artifact.format === "html"
+        artifact.format === "html" && !sealed
           ? renderArtifact(
               content,
               artifactValues(session.questions, artifact.id),
             )
           : content,
       ...(artifact.source ? { source: artifact.source } : {}),
+      ...(sealed && artifact.format === "html"
+        ? {
+            questions: session.questions.filter(
+              (question) => question.artifactId === artifact.id,
+            ),
+          }
+        : {}),
     });
   });
+  app.get("/api/inbox/:token/grant", (c) =>
+    c.json(grantOf(c, inboxTarget(c).id)),
+  );
+  // One question, without delivering anything: the CLI composes a sealed answer from it.
+  app.get("/api/inbox/:token/questions/:question", (c) => {
+    const { id } = inboxTarget(c);
+    return c.json(questionRef(id, c.req.param("question")));
+  });
+  /** The answer an agent gave: composed here, or sealed by its CLI already. */
+  const composed = async (
+    c: Context,
+    sessionId: string,
+    question: QuestionView,
+  ) => {
+    const input = await body(c);
+    if (!store.kidOf(sessionId)) return composeParts(question, input);
+    return {
+      answer: typeof input.answer === "string" ? input.answer : "",
+      skipped: input.skipped === true,
+    };
+  };
   app.put("/api/inbox/:token/questions/:question/draft", async (c) => {
     const { token, id } = inboxTarget(c);
     const { question, number } = questionRef(id, c.req.param("question"));
     const draft = store.saveDraft(
       id,
       question.id,
-      composeParts(question, await body(c)),
+      await composed(c, id, question),
       c.req.header(DRAFTER_HEADER)!,
     );
     draftsChanged(id);
@@ -1024,7 +1170,7 @@ export function createHub(options: HubOptions) {
   app.post("/api/inbox/:token/questions/:question/answer", async (c) => {
     const { token, id } = inboxTarget(c);
     const { question, number } = questionRef(id, c.req.param("question"));
-    const answer = composeParts(question, await body(c));
+    const answer = await composed(c, id, question);
     const { revision } = store.answerQuestion(
       id,
       question.id,
@@ -1184,13 +1330,19 @@ export function forRespondent(session: SessionView): SessionView {
 
 /** The routes an assignee's interview page uses, each scoped to its token. */
 const RESPONDENT_ALLOWED: Array<[method: string, path: RegExp]> = [
-  ["GET", /^\/api\/browser\/([^/]+)\/(session|artifacts\/[^/]+\/view)$/],
+  [
+    "GET",
+    /^\/api\/browser\/([^/]+)\/(session|grant|artifacts\/[^/]+\/(view|content))$/,
+  ],
   [
     "POST",
     /^\/api\/browser\/([^/]+)\/(questions\/[^/]+\/answer|chat|stage|stage\/visibility|frames\/[^/]+\/position|drafts\/send)$/,
   ],
   // The assignee's agent, through the Worker's inbox routes.
-  ["GET", /^\/api\/inbox\/([^/]+)(?:\/(?:summary|artifacts\/[^/]+))?$/],
+  [
+    "GET",
+    /^\/api\/inbox\/([^/]+)(?:\/(?:summary|grant|artifacts\/[^/]+|questions\/[^/]+))?$/,
+  ],
   ["POST", /^\/api\/inbox\/([^/]+)\/(take|chat|questions\/[^/]+\/answer)$/],
   ["PUT", /^\/api\/inbox\/([^/]+)\/questions\/[^/]+\/draft$/],
   ["DELETE", /^\/api\/inbox\/([^/]+)\/questions\/[^/]+\/draft$/],
@@ -1402,21 +1554,13 @@ function batchSummary(session: SessionView, events: InterviewEvent[]) {
         prompt: question.prompt,
         answer: question.answer!.skipped ? null : question.answer!.text,
         skipped: question.answer!.skipped,
-        acceptedDefault:
-          !question.answer!.skipped &&
-          question.answer!.text === defaultAnswerText(question),
         ...(question.answer!.answeredBy
           ? { answeredBy: question.answer!.answeredBy }
           : {}),
-        // What the answer set in its artifact, to carry into its next revision.
-        ...(isBound(question)
-          ? {
-              applied: {
-                artifactId: question.artifactId,
-                values: savedValues(question) ?? {},
-              },
-            }
-          : {}),
+        // Whether it took the default, and what it set in its artifact, to
+        // carry into its next revision. Sealed, the CLI works these out
+        // from the question (see completeBatch).
+        ...(session.kid ? { question } : answerExtras(question)),
       })),
     openQuestions: session.questions.filter((question) => !question.answer)
       .length,
@@ -1581,17 +1725,19 @@ const ID = "[^/]+";
  */
 const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
   ["GET", /^\/api\/sessions(\/projects)?$/],
+  // Encryption: a cloud environment holds the content key, so it reads grants.
+  ["GET", /^\/api\/sessions\/kim\/(account|pubkeys|grants)$/],
   [
     "GET",
     new RegExp(
-      `^/api/sessions/${ID}(/(attach|wait|events/next|socket|chat))?$`,
+      `^/api/sessions/${ID}(/(attach|wait|events/next|socket|chat|grant|artifacts/${ID}/content))?$`,
     ),
   ],
   ["POST", /^\/api\/sessions$/],
   [
     "POST",
     new RegExp(
-      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat|assign|take)$`,
+      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat|assign|take|grants)$`,
     ),
   ],
   ["PATCH", new RegExp(`^/api/sessions/${ID}/(questions|artifacts)/${ID}$`)],
@@ -1600,10 +1746,17 @@ const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
 
 /** Whether a request authenticated by an agent key may go through. */
 export function keyMayCall(method: string, path: string): boolean {
-  // The kim routes are fixed paths a key may not use: never let them fall
-  // through to /:id.
-  if (/^\/api\/sessions\/kim(\/|$)/.test(path)) return false;
   const upper = method.toUpperCase();
+  // The kim routes are fixed paths a key may not use, but for encryption's
+  // reads: never let them fall through to /:id.
+  if (
+    /^\/api\/sessions\/kim(\/|$)/.test(path) &&
+    !(
+      upper === "GET" &&
+      /^\/api\/sessions\/kim\/(account|pubkeys|grants)$/.test(path)
+    )
+  )
+    return false;
   return KEY_ALLOWED.some(
     ([allowed, pattern]) => allowed === upper && pattern.test(path),
   );

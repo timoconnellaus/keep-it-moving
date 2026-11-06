@@ -347,7 +347,16 @@ describe("the CLI package", () => {
       "package/dist/hook.js",
       "package/dist/hooks.js",
       "package/dist/render.js",
+      "package/dist/sealedApi.js",
+      "package/dist/server/artifactView.js",
+      "package/dist/shared/answers.js",
+      "package/dist/shared/bindings.js",
+      "package/dist/shared/crypto.js",
+      "package/dist/shared/questions.js",
       "package/dist/shared/remote.js",
+      "package/dist/shared/schema.js",
+      "package/dist/shared/text.js",
+      "package/dist/shared/workspace.js",
       "package/dist/skill.js",
       "package/dist/update.js",
       "package/package.json",
@@ -361,7 +370,7 @@ describe("the CLI package", () => {
       kim: "dist/cli.js",
     });
     expect(manifest.type).toBe("module");
-    expect(Object.keys(manifest.dependencies)).toEqual(["env-paths"]);
+    expect(Object.keys(manifest.dependencies)).toEqual(["env-paths", "zod"]);
     // The build stamp kim compares with the site's cli-version.json.
     const stamp = JSON.parse(
       (await exec("tar", ["-xzOf", tarball, "package/build.json"])).stdout,

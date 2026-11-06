@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { SessionView } from "../shared/schema.js";
+import { encryption } from "./keys.js";
 import { onFree, useMe } from "./me.js";
 
 /**
@@ -36,10 +37,20 @@ export function Assign({
 
   const save = async (next: string | null) => {
     setError("");
+    // An encrypted interview's key goes to the assignee's keys, wrapped here.
+    let grants: Array<{ fp: string; wrapped: string }> | undefined;
+    try {
+      grants = next
+        ? await encryption.assigneeGrants(session.kid, next)
+        : undefined;
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+      return;
+    }
     const response = await fetch(`/api/browser/${token}/assign`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: next }),
+      body: JSON.stringify({ email: next, ...(grants ? { grants } : {}) }),
     });
     if (!response.ok) {
       setError(
@@ -119,6 +130,9 @@ export function Assign({
               <p>
                 Send them this link. They sign in with Google as{" "}
                 {session.assignee}, and see only this interview.
+                {session.kid &&
+                  !session.assigneeKey &&
+                  " It's end-to-end encrypted: they can open it once they've turned on encryption and you've opened this page again."}
               </p>
               <div className="assign-actions">
                 <button type="button" onClick={() => void copy()}>
