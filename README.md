@@ -1,4 +1,48 @@
-# Keep it moving
+<p align="center">
+  <img src="src/web/public/icons/icon.svg" width="72" height="72" alt="">
+</p>
+
+<h1 align="center">Keep it moving</h1>
+
+<p align="center">
+  <b>Your agent asks. You answer in one click.</b><br>
+  When your coding agent needs decisions from you, it opens an interview in your browser,<br>
+  with its recommended answer already picked and a plan that updates as you go.
+</p>
+
+<p align="center">
+  <a href="https://keep-it-moving.zerobsai.com">Website</a> ·
+  <a href="#use-it">Install</a> ·
+  <a href="#deploy-your-own">Run your own</a> ·
+  <a href="LICENSE">FSL-1.1-MIT</a>
+</p>
+
+<p align="center">
+  <img src="docs/images/interview.png" width="900" alt="An interview in Keep it moving: answered questions on the left with the agent's recommended answers, the plan it keeps up to date in the middle, and the chat with the agent on the right">
+</p>
+
+## Why
+
+Coding agents stall on decisions, and a terminal is a bad place to make them. Keep it moving gives your agent a proper place to ask:
+
+- **Recommended answers.** Every question comes with the agent's pick and its reasoning, already selected. Agree with all of them in one click, or change the ones you disagree with.
+- **A plan that keeps up.** The agent rewrites the plan after each batch of answers, beside the questions, with diagrams and HTML mockups you can click through and comment on.
+- **System designs that land in your PR.** Work through the data model, architecture, flows and API with your agent, starting from what's in your repo's `.kim/` folder. Changes are highlighted against main, and what you keep is written back for review with the code.
+- **Every agent you use.** Claude Code, Codex, Cursor, Gemini CLI, Copilot and 11 more, from one skill that kim keeps up to date.
+- **Send it to someone else.** Assign an interview to a client or colleague by email; their answers go straight back to your agent.
+- **Yours to run.** A Cloudflare Worker, the `kim` CLI and the skill, all here. Use the hosted version, or deploy your own.
+
+Quick start (Node.js 22.13 or newer):
+
+```sh
+npm install -g https://keep-it-moving.zerobsai.com/cli.tgz
+kim skill install
+kim login
+```
+
+Then ask your agent to "interview me about this feature".
+
+## About
 
 Keep it moving (formerly Interviewer) runs interviews between agents and people: an agent asks questions in the browser, beside a living plan, diagrams and mockups, and waits for the answers; the person answers, chats with the agent, or hands the interview to someone else. The home page lists every interview and what's left to do on it. It's hosted on a Cloudflare Worker at https://keep-it-moving.zerobsai.com. The CLI is `kim`; `interviewer` is the same command, kept so older scripts still work.
 
