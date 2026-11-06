@@ -289,15 +289,10 @@ describe("keeping the hooks current on every run", () => {
   it("rewrites them when their definition changed, and only then", async () => {
     const home = tempHome();
     await kim(home, "skill", "install", "--agents", "codex");
-    const stale = {
-      hooks: {
-        SessionStart: [
-          { hooks: [{ type: "command", command: "kim hook session-start" }] },
-        ],
-      },
-    };
+    // Every event there, with a change of the user's: nothing to do.
+    const stale = JSON.parse(readFileSync(codexFile(home), "utf8"));
+    stale.hooks.SessionStart[0].hooks[0].timeout = 9;
     writeFileSync(codexFile(home), JSON.stringify(stale));
-    // Current: nothing to do, so the file stays as the user left it.
     await ordinaryRun(home);
     expect(JSON.parse(readFileSync(codexFile(home), "utf8"))).toEqual(stale);
 
@@ -326,6 +321,16 @@ describe("keeping the hooks current on every run", () => {
         SessionEnd: [hookEntry("SessionEnd", "codex")],
       },
     });
+  }, 30_000);
+
+  it("puts them back when something else rewrote the file without them", async () => {
+    const home = tempHome();
+    await kim(home, "skill", "install", "--agents", "codex");
+    writeFileSync(codexFile(home), JSON.stringify({ theirs: true }));
+    await ordinaryRun(home);
+    const file = JSON.parse(readFileSync(codexFile(home), "utf8"));
+    expect(file.theirs).toBe(true);
+    expect(hooksStatus("codex", home, bare).events).toHaveLength(5);
   }, 30_000);
 
   it("respects kim hooks uninstall until kim hooks install", async () => {

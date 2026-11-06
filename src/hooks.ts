@@ -341,12 +341,25 @@ export type HookRefreshResult =
   | { agent: HookAgentId; file: string; optedOut: true }
   | { agent: HookAgentId; file: string; error: string };
 
+/** Whether a hooks file still has our entry for every event. */
+function hooksPresent(file: string): boolean {
+  try {
+    const events = installedEvents(readHooksFile(file).settings);
+    return events.length === Object.keys(HOOK_EVENTS).length;
+  } catch {
+    // Unreadable: installing reports why.
+    return false;
+  }
+}
+
 /**
  * Installs the hooks for each of `agents` the user hasn't opted out for,
- * when the file's recorded hash isn't the current one (always, with
- * `force`). Cheap enough for every run: when they're current it's one small
- * state file read. A file it can't read or write is left as it is and
- * reported, never thrown, and tried again next time.
+ * when the file's recorded hash isn't the current one, or the file has lost
+ * them (always, with `force`): something else can rewrite it, as Orca does
+ * a Claude profile's settings. Cheap enough for every run: when they're
+ * current it's the state file and the hooks file read. A file it can't read
+ * or write is left as it is and reported, never thrown, and tried again
+ * next time.
  */
 export function refreshHooks(
   agents: readonly HookAgentId[],
@@ -361,7 +374,7 @@ export function refreshHooks(
     const file = agentFile(agent, home, env);
     if (state.optedOut?.includes(agent))
       return [{ agent, file, optedOut: true }];
-    if (!force && installed[file] === hash) return [];
+    if (!force && installed[file] === hash && hooksPresent(file)) return [];
     try {
       const result = installHooks(agent, home, env);
       installed[file] = hash;
