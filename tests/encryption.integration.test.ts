@@ -7,13 +7,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   grantFor,
   lockAccountKey,
+  LOCKED,
   newAccountKey,
+  newInterviewKey,
   newRecoveryCode,
   newSalt,
   open,
   openGrant,
   seal,
   toBase64Url,
+  wrapTo,
   type AccountKey,
 } from "../src/shared/crypto.js";
 import { hubHarness } from "./helpers/harness.js";
@@ -518,6 +521,44 @@ describe("the hub's encryption routes", () => {
     expect(keyMayCall("GET", "/api/sessions/kim/keys")).toBe(false);
     expect(keyMayCall("POST", "/api/sessions/kim/grants")).toBe(false);
     expect(keyMayCall("GET", "/api/sessions/abc/grant")).toBe(true);
-    expect(keyMayCall("POST", "/api/sessions/abc/grants")).toBe(true);
+    expect(keyMayCall("POST", "/api/sessions/abc/grants")).toBe(false);
+  });
+});
+
+describe("what a writer without the key can't do", () => {
+  it("can't hand over a different key under an interview's id", async () => {
+    const real = await newInterviewKey();
+    const fake = await newInterviewKey();
+    const victim = await newAccountKey();
+    const forged = await wrapTo(victim.publicKey, fake.raw);
+    await expect(openGrant(victim, real.kid, forged)).rejects.toThrow(
+      /isn't this interview's/,
+    );
+  });
+
+  it("can't replace a grant, and can't make a plain interview for an encrypted account", async () => {
+    const { harness, ann, kim } = await ownerHarness();
+    const { session } = await encryptedInterview(kim);
+    const before = harness.store.grants(session.id);
+    harness.store.addGrants(session.id, [
+      {
+        fp: ann.fingerprint,
+        role: "owner",
+        wrapped: await wrapTo(ann.publicKey, (await newInterviewKey()).raw),
+      },
+    ]);
+    expect(harness.store.grants(session.id)).toEqual(before);
+    const plain = await harness.app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { title: "Sneaky" },
+    });
+    expect(plain.statusCode).toBe(400);
+    expect(plain.json().error).toMatch(/kim update/);
+  });
+
+  it("won't seal a field that couldn't be opened", async () => {
+    const key = await newInterviewKey();
+    await expect(seal(key, `${LOCKED}`)).rejects.toThrow(/still encrypted/);
   });
 });

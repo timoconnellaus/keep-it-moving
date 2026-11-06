@@ -12,11 +12,13 @@ import type { ControlValues } from "../shared/bindings.js";
 import type { ArtifactView } from "../shared/schema.js";
 import { artifactViewUrl } from "../shared/workspace.js";
 import { renderArtifact } from "../server/artifactView.js";
+import { LOCKED } from "../shared/crypto.js";
 import { svgImageUrl } from "./diagram.js";
-import { encryption, KidContext } from "./keys.js";
+import { encryption, KidContext, useEncryption } from "./keys.js";
 
 /** Opened artifacts, by interview key, artifact and revision. */
 const opened = new Map<string, Promise<string | null>>();
+encryption.onLock(() => opened.clear());
 
 /**
  * How an html artifact's frame gets its page. A plain interview's is
@@ -30,6 +32,7 @@ export function useFrameSource(
   embed: boolean,
 ): { src?: string; srcDoc?: string; sandbox?: string } {
   const kid = useContext(KidContext);
+  const keys = useEncryption();
   const html = artifact.format === "html";
   const key = `${kid}:${artifact.id}:${artifact.revision}`;
   const [content, setContent] = useState<{ key: string; html: string } | null>(
@@ -47,7 +50,15 @@ export function useFrameSource(
             : null,
         )
         .then((body) => (body ? encryption.unseal(body.content) : null))
-        .catch(() => null);
+        .catch(() => null)
+        .then((value) => {
+          // Not opened yet: ask again once it can be.
+          if (value === null || value.includes(LOCKED)) {
+            opened.delete(key);
+            return null;
+          }
+          return value;
+        });
       opened.set(key, load);
     }
     void load.then((value) => {
@@ -56,7 +67,7 @@ export function useFrameSource(
     return () => {
       live = false;
     };
-  }, [kid, html, key, token]);
+  }, [kid, html, key, token, keys.status]);
   const srcDoc = useMemo(
     () =>
       content?.key === key

@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { AccountKey, PublicKey, Unlock } from "../shared/crypto.js";
+import { handoffCode } from "../shared/crypto.js";
 import { encryption, useEncryption } from "./keys.js";
 import { Logo } from "./Logo.js";
 
@@ -529,6 +530,8 @@ export function CliKey() {
   const state = useEncryption();
   const [error, setError] = useState("");
   const [sent, setSent] = useState(false);
+  const [approved, setApproved] = useState(false);
+  const [code, setCode] = useState("");
   const params = new URLSearchParams(location.hash.slice(1));
   const port = params.get("port") ?? "";
   const handoff = params.get("state") ?? "";
@@ -545,14 +548,18 @@ export function CliKey() {
     })}`;
   };
   useEffect(() => {
-    if (!valid || state.status !== "unlocked" || sent) return;
+    if (!valid) return;
+    void handoffCode({ kty: "EC", crv: "P-256", x: x!, y: y! }).then(setCode);
+  }, [valid]);
+  useEffect(() => {
+    if (!valid || state.status !== "unlocked" || sent || !approved) return;
     setSent(true);
     const cli: PublicKey = { kty: "EC", crv: "P-256", x: x!, y: y! };
     void encryption
       .wrapForCli(cli)
       .then((wrapped) => back({ w: wrapped }))
       .catch((failure: Error) => setError(failure.message));
-  }, [state.status, valid, sent]);
+  }, [state.status, valid, sent, approved]);
 
   return (
     <div className="home-page">
@@ -563,6 +570,29 @@ export function CliKey() {
               <Logo size={28} />
               <h2 id="e2e-title">This link is incomplete</h2>
               <p>Run `kim login` again from your terminal.</p>
+            </>
+          ) : state.status === "unlocked" && !approved ? (
+            <>
+              <LockMark />
+              <h2 id="e2e-title">Give kim your key?</h2>
+              <p>
+                Only if you just ran <code>kim login</code> and your terminal
+                shows this code:
+              </p>
+              <code className="e2e-code">{code || "…"}</code>
+              <div className="e2e-actions">
+                <button type="button" onClick={() => back({ skip: "1" })}>
+                  It doesn&rsquo;t match
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={!code}
+                  onClick={() => setApproved(true)}
+                >
+                  Give kim my key
+                </button>
+              </div>
             </>
           ) : state.status === "loading" || state.status === "unlocked" ? (
             <>

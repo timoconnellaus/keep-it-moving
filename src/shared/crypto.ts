@@ -122,10 +122,14 @@ function concat(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   return out;
 }
 
+/** Nothing sealed opens to more than this: a compression bomb stops here. */
+const MAX_OPENED = 16_000_000;
+
 async function streamThrough(
   bytes: Uint8Array<ArrayBuffer>,
   transform: { readable: ReadableStream; writable: WritableStream },
 ): Promise<Uint8Array<ArrayBuffer>> {
+  let total = 0;
   const writer = transform.writable.getWriter();
   void writer.write(bytes).then(() => writer.close());
   const chunks: Uint8Array[] = [];
@@ -136,6 +140,11 @@ async function streamThrough(
       value?: Uint8Array;
     };
     if (done) break;
+    total += value!.length;
+    if (total > MAX_OPENED) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("Too large to open");
+    }
     chunks.push(value!);
   }
   return concat(...chunks);
@@ -154,11 +163,23 @@ export interface InterviewKey {
   raw: Uint8Array<ArrayBuffer>;
 }
 
+/**
+ * An interview key's id is a hash of the key, so a grant can't hand over a
+ * different key under an interview's id: whoever writes grants (the
+ * service, a leaked agent key) can't make a client seal to a key of theirs.
+ */
+async function kidFor(raw: Uint8Array<ArrayBuffer>): Promise<string> {
+  const digest = new Uint8Array(await subtle().digest("SHA-256", raw));
+  return toBase64Url(digest.subarray(0, 8));
+}
+
 export async function importInterviewKey(
   kid: string,
   raw: Uint8Array<ArrayBuffer>,
 ): Promise<InterviewKey> {
   if (raw.length !== 32) throw new Error("An interview key is 32 bytes");
+  if ((await kidFor(raw)) !== kid)
+    throw new Error("That key isn't this interview's");
   const key = await subtle().importKey("raw", raw, "AES-GCM", false, [
     "encrypt",
     "decrypt",
@@ -166,11 +187,18 @@ export async function importInterviewKey(
   return { kid, key, raw };
 }
 
-export const newInterviewKey = () =>
-  importInterviewKey(toBase64Url(random(8)), random(32));
+export async function newInterviewKey(): Promise<InterviewKey> {
+  const raw = random(32);
+  return importInterviewKey(await kidFor(raw), raw);
+}
 
 /** Seals one field under an interview's key. */
 export async function seal(key: InterviewKey, text: string): Promise<string> {
+  // A field a client couldn't open must never be saved back as content.
+  if (text.includes(LOCKED))
+    throw new Error(
+      "Part of this is still encrypted on this device; unlock it before changing it",
+    );
   let body = new Uint8Array(encoder.encode(text));
   let flag = 0;
   if (body.length > COMPRESS_OVER && canCompress()) {
@@ -424,6 +452,18 @@ export async function unlockAccountKey(
 }
 
 export const newSalt = () => random(32);
+
+/**
+ * The code `kim login` prints and the browser shows before handing over the
+ * key, so a page opened by anything else gets nothing without the person
+ * noticing the codes differ.
+ */
+export async function handoffCode(publicKey: PublicKey): Promise<string> {
+  const print = (await fingerprint(publicKey))
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  return `${print.slice(0, 4)}-${print.slice(4, 8)}`;
+}
 
 // ----------------------------------------------------------- recovery codes
 

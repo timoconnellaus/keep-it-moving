@@ -1737,7 +1737,7 @@ const KEY_ALLOWED: Array<[method: string, path: RegExp]> = [
   [
     "POST",
     new RegExp(
-      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat|assign|take|grants)$`,
+      `^/api/sessions/${ID}/(stop|resume|questions|focus|artifacts|stage|stage/visibility|chat|assign|take)$`,
     ),
   ],
   ["PATCH", new RegExp(`^/api/sessions/${ID}/(questions|artifacts)/${ID}$`)],

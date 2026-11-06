@@ -284,6 +284,13 @@ export class InterviewStore {
     const { title, stageVisible, origin } =
       sealed ?? SessionInputSchema.parse(input);
     const kid = sealed?.encryption.kid ?? null;
+    // Once an account encrypts, nothing plain gets in: an older client is told to update.
+    if (!sealed && this.accountKey())
+      throw new Error(
+        "This account encrypts interviews end to end; update kim (`kim update`) and sign in again (`kim login`)",
+      );
+    if (kid && first(this.sql, "SELECT 1 FROM sessions WHERE kid = ?", kid))
+      throw new Error("That interview key is already in use");
     if (sealed) sealedUnder(kid!, { title, origin });
     if (this.count("sessions") >= LIMITS.interviews)
       throw new Error(
@@ -1647,7 +1654,7 @@ export class InterviewStore {
     for (const grant of grants)
       this.sql.all(
         `INSERT INTO grants (session_id, fp, role, wrapped, created_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (session_id, fp) DO UPDATE SET role=excluded.role, wrapped=excluded.wrapped`,
+         ON CONFLICT (session_id, fp) DO NOTHING`,
         sessionId,
         grant.fp,
         grant.role,

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Account } from "./Account.js";
 import { EncryptionBanner, EncryptionDialogHost } from "./Encryption.js";
 import { encryption, useEncryption } from "./keys.js";
@@ -39,17 +39,6 @@ export function Home() {
   );
   const [shared, setShared] = useState<SharedInterview[]>([]);
   const [live, setLive] = useState("");
-  // An assignee who set up encryption after being assigned gets the key
-  // once the owner's page can give it to them: once per visit.
-  const shared_ = useRef(new Set<string>());
-  useEffect(() => {
-    if (keys.status !== "unlocked") return;
-    for (const item of sessions ?? [])
-      if (item.kid && item.assignee && !shared_.current.has(item.token)) {
-        shared_.current.add(item.token);
-        void encryption.shareKey(item.token, item).catch(() => undefined);
-      }
-  }, [sessions, keys.status]);
 
   useEffect(() => {
     // The server pings open pages whenever an interview changes.

@@ -236,9 +236,14 @@ export function App() {
   // yet: their own other keys, and an assignee who has set up since.
   const shareFor =
     session && !session.respondent && kid ? (session.assignee ?? "") : null;
+  const [assigneeWaiting, setAssigneeWaiting] = useState(false);
   useEffect(() => {
     if (shareFor === null || !canOpen || !session) return;
     void encryption.shareKey(token, session).catch(() => undefined);
+    void encryption
+      .assigneeWaiting(session)
+      .then(setAssigneeWaiting)
+      .catch(() => setAssigneeWaiting(false));
   }, [shareFor, canOpen]);
 
   // The agent's focus replaces the user's own; its "show" fits that frame.
@@ -556,7 +561,7 @@ export function App() {
                 : `Send ${sendable.length} draft${sendable.length === 1 ? "" : "s"}`}
             </button>
           )}
-          {active && acceptable.length > 0 && (
+          {active && acceptable.length > 0 && canOpen !== false && (
             <button
               className="accept-all"
               type="button"
@@ -593,6 +598,26 @@ export function App() {
         {error && (
           <div className="notice" role="status">
             {error}
+          </div>
+        )}
+        {assigneeWaiting && session.assignee && (
+          <div className="notice locked" role="status">
+            {session.assignee} can open encrypted interviews now. Give them
+            access to this one?
+            <button
+              type="button"
+              onClick={() =>
+                void encryption
+                  .shareKey(token, session, { assignee: true })
+                  .then(() => {
+                    setAssigneeWaiting(false);
+                    return refresh();
+                  })
+                  .catch((failure: Error) => setError(failure.message))
+              }
+            >
+              Give access
+            </button>
           </div>
         )}
         {session.kid && canOpen === false && (
@@ -651,7 +676,7 @@ function LockedNotice({
     return (
       <div className="notice locked" role="status">
         {session.respondent
-          ? `This interview is end-to-end encrypted. Turn on encryption, then ${owner} opens it once to share it with you.`
+          ? `This interview is end-to-end encrypted. Turn on encryption, then ${owner} can give you access from its page.`
           : "This interview is end-to-end encrypted. Turn on encryption to read it."}
         <button type="button" onClick={() => openEncryption("setup")}>
           Turn on
@@ -661,7 +686,7 @@ function LockedNotice({
   return (
     <div className="notice locked" role="status">
       {session.respondent
-        ? `This interview is end-to-end encrypted. It opens here once ${owner} opens it again, which shares it with your key.`
+        ? `This interview is end-to-end encrypted. It opens here once ${owner} gives you access from its page.`
         : "This interview is end-to-end encrypted under another of your accounts. Open it there once to share it with this one."}
     </div>
   );

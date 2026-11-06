@@ -98,8 +98,12 @@ export class Encryption {
     ).catch(() => ({}))) as {
       grants?: Array<{ kid: string; wrapped: string }>;
     };
-    for (const grant of grants)
-      found.set(grant.kid, await openGrant(account, grant.kid, grant.wrapped));
+    for (const grant of grants) {
+      const key = await openGrant(account, grant.kid, grant.wrapped).catch(
+        () => null,
+      );
+      if (key) found.set(grant.kid, key);
+    }
     // Interviews sent to this user are in their senders' workspaces.
     for (const token of this.inboxTokens) {
       if (kids.every((kid) => found.has(kid))) break;
@@ -392,7 +396,7 @@ export class Encryption {
             ? response
             : {
                 ...(response as Json),
-                encryption: `${email.trim()} hasn't set up encryption yet, so they can't open it until they have and you've opened the interview's page once after that`,
+                encryption: `${email.trim()} hasn't set up encryption yet, so they can't open it until they have and you've chosen Give access on the interview's page`,
               },
       };
     }

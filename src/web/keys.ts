@@ -239,6 +239,11 @@ class BrowserEncryption {
   };
   private account: AccountKey | null = null;
   private readonly listeners = new Set<() => void>();
+  /** Told when the browser locks: whatever was opened must go. */
+  private readonly lockListeners = new Set<() => void>();
+  onLock(listener: () => void) {
+    this.lockListeners.add(listener);
+  }
   private started: Promise<void> | null = null;
   /** Interviews this page reaches by token: as an assignee, or shared lists. */
   private readonly tokens = new Set<string>();
@@ -453,6 +458,7 @@ class BrowserEncryption {
     this.account = null;
     this.keyring.clear();
     this.triedTokens.clear();
+    for (const listener of this.lockListeners) listener();
     this.set({ status: this.state.server ? "locked" : "off" });
   }
 
@@ -473,9 +479,10 @@ class BrowserEncryption {
   }
 
   /**
-   * Gives everyone who should hold an interview's key a grant: the owner's
-   * own keys (and linked accounts'), and the assignee's. Only a client
-   * holding the key can, so the owner's pages do it when they open.
+   * Gives the owner's own keys (and their linked accounts') a grant they
+   * don't have yet, and with `assignee`, the assignee's keys: only when the
+   * owner says so, since anyone who can assign could name themselves. Only
+   * a client holding the key can, so the owner's pages do it.
    */
   async shareKey(
     token: string,
@@ -485,17 +492,19 @@ class BrowserEncryption {
       assignee: string | null;
       respondent?: boolean | undefined;
     },
+    options: { assignee?: boolean } = {},
   ): Promise<void> {
     if (!session.kid || session.respondent || !(await this.ready())) return;
     const key = await this.keyring.get(session.kid);
     if (!key) return;
     type Listed = { fp: string; publicKey: PublicKey };
     const own = await getJson<{ keys: Listed[] }>("/api/browser/pubkeys");
-    const theirs = session.assignee
-      ? await getJson<{ keys: Listed[] }>(
-          `/api/browser/pubkeys?email=${encodeURIComponent(session.assignee)}`,
-        ).catch(() => ({ keys: [] as Listed[] }))
-      : { keys: [] as Listed[] };
+    const theirs =
+      session.assignee && options.assignee
+        ? await getJson<{ keys: Listed[] }>(
+            `/api/browser/pubkeys?email=${encodeURIComponent(session.assignee)}`,
+          ).catch(() => ({ keys: [] as Listed[] }))
+        : { keys: [] as Listed[] };
     const have = new Set(session.grants ?? []);
     const wanted = [
       ...own.keys.map((listed) => ({ ...listed, role: "owner" })),
@@ -511,6 +520,20 @@ class BrowserEncryption {
         })),
       ),
     });
+  }
+
+  /** Whether an assignee has a key the interview isn't granted to yet. */
+  async assigneeWaiting(session: {
+    kid: string | null;
+    grants?: string[] | undefined;
+    assignee: string | null;
+  }): Promise<boolean> {
+    if (!session.kid || !session.assignee) return false;
+    const { keys } = await getJson<{ keys: Array<{ fp: string }> }>(
+      `/api/browser/pubkeys?email=${encodeURIComponent(session.assignee)}`,
+    ).catch(() => ({ keys: [] as Array<{ fp: string }> }));
+    const have = new Set(session.grants ?? []);
+    return keys.some((listed) => !have.has(listed.fp));
   }
 
   /** Grants for an assignee about to be given an interview, from its key. */

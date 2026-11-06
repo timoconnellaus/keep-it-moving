@@ -25,6 +25,7 @@ import { normalizeRemote, projectName } from "./shared/remote.js";
 import { NoBrowser, renderScreenshot } from "./render.js";
 import { encodeContentKey, Encryption } from "./sealedApi.js";
 import {
+  handoffCode,
   importAccountKey,
   newAccountKey,
   unwrapWith,
@@ -1922,6 +1923,9 @@ async function login() {
     writeCredentials(credentials);
     process.stderr.write(
       "Signed in. Finish in your browser to give kim your encryption key (unlock, or set it up), or choose Not now there. Ctrl-C is safe: you stay signed in.\n",
+    );
+    process.stderr.write(
+      `If the browser asks, check it shows this code: ${await handoffCode(handoff.publicKey)}\n`,
     );
     const keyTimeout = setTimeout(() => keyArrived(null), 600_000);
     const wrapped = await keyResult;

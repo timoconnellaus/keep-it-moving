@@ -132,7 +132,7 @@ export function Assign({
                 {session.assignee}, and see only this interview.
                 {session.kid &&
                   !session.assigneeKey &&
-                  " It's end-to-end encrypted: they can open it once they've turned on encryption and you've opened this page again."}
+                  " It's end-to-end encrypted: once they've turned on encryption, this page offers to give them access."}
               </p>
               <div className="assign-actions">
                 <button type="button" onClick={() => void copy()}>
