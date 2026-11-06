@@ -114,6 +114,7 @@ export const artifactKinds = [
   "diagram",
   "mockup",
   "design",
+  "tokens",
 ] as const;
 export type ArtifactKind = (typeof artifactKinds)[number];
 
@@ -312,11 +313,18 @@ export interface ArtifactView {
   repo?: RepoView;
   /** It is written to the repo when the interview stops. */
   keep: boolean;
+  /**
+   * A mockup using the design system: the revision of the tokens it is
+   * drawn with, so its frame reloads when they change.
+   */
+  tokensRevision?: number;
 }
 /** Where an artifact came from, as views show it. */
 export interface RepoView {
   path: string;
   baseCommit: string | null;
+  /** It was pulled from the repo, rather than made here to be written there. */
+  pulled: boolean;
   /** It differs from the repo copy it was pulled from. */
   changed: boolean;
 }

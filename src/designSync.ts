@@ -18,7 +18,10 @@ export const KIM_DIR = ".kim";
 /** Plans record what was decided then: later interviews read them, never rewrite them. */
 export const PLANS_DIR = `${KIM_DIR}/plans/`;
 
-type Kind = "plan" | "document" | "diagram" | "mockup" | "design";
+type Kind = "plan" | "document" | "diagram" | "mockup" | "design" | "tokens";
+
+/** The design system's tokens, which mockups link to use them. */
+export const TOKENS_PATH = `${KIM_DIR}/design-system/tokens.css`;
 
 /** Where an artifact came from in the repo, with its content then. */
 export interface RepoOrigin {
@@ -108,9 +111,10 @@ export function itemFor(
   const designType = designTypeOf(path, content);
   if (designType) return { kind: "design", designType };
   if (/\.html?$/i.test(path)) return { kind: "mockup" };
+  if (/\.css$/i.test(path)) return { kind: "tokens" };
   if (/\.(md|markdown|txt)$/i.test(path)) return { kind: "document" };
   throw new Error(
-    `kim doesn't know what ${path} is; it reads .dbml, .d2, .mmd, OpenAPI .yaml, .html and .md files`,
+    `kim doesn't know what ${path} is; it reads .dbml, .d2, .mmd, OpenAPI .yaml, .html, .css and .md files`,
   );
 }
 
@@ -130,6 +134,12 @@ export function pullItem(root: string, path: string): PulledItem {
     },
   };
 }
+
+/** Whether a page links the design system's tokens. */
+export const linksTokens = (html: string) =>
+  /<link\b[^>]*\bhref\s*=\s*["']?[^"'>\s]*design-system\/tokens\.css/i.test(
+    html,
+  );
 
 /** Everything in .kim/ an interview could pull, for the agent to choose from. */
 export function listKimFiles(
@@ -201,7 +211,7 @@ export function keepRefusal(item: {
   if (item.repo?.path.startsWith(PLANS_DIR))
     return `"${item.title}" is a past plan, which stays as it was decided; write what changed in this interview's plan`;
   if (item.repo) return null;
-  if (["design", "mockup", "plan"].includes(item.kind)) return null;
+  if (["design", "mockup", "plan", "tokens"].includes(item.kind)) return null;
   return `"${item.title}" is a ${item.kind}; kim keeps designs, mockups, the plan, and files pulled from ${KIM_DIR}/`;
 }
 

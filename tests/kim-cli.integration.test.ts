@@ -854,6 +854,46 @@ describe("design", { timeout: 30_000 }, () => {
     ).toContain("name text\n  plan text");
   });
 
+  it("brings the design system along with a mockup that uses it", async () => {
+    const { dir, run } = await repoWithDesigns();
+    mkdirSync(join(dir, ".kim/design-system"), { recursive: true });
+    mkdirSync(join(dir, ".kim/mockups"), { recursive: true });
+    writeFileSync(
+      join(dir, ".kim/design-system/tokens.css"),
+      ":root { --blue: #1f6bff; }",
+    );
+    writeFileSync(
+      join(dir, ".kim/mockups/landing.html"),
+      '<!doctype html><html><head><link rel="stylesheet" href="../design-system/tokens.css"></head><body></body></html>',
+    );
+    const session = await run("session", "create", "--title", "Landing");
+    const { artifacts } = await run(
+      "design",
+      "pull",
+      session.id,
+      ".kim/mockups/landing.html",
+    );
+    expect(
+      artifacts.map((item: { kind: string; title: string }) => [
+        item.kind,
+        item.title,
+      ]),
+    ).toEqual([
+      ["tokens", "Design system"],
+      ["mockup", "Landing"],
+    ]);
+    // Once is enough.
+    const again = await run(
+      "design",
+      "pull",
+      session.id,
+      ".kim/mockups/landing.html",
+    );
+    expect(again.artifacts.map((item: { kind: string }) => item.kind)).toEqual([
+      "mockup",
+    ]);
+  });
+
   it("won't keep a past plan", async () => {
     const { dir, attempt, run } = await repoWithDesigns();
     mkdirSync(join(dir, ".kim/plans"), { recursive: true });

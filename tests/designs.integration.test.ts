@@ -143,6 +143,7 @@ describe("system designs", () => {
     expect(design.repo).toEqual({
       path: ".kim/designs/data-model.dbml",
       baseCommit: null,
+      pulled: true,
       changed: false,
     });
   });

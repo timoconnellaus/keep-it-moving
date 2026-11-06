@@ -1198,6 +1198,7 @@ describe("questionnaire UI seam", () => {
             repo: {
               path: ".kim/designs/data-model.dbml",
               baseCommit: "8149a37",
+              pulled: true,
               changed: true,
             },
             keep: true,
@@ -1268,6 +1269,35 @@ describe("questionnaire UI seam", () => {
         expect(
           within(panel()).queryByRole("checkbox", { name: /Compare/ }),
         ).toBeNull();
+      });
+
+      it("shows the design system on the canvas only once the interview changes it", async () => {
+        const session = workspace();
+        const tokens = artifact({
+          id: "t",
+          kind: "tokens",
+          format: "html",
+          title: "Design system",
+          content: "",
+          repo: {
+            path: ".kim/design-system/tokens.css",
+            baseCommit: null,
+            pulled: true,
+            changed: false,
+          },
+        });
+        session.artifacts.push(tokens);
+        serve(session);
+        const { unmount } = render(<App />);
+        await vi.waitFor(() => expect(frame("Layout A")).toBeDefined());
+        expect(frame("Design system")).toBeUndefined();
+        expect(tab(/Design/)).toHaveTextContent("Design2");
+        unmount();
+
+        tokens.repo!.changed = true;
+        serve(session);
+        render(<App />);
+        await vi.waitFor(() => expect(frame("Design system")).toBeDefined());
       });
 
       it("goes to the tab that holds what a question shows", async () => {

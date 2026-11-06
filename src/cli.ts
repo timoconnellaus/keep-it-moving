@@ -71,6 +71,8 @@ import {
   defaultPath,
   keepRefusal,
   kimPath,
+  linksTokens,
+  TOKENS_PATH,
   listKimFiles,
   planWrites,
   previewPath,
@@ -317,6 +319,7 @@ const KIND_BY_EXTENSION: Record<string, string> = {
   svg: "diagram",
   html: "mockup",
   htm: "mockup",
+  css: "tokens",
 };
 
 const ARCHIFY_TYPES = new Set([
@@ -593,6 +596,34 @@ async function designCommand(action: string | undefined, args: string[]) {
     if (!paths.length) throw new Error("Name the .kim/ files to pull");
     const root = await interviewRepo(sessionId);
     const added = [];
+    // A mockup using the design system needs its tokens to draw; they
+    // come along, out of sight until the interview changes them.
+    const linked = paths.some((path) => {
+      const file = kimPath(root, process.cwd(), path);
+      return (
+        /\.html?$/i.test(file) &&
+        linksTokens(readFileSync(join(root, file), "utf8"))
+      );
+    });
+    if (
+      linked &&
+      existsSync(join(root, TOKENS_PATH)) &&
+      !paths.some((path) => kimPath(root, process.cwd(), path) === TOKENS_PATH)
+    ) {
+      const session = (await api(`/api/sessions/${sessionId}`)) as {
+        artifacts: Array<{ kind: string }>;
+      };
+      if (!session.artifacts.some((artifact) => artifact.kind === "tokens"))
+        added.push(
+          await api(`/api/sessions/${sessionId}/artifacts`, {
+            method: "POST",
+            body: JSON.stringify({
+              ...pullItem(root, TOKENS_PATH),
+              title: "Design system",
+            }),
+          }),
+        );
+    }
     for (const path of paths) {
       const item = pullItem(root, kimPath(root, process.cwd(), path));
       const refusal = args.includes("--keep") && keepRefusal(item);

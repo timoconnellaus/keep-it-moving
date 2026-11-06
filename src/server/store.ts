@@ -36,6 +36,7 @@ import {
 import { projectName } from "../shared/remote.js";
 import { artifactFormat } from "../shared/workspace.js";
 import { designPage } from "./designPage.js";
+import { tokensPage, usesTokens, withTokens } from "./tokensPage.js";
 import { first, type Row, type Sql } from "./sql.js";
 
 const now = () => new Date().toISOString();
@@ -557,7 +558,7 @@ export class InterviewStore {
                 answeredBy: optional(row.answered_by),
               },
       })),
-      artifacts: artifacts.map(this.mapArtifact),
+      artifacts: this.withTokensRevision(id, artifacts.map(this.mapArtifact)),
       positions: this.positions(id, new Set(artifacts.map((row) => row.id))),
       stage: session.stage_artifact_id
         ? {
@@ -1480,6 +1481,7 @@ export class InterviewStore {
             repo: {
               path: repo.path,
               baseCommit: repo.baseCommit,
+              pulled: repo.baseContent !== null,
               changed: repo.baseContent !== String(row.content),
             },
           }
@@ -1510,7 +1512,48 @@ export class InterviewStore {
           base: repoOf(row)?.baseContent ?? null,
         }),
       };
+    if (view.kind === "tokens")
+      return {
+        format: "html",
+        content: tokensPage(
+          view.title,
+          view.content!,
+          repoOf(row)?.baseContent ?? null,
+        ),
+      };
+    const tokens = view.format === "html" && this.tokensOf(sessionId);
+    if (tokens && usesTokens(view.content!))
+      return {
+        format: "html",
+        content: withTokens(view.content!, String(tokens.content)),
+      };
     return { format: view.format, content: view.content! };
+  }
+
+  /** The interview's design system tokens, if it has them. */
+  private tokensOf(sessionId: string): Row | undefined {
+    return first(
+      this.sql,
+      "SELECT * FROM artifacts WHERE session_id=? AND kind='tokens' AND deleted=0 ORDER BY created_at LIMIT 1",
+      sessionId,
+    );
+  }
+
+  /** Mockups that use the tokens learn their revision, to reload when they change. */
+  private withTokensRevision(
+    sessionId: string,
+    artifacts: ArtifactView[],
+  ): ArtifactView[] {
+    const tokens = this.tokensOf(sessionId);
+    if (!tokens) return artifacts;
+    return artifacts.map((artifact) =>
+      artifact.format === "html" &&
+      artifact.kind !== "tokens" &&
+      artifact.kind !== "design" &&
+      usesTokens(artifact.content ?? "")
+        ? { ...artifact, tokensRevision: Number(tokens.revision) }
+        : artifact,
+    );
   }
 
   /**

@@ -37,7 +37,8 @@ export type Tab = keyof typeof TABS;
  */
 export function tabFor(artifact: ArtifactView): Tab {
   if (artifact.kind === "design") return "system";
-  if (artifact.kind === "diagram") return "design";
+  if (artifact.kind === "diagram" || artifact.kind === "tokens")
+    return "design";
   if (artifact.format === "html") return "html";
   if (artifact.format === "markdown" || artifact.format === "text")
     return "document";
@@ -83,8 +84,16 @@ export function Workspace({
   fit: FitRequest | null;
   onComment(pin: PlacedPin): void;
 }) {
+  // The design system is loaded for the mockups that use it, but only
+  // shown once the interview changes it (or makes one).
+  const visible = session.artifacts.filter(
+    (artifact) =>
+      artifact.kind !== "tokens" ||
+      !artifact.repo?.pulled ||
+      artifact.repo.changed,
+  );
   const inTab = (tab: Tab) =>
-    session.artifacts.filter((artifact) =>
+    visible.filter((artifact) =>
       tab === "design"
         ? tabFor(artifact) === "design" || tabFor(artifact) === "html"
         : tabFor(artifact) === tab,
@@ -249,7 +258,7 @@ function rememberedCompare(): boolean {
 export function RepoBadges({ artifact }: { artifact: ArtifactView }) {
   return (
     <span className="repo-badges">
-      {artifact.repo && (
+      {artifact.repo?.pulled && (
         <span className="repo-badge from" title={artifact.repo.path}>
           From repo
         </span>
@@ -337,7 +346,7 @@ function SystemPane({
     }))
     .filter((group) => group.items.length);
 
-  const tools = artifact.repo && (
+  const tools = artifact.repo?.pulled && (
     <>
       {counts && (
         <span className={`design-changes${total ? " some" : ""}`}>
