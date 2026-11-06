@@ -109,12 +109,12 @@ Artifact ids come back from `artifact add`. `session show` lists artifacts witho
 
 When you plan a feature technically, work through its data model, architecture and flows as **system designs** on the System tab. Each is a text file in the format that suits it, and the user comments on its tables, boxes and arrows as on a mockup:
 
-| Type | Format | File |
-| --- | --- | --- |
-| `data-model` | DBML | `.dbml` |
-| `architecture`, `data-flow` | D2 | `.d2` (`name.data-flow.d2` for data flow) |
-| `sequence`, `state` | Mermaid (`sequenceDiagram`, `stateDiagram-v2`) | `.mmd` |
-| `api` | OpenAPI 3 YAML | `.yaml` |
+| Type                        | Format                                         | File                                      |
+| --------------------------- | ---------------------------------------------- | ----------------------------------------- |
+| `data-model`                | DBML                                           | `.dbml`                                   |
+| `architecture`, `data-flow` | D2                                             | `.d2` (`name.data-flow.d2` for data flow) |
+| `sequence`, `state`         | Mermaid (`sequenceDiagram`, `stateDiagram-v2`) | `.mmd`                                    |
+| `api`                       | OpenAPI 3 YAML                                 | `.yaml`                                   |
 
 `kim artifact add <session> --file checkout.dbml --title "Checkout schema" --description "…"` detects the type (`--type` sets it). Put notes and reasons in the file itself (DBML `Note`, D2 labels and `#` comments, Mermaid `%%` comments and `Note`, OpenAPI `description`), so they travel with the design. Update the same artifact as the design changes, rather than adding another.
 
@@ -122,7 +122,7 @@ The repo's `.kim/` folder holds what earlier interviews kept: `designs/`, `mocku
 
 - **Pull only what the conversation needs.** `kim design list` shows what's there; `kim design pull <session> .kim/designs/data-model.dbml` adds a copy, and the workspace highlights what changed compared with the repo. A conversation about the schema gets the data model, not the design system. Nothing from `.kim/` is shown unless you pull it.
 - **Past plans are read only.** Pull one for context when it helps; record what changed in this interview's own plan.
-- **You decide what goes back.** `kim design keep <session> <artifact>` marks a design, mockup or the plan to be written to `.kim/` when the interview stops; `kim design drop` unmarks it. The user sees a *Saves to repo* or *Interview only* badge on each, and may ask you to change it. Keep what the PR should carry, such as the finished data model and the plan (it goes to `.kim/plans/<date>-<title>.md`); leave drafts and rejected options.
+- **You decide what goes back.** `kim design keep <session> <artifact>` marks a design, mockup or the plan to be written to `.kim/` when the interview stops; `kim design drop` unmarks it. The user sees a _Saves to repo_ or _Interview only_ badge on each, and may ask you to change it. Keep what the PR should carry, such as the finished data model and the plan (it goes to `.kim/plans/<date>-<title>.md`); leave drafts and rejected options.
 - **The design system is optional.** Without one, mockups carry their own styles, as they always have. Never ask for one or create one unless the user asks. When they do, draft it from the app's own CSS or Tailwind theme: `tokens.css` (colours, type, spacing, radius and shadows as CSS custom properties on `:root`), a `components.html` gallery that links it, and a short `README.md`. Add the tokens with `kim artifact add <session> --file tokens.css --title "Design system" --keep`, and the gallery with `--repo-path .kim/design-system/components.html --keep`.
 - **Mockups that use it link it** (`<link rel="stylesheet" href="../design-system/tokens.css">`) and use `var(--…)`. In the interview they are drawn with its current tokens, and `kim design pull` brings the tokens along with such a mockup. The tokens stay out of sight until you change them: then they appear on the Design canvas with the change highlighted, and every mockup using them redraws. When the user asks for a visual change ("make it blue"), decide whether it's the brand (change the token) or one screen (change that mockup), and say which in your reply, e.g. "changed `--accent` in the design system, which affects 3 mockups".
 - **Stopping writes them.** Run `kim session stop` inside the repo: it writes the kept items to `.kim/` (pulled items to their own path, new ones under `designs/`, `mockups/` or `plans/`), for the user to commit with the code. If a file changed since you pulled it, nothing is written and the interview stays running. Merge the saved `ours`, `theirs` and `base` versions, run `kim design rebase <session> <artifact> --file <merged>`, tell the user what you merged (the canvas now compares with the repo's current version), and stop again.

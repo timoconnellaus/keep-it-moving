@@ -1,6 +1,6 @@
 # System design canvases, backed by the repo
 
-**Goal:** when you plan a feature technically, work through the data model, architecture and flows *in* the interview, starting from what's already in the repo and ending with updated files committed in the PR.
+**Goal:** when you plan a feature technically, work through the data model, architecture and flows _in_ the interview, starting from what's already in the repo and ending with updated files committed in the PR.
 
 ## What `.kim/` holds
 
@@ -19,12 +19,12 @@ Not stored: chat transcripts and answers. Everything in `.kim/` is **available c
 
 **Design types and formats**
 
-| Type | Format | Shown as |
-| --- | --- | --- |
-| Data model | DBML | entity diagram |
-| Architecture, data flow | D2 | diagram |
-| Sequence, state machine | Mermaid | diagram |
-| API contract | OpenAPI (YAML) | endpoint cards |
+| Type                    | Format         | Shown as       |
+| ----------------------- | -------------- | -------------- |
+| Data model              | DBML           | entity diagram |
+| Architecture, data flow | D2             | diagram        |
+| Sequence, state machine | Mermaid        | diagram        |
+| API contract            | OpenAPI (YAML) | endpoint cards |
 
 - Notes and decisions live **inside the file**, using the format's own notes and comments.
 - kim writes a rendered **`.svg` beside each design**, so the PR shows the picture and its image diff. SVGs are rendered **on the server** with the site's renderer, and Mermaid uses Browser Rendering.
@@ -43,7 +43,7 @@ Not stored: chat transcripts and answers. Everything in `.kim/` is **available c
 **Repo sync**
 
 - Interviews pull **only from the repo**, as a copy that records its path and commit.
-- When the interview **stops**, kim writes to `.kim/` only the items the agent marked to keep. Badges show *Saves to repo* or *Interview only*.
+- When the interview **stops**, kim writes to `.kim/` only the items the agent marked to keep. Badges show _Saves to repo_ or _Interview only_.
 - If main changed since the copy, the **agent merges** base, theirs and ours, and you review the result.
 - Available to **every plan**, Free included.
 
