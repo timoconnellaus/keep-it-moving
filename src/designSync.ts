@@ -205,6 +205,11 @@ export function keepRefusal(item: {
   return `"${item.title}" is a ${item.kind}; kim keeps designs, mockups, the plan, and files pulled from ${KIM_DIR}/`;
 }
 
+/** Where a design's rendered preview goes: beside it, as SVG. */
+export function previewPath(path: string): string {
+  return path.replace(/\.[^./]+$/, "") + ".svg";
+}
+
 /** What writing one kept item does to the repo. */
 export interface WriteStep {
   artifactId: string;

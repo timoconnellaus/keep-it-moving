@@ -634,6 +634,20 @@ export function createHub(options: HubOptions) {
       ),
     ),
   );
+  // A design as its frame serves it, for its SVG preview.
+  app.get("/api/sessions/:id/artifacts/:artifactId/page", (c) => {
+    const id = c.req.param("id");
+    const artifact = store
+      .getSession(id, "")
+      .artifacts.find((item) => item.id === c.req.param("artifactId"));
+    if (!artifact) throw new Error("Artifact not found");
+    return c.json({
+      id: artifact.id,
+      kind: artifact.kind,
+      revision: artifact.revision,
+      content: store.artifactContent(id, artifact.id).content,
+    });
+  });
   // What `kim design write` writes, also once the interview has stopped.
   app.get("/api/sessions/:id/kept", (c) => {
     const session = store.getSession(c.req.param("id"), baseUrl);

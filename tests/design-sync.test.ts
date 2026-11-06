@@ -16,6 +16,7 @@ import {
   kimPath,
   listKimFiles,
   planWrites,
+  previewPath,
   pullItem,
   slug,
   type KeptItem,
@@ -122,6 +123,9 @@ describe("writing back", () => {
       defaultPath(kept({ kind: "mockup", title: "Pricing page" }), SESSION),
     ).toBe(".kim/mockups/pricing-page.html");
     expect(slug("  Ünïcode & Things!  ")).toBe("unicode-things");
+    expect(previewPath(".kim/designs/checkout.data-flow.d2")).toBe(
+      ".kim/designs/checkout.data-flow.svg",
+    );
   });
 
   it("never rewrites a past plan, and keeps only what belongs in .kim/", () => {

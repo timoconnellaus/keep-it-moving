@@ -73,6 +73,7 @@ import {
   kimPath,
   listKimFiles,
   planWrites,
+  previewPath,
   pullItem,
   repoRoot,
   type KeptItem,
@@ -189,7 +190,10 @@ async function sessionCommand(action: string | undefined, args: string[]) {
     const result = (await api(`/api/sessions/${id}/${action}`, {
       method: "POST",
     })) as Record<string, unknown>;
-    return output(write ? { ...result, written: write.written } : result);
+    if (!write) return output(result);
+    const wrote: Record<string, unknown> = { ...write };
+    delete wrote.conflicts;
+    return output({ ...result, ...wrote });
   }
   if (action === "assign") {
     const email = args.includes("--clear") ? null : positional(args, 1);
@@ -521,8 +525,13 @@ async function writeKept(
   });
   if (options.dryRun) return { plan: steps.map(summary), conflicts: [] };
   const { written, conflicts } = applyWrites(root, steps);
+  const previews = conflicts.length
+    ? { written: [], failed: [] }
+    : await writePreviews(sessionId, root, kept.artifacts, steps);
   return {
     written: written.map(summary),
+    ...(previews.written.length ? { previews: previews.written } : {}),
+    ...(previews.failed.length ? { previewsFailed: previews.failed } : {}),
     unchanged: steps
       .filter((step) => step.action === "unchanged")
       .map((step) => step.path),
@@ -534,6 +543,37 @@ async function writeKept(
         }
       : {}),
   };
+}
+
+/**
+ * Each written design's rendered SVG, beside it in the repo, so a PR shows
+ * the picture. A design that didn't change gets one only if it has none.
+ * A preview that fails leaves the design written, and says why.
+ */
+async function writePreviews(
+  sessionId: string,
+  root: string,
+  items: KeptItem[],
+  steps: WriteStep[],
+) {
+  const written: string[] = [];
+  const failed: Array<{ path: string; error: string }> = [];
+  for (const step of steps) {
+    const item = items.find((candidate) => candidate.id === step.artifactId);
+    if (item?.kind !== "design") continue;
+    const path = previewPath(step.path);
+    if (step.action === "unchanged" && existsSync(join(root, path))) continue;
+    const response = await authorizedFetch(
+      `/api/sessions/${sessionId}/artifacts/${item.id}/svg`,
+    );
+    if (!response.ok) {
+      failed.push({ path, error: (await apiError(response)).message });
+      continue;
+    }
+    writeFileSync(join(root, path), await response.text());
+    written.push(path);
+  }
+  return { written, failed };
 }
 
 async function designCommand(action: string | undefined, args: string[]) {

@@ -791,6 +791,14 @@ describe("design", { timeout: 30_000 }, () => {
     expect(
       readFileSync(join(dir, ".kim/designs/pull-a-design.mmd"), "utf8"),
     ).toContain("Agent->>kim");
+    // The previews render in Cloudflare's browser; without it, the designs
+    // are still written, and the agent hears why the previews aren't.
+    expect(
+      stopped.previewsFailed.map((item: { path: string }) => item.path),
+    ).toEqual([
+      ".kim/designs/data-model.svg",
+      ".kim/designs/pull-a-design.svg",
+    ]);
   });
 
   it("leaves the interview running when the repo file changed since the copy", async () => {

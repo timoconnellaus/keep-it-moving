@@ -40,6 +40,7 @@ import {
 } from "./plans.js";
 import { checkout, portal, stripeWebhook } from "./stripe.js";
 import { DESIGN_VIEWER_PATH } from "../server/designPage.js";
+import { DESIGN_SVG, designSvg } from "./designSvg.js";
 import {
   linkedEmails,
   linksResponse,
@@ -161,6 +162,23 @@ const agentApi: ExportedHandler<Env> = {
     // Tell the hub which requests a key made; a client can't claim either way.
     const forwarded = forwardable(request);
     if (props.via === "key") forwarded.headers.set(VIA_KEY_HEADER, "1");
+    const svg = DESIGN_SVG.exec(path);
+    if (svg && request.method === "GET")
+      return designSvg(env, email, () =>
+        toHub(
+          env,
+          email,
+          forwardable(
+            new Request(
+              new URL(
+                `/api/sessions/${svg[1]}/artifacts/${svg[2]}/page`,
+                request.url,
+              ),
+              { headers: request.headers },
+            ),
+          ),
+        ),
+      );
     if (request.method === "POST" && AGENT_ASSIGN.test(path))
       return assign(
         env,
