@@ -60,7 +60,6 @@ import {
 } from "./shares.js";
 
 export { InterviewHub } from "./hub.js";
-export { ScreenshotBudget } from "./screenshotBudget.js";
 
 const PUBLIC_FILES =
   /^\/(assets\/|icons\/|manifest\.webmanifest$|sw\.js$|cli\.tgz$|cli-version\.json$)/;

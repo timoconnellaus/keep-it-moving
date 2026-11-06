@@ -39,7 +39,6 @@
     "setup:agents": "npm run link:skill && node scripts/add-global-context.mjs"
   },
   "dependencies": {
-    "@cloudflare/puppeteer": "^1.4.0",
     "@cloudflare/workers-oauth-provider": "^1.2.1",
     "@xyflow/react": "^12.12.0",
     "env-paths": "^3.0.0",

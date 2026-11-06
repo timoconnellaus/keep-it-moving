@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import envPaths from "env-paths";
 import { checkbox } from "./checkbox.js";
 import { normalizeRemote, projectName } from "./shared/remote.js";
+import { NoBrowser, renderScreenshot } from "./render.js";
 import {
   type AgentId,
   canonicalSkill,
@@ -702,38 +703,58 @@ async function draftCommand(args: string[]) {
 }
 
 /**
- * Renders an html artifact, as its frame shows it, to a PNG: in one of
- * Cloudflare's browsers, through the Worker, never one on this machine.
+ * Renders an html or svg artifact, as its frame shows it, to a PNG in a
+ * browser on this machine (see render.ts); the service only hands over the
+ * page. With no browser here, it saves the page for the agent's own
+ * browser tool, or for reading.
  */
 async function inboxScreenshot(interview: string, args: string[]) {
-  const artifact = encodeURIComponent(positional(args, 1));
-  const query = new URLSearchParams();
-  const width = flag(args, "--width");
-  if (width !== undefined) query.set("width", width);
+  const id = positional(args, 1);
+  const artifact = (await api(
+    `/api/sessions/inbox/${interview}/artifacts/${encodeURIComponent(id)}`,
+  )) as {
+    title: string;
+    format: string;
+    revision: number;
+    frame: { width: number; height: number | null };
+    content: string;
+  };
+  if (artifact.format !== "html" && artifact.format !== "svg")
+    throw new Error(
+      `"${artifact.title}" is ${artifact.format}, not a page; read it with kim inbox artifact`,
+    );
+  const width = Number(flag(args, "--width") ?? artifact.frame.width);
+  if (!Number.isInteger(width) || width < 100 || width > 4_000)
+    throw new Error("--width is a number of pixels, such as 1280, 834 or 390");
   const fullPage = args.includes("--full-page");
-  if (fullPage) query.set("fullPage", "1");
-  const response = await authorizedFetch(
-    `/api/sessions/inbox/${interview}/artifacts/${artifact}/screenshot${query.size ? `?${query}` : ""}`,
-  );
-  if (!response.ok) throw await apiError(response);
-  const shown = Number(response.headers.get("x-kim-width"));
-  const revision = Number(response.headers.get("x-kim-revision"));
-  const out = resolve(
-    flag(args, "--out") ??
-      join(
-        tmpdir(),
-        "kim-screenshots",
-        `${decodeURIComponent(artifact).replace(/[^A-Za-z0-9_-]+/g, "-")}-r${revision}-${shown}${fullPage ? "-full" : ""}.png`,
-      ),
-  );
+  const name = `${id.replace(/[^A-Za-z0-9_-]+/g, "-")}-r${artifact.revision}-${width}${fullPage ? "-full" : ""}`;
+  const folder = join(tmpdir(), "kim-screenshots");
+  let shot: { png: Buffer; height: number };
+  try {
+    shot = await renderScreenshot({
+      format: artifact.format,
+      content: artifact.content,
+      width,
+      height: artifact.frame.height ?? 800,
+      fullPage,
+    });
+  } catch (error) {
+    if (!(error instanceof NoBrowser)) throw error;
+    const page = join(folder, `${name}.${artifact.format}`);
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(page, artifact.content);
+    throw new Error(
+      `${error.message}. The page is saved at ${page}: open it at ${width}px wide with your own browser tool to see it, or read it.`,
+    );
+  }
+  const out = resolve(flag(args, "--out") ?? join(folder, `${name}.png`));
   mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, new Uint8Array(await response.arrayBuffer()));
+  writeFileSync(out, shot.png);
   return output({
     file: out,
-    width: shown,
-    height: Number(response.headers.get("x-kim-height")),
-    revision,
-    cached: response.headers.get("x-kim-cache") === "hit",
+    width,
+    height: shot.height,
+    revision: artifact.revision,
   });
 }
 
@@ -2002,7 +2023,8 @@ Interviews sent to you (someone assigned you one; your agent drafts, you send):
   inbox show <interview>   its questions with answers, drafts and threads, the chat, and the workspace
   inbox artifact <interview> <artifact> [--out <file>]   the artifact as its frame serves it
   inbox screenshot <interview> <artifact> [--width N] [--full-page] [--out <file.png>]
-    renders an html artifact in the service's browser (Pro); saves the PNG and prints its path
+    renders an html or svg artifact in Chrome, Edge or Chromium on this machine
+    (KIM_BROWSER picks one); saves the PNG and prints its path
   inbox chat <interview> [--question <question>] <text>   message the sender's agent, as you
   inbox wait [<interview>] [--timeout MS]   blocks until a new question, reply, workspace change or interview
   draft <interview> <question> [answer…] [--option <label>]… [--note <text>] [--skip] [--send] | --clear

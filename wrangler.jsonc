@@ -17,22 +17,14 @@
     "run_worker_first": true,
   },
   "durable_objects": {
-    "bindings": [
-      { "name": "HUB", "class_name": "InterviewHub" },
-      { "name": "SCREENSHOT_BUDGET", "class_name": "ScreenshotBudget" },
-    ],
+    "bindings": [{ "name": "HUB", "class_name": "InterviewHub" }],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["InterviewHub"] },
     { "tag": "v2", "new_sqlite_classes": ["ScreenshotBudget"] },
-  ],
-  // `kim inbox screenshot` renders in Cloudflare's browsers (Browser Run)
-  // and keeps each PNG in R2. The bucket's lifecycle rule deletes them a
-  // week after they're made:
-  //   wrangler r2 bucket lifecycle add kim-screenshots expire-screenshots screenshots/ --expire-days 7
-  "browser": { "binding": "BROWSER" },
-  "r2_buckets": [
-    { "binding": "SCREENSHOTS", "bucket_name": "kim-screenshots" },
+    // Screenshots render on the agent's machine now (`kim inbox screenshot`);
+    // the ledger of Cloudflare browser time they used to keep goes with them.
+    { "tag": "v3", "deleted_classes": ["ScreenshotBudget"] },
   ],
   "kv_namespaces": [
     { "binding": "OAUTH_KV", "id": "362d9bb9c4cb4509a8d8d3a540dad73c" },
