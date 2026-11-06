@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { Account } from "./Account.js";
+import { EncryptionBanner, EncryptionDialogHost } from "./Encryption.js";
+import { encryption, useEncryption } from "./keys.js";
 import { GetStarted } from "./GetStarted.js";
 import { liveSocket, probeStatus, STOP_MESSAGES } from "./liveSocket.js";
 import { Logo } from "./Logo.js";
@@ -30,7 +32,11 @@ interface SharedInterview {
  */
 export function Home() {
   const [version, setVersion] = useState(0);
-  const sessions = useOverview(version);
+  const keys = useEncryption();
+  // Unlocking opens what was locked: load again.
+  const sessions = useOverview(
+    version * 4 + ["loading", "off", "locked", "unlocked"].indexOf(keys.status),
+  );
   const [shared, setShared] = useState<SharedInterview[]>([]);
   const [live, setLive] = useState("");
 
@@ -53,9 +59,13 @@ export function Home() {
           ? (response.json() as Promise<{ interviews: SharedInterview[] }>)
           : null,
       )
-      .then((body) => setShared(body?.interviews ?? []))
+      .then(async (body) => {
+        const interviews = body?.interviews ?? [];
+        for (const item of interviews) encryption.noteToken(item.token);
+        setShared(await encryption.unseal(interviews));
+      })
       .catch(() => undefined);
-  }, []);
+  }, [keys.status]);
 
   const count = (who: string) =>
     (sessions ?? []).filter((item) => waitingOn(item)?.who === who).length;
@@ -89,6 +99,7 @@ export function Home() {
             </span>
           )}
         </div>
+        <EncryptionBanner />
         <GetStarted />
         {shared.length > 0 && (
           <section className="home-list" aria-label="Shared with you">
@@ -157,6 +168,7 @@ export function Home() {
           </section>
         )}
       </main>
+      <EncryptionDialogHost />
     </div>
   );
 }

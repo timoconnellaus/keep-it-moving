@@ -1,10 +1,94 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ControlValues } from "../shared/bindings.js";
 import type { ArtifactView } from "../shared/schema.js";
 import { artifactViewUrl } from "../shared/workspace.js";
+import { renderArtifact } from "../server/artifactView.js";
+import { framePage, type FrameParts } from "../server/framePage.js";
+import { LOCKED } from "../shared/crypto.js";
 import { svgImageUrl } from "./diagram.js";
+import { encryption, KidContext, useEncryption } from "./keys.js";
+
+/** Opened artifacts, by interview key, artifact and revision. */
+const opened = new Map<string, Promise<string | null>>();
+encryption.onLock(() => opened.clear());
+
+/**
+ * How an html artifact's frame gets its page. A plain interview's is
+ * served sandboxed at its own URL. An encrypted one's is fetched sealed,
+ * opened here and framed from memory, sandboxed the same way: scripts run
+ * in an opaque origin that can't reach this page or its API.
+ */
+export function useFrameSource(
+  token: string,
+  artifact: ArtifactView,
+  embed: boolean,
+): { src?: string; srcDoc?: string; sandbox?: string } {
+  const kid = useContext(KidContext);
+  const keys = useEncryption();
+  const html = artifact.format === "html";
+  // A mockup that uses the tokens rebuilds when they change.
+  const key = `${kid}:${artifact.id}:${artifact.revision}:${artifact.tokensRevision ?? 0}`;
+  const [content, setContent] = useState<{ key: string; html: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!kid || !html) return;
+    let live = true;
+    let load = opened.get(key);
+    if (!load) {
+      load = fetch(`/api/browser/${token}/artifacts/${artifact.id}/content`)
+        .then((response) =>
+          response.ok
+            ? (response.json() as Promise<{ parts: FrameParts }>)
+            : null,
+        )
+        .then((body) => (body ? encryption.unseal(body.parts) : null))
+        .catch(() => null)
+        .then((parts) => {
+          // Not opened yet: ask again once it can be.
+          if (
+            parts === null ||
+            parts.content.includes(LOCKED) ||
+            parts.tokens?.includes(LOCKED)
+          ) {
+            opened.delete(key);
+            return null;
+          }
+          return framePage(parts).content;
+        });
+      opened.set(key, load);
+    }
+    void load.then((value) => {
+      if (live && value !== null) setContent({ key, html: value });
+    });
+    return () => {
+      live = false;
+    };
+  }, [kid, html, key, token, keys.status]);
+  const srcDoc = useMemo(
+    () =>
+      content?.key === key
+        ? renderArtifact(
+            content.html,
+            {},
+            { query: `?theme=light${embed ? "&embed=1" : ""}` },
+          )
+        : undefined,
+    [content, key, embed],
+  );
+  if (!html) return {};
+  if (!kid) return { src: artifactViewUrl(token, artifact, { embed }) };
+  return srcDoc ? { srcDoc, sandbox: "allow-scripts" } : {};
+}
 
 /**
  * Keeps an html artifact's controls at `values`: posted to the frame's
@@ -214,6 +298,7 @@ export function ArtifactThumb({
 }) {
   const frame = useFrameValues(values);
   const thumb = useThumbScale();
+  const source = useFrameSource(token, artifact, artifact.kind === "diagram");
   if (artifact.format === "html")
     return (
       <div className="thumb" ref={thumb} aria-hidden="true">
@@ -226,9 +311,7 @@ export function ArtifactThumb({
           // the document (opaque origin, no popups, forms, or top-level
           // navigation), and some embedded browsers refuse to load
           // sandbox-attributed frames over the network.
-          src={artifactViewUrl(token, artifact, {
-            embed: artifact.kind === "diagram",
-          })}
+          {...source}
         />
       </div>
     );

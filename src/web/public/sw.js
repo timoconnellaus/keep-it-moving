@@ -9,6 +9,22 @@ self.addEventListener("activate", (event) =>
 );
 
 const ICON = "/icons/icon-192.png";
+
+/*
+ * An end-to-end encrypted interview's title and messages are sealed, and
+ * this worker doesn't hold the key: its notifications say what happened
+ * without saying what it was about.
+ */
+const SEALED = /kim1\.[A-Za-z0-9_-]{11}\./;
+const sealed = (text) => typeof text === "string" && SEALED.test(text);
+const titleOf = (session) =>
+  sealed(session.title)
+    ? session.project
+      ? `${session.project.name} · An encrypted interview`
+      : "An encrypted interview"
+    : session.project
+      ? `${session.project.name} · ${session.title}`
+      : session.title;
 const BADGE = "/icons/badge-96.png";
 
 async function waitingNotification() {
@@ -38,17 +54,16 @@ async function waitingNotification() {
   // An agent's chat reply pushes too; show it when it is the newest thing.
   if (reply && (!latest || reply.lastReply.at >= latest.lastActivity)) {
     const text = reply.lastReply.text;
-    return self.registration.showNotification(
-      reply.project ? `${reply.project.name} · ${reply.title}` : reply.title,
-      {
-        body: `Agent: ${text.length > 170 ? `${text.slice(0, 169)}…` : text}`,
-        icon: ICON,
-        badge: BADGE,
-        tag: "keep-it-moving",
-        renotify: true,
-        data: { url: `/s/${reply.token}` },
-      },
-    );
+    return self.registration.showNotification(titleOf(reply), {
+      body: sealed(text)
+        ? "The agent replied."
+        : `Agent: ${text.length > 170 ? `${text.slice(0, 169)}…` : text}`,
+      icon: ICON,
+      badge: BADGE,
+      tag: "keep-it-moving",
+      renotify: true,
+      data: { url: `/s/${reply.token}` },
+    });
   }
   // Every push must show something; this one is a test or already answered.
   if (!latest)
@@ -60,21 +75,18 @@ async function waitingNotification() {
       data: { url: "/" },
     });
   const others = waiting.length - 1;
-  return self.registration.showNotification(
-    latest.project ? `${latest.project.name} · ${latest.title}` : latest.title,
-    {
-      body:
-        `${latest.open} question${latest.open === 1 ? "" : "s"} waiting` +
-        (others
-          ? ` · ${others} more interview${others === 1 ? "" : "s"} need you`
-          : ""),
-      icon: ICON,
-      badge: BADGE,
-      tag: "keep-it-moving",
-      renotify: true,
-      data: { url: `/s/${latest.token}` },
-    },
-  );
+  return self.registration.showNotification(titleOf(latest), {
+    body:
+      `${latest.open} question${latest.open === 1 ? "" : "s"} waiting` +
+      (others
+        ? ` · ${others} more interview${others === 1 ? "" : "s"} need you`
+        : ""),
+    icon: ICON,
+    badge: BADGE,
+    tag: "keep-it-moving",
+    renotify: true,
+    data: { url: `/s/${latest.token}` },
+  });
 }
 
 /** The active interview whose agent replied in its chat most recently. */

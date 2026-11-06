@@ -9,6 +9,7 @@ import type {
   PinView,
   SessionView,
 } from "../shared/schema.js";
+import { encryption } from "./keys.js";
 
 /** A comment's pin, placed on the canvas and waiting for its message. */
 export type PinDraft = PinView & { title: string };
@@ -98,13 +99,15 @@ export function Chat({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          text: message,
+          text: await encryption.sealFor(session.kid, message),
           questionId: chat.about,
           ...(chat.pin && {
             pin: {
               artifactId: chat.pin.artifactId,
-              element: chat.pin.element,
-              selector: chat.pin.selector,
+              element: await encryption.sealFor(session.kid, chat.pin.element),
+              selector:
+                chat.pin.selector &&
+                (await encryption.sealFor(session.kid, chat.pin.selector)),
               x: chat.pin.x,
               y: chat.pin.y,
               fx: chat.pin.fx,

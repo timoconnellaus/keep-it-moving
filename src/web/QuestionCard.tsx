@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { literalLineBreaks } from "../shared/text.js";
 import { Inline, plainText } from "./inline.js";
@@ -22,6 +22,7 @@ import type {
 } from "../shared/schema.js";
 import { questionArtifacts } from "./canvasLayout.js";
 import { ArtifactThumb } from "./frames.js";
+import { encryption, KidContext } from "./keys.js";
 
 function initialAnswerState(
   question: QuestionView,
@@ -125,6 +126,7 @@ export function QuestionCard({
   const [selected, setSelected] = useState(initial.selected);
   const [note, setNote] = useState(initial.note);
   const [saving, setSaving] = useState(false);
+  const kid = useContext(KidContext);
   const [saveError, setSaveError] = useState("");
   const now = useNow();
   /** The option under the pointer or keyboard focus, previewed in the artifact. */
@@ -204,7 +206,10 @@ export function QuestionCard({
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ answer, skipped }),
+          body: JSON.stringify({
+            answer: answer ? await encryption.sealFor(kid, answer) : "",
+            skipped,
+          }),
         },
       );
       if (!response.ok)

@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ControlValues } from "../shared/bindings.js";
 import type { ArtifactView, PinView } from "../shared/schema.js";
-import { artifactViewUrl } from "../shared/workspace.js";
 import { frameSize } from "./canvasLayout.js";
 import {
   ArtifactDocument,
   pickIn,
   spotInDocument,
+  useFrameSource,
   useFrameValues,
   type Spot,
 } from "./frames.js";
@@ -181,6 +181,7 @@ export function Preview({
   const pageRef = useRef<HTMLDivElement>(null);
   const catcherRef = useRef<HTMLDivElement>(null);
   const frame = useFrameValues(values);
+  const source = useFrameSource(token, artifact, false);
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
   // Which load of the frame the pins were sent to: a reload is a new page.
   const [loaded, setLoaded] = useState<string | null>(null);
@@ -410,10 +411,9 @@ export function Preview({
                     key={frameKey}
                     ref={frame.ref}
                     title={`${title}, interactive preview`}
-                    // Isolated by the server's CSP sandbox header, as on the canvas.
-                    src={artifactViewUrl(token, artifact, {
-                      embed: false,
-                    })}
+                    // Isolated by the server's CSP sandbox header, as on the
+                    // canvas, or by the sandbox attribute when sealed.
+                    {...source}
                     onLoad={() => {
                       frame.onLoad();
                       setLoaded(frameKey);

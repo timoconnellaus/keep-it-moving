@@ -281,7 +281,28 @@ const unescapeHtml = (text: string) =>
  * text are filled here; the script sets variables and attributes from
  * the head, before anything paints.
  */
-export function renderArtifact(html: string, values: ControlValues): string {
+/**
+ * For a page framed from memory (`srcdoc`), which has no URL of its own:
+ * no referrer on what it loads, since the frame would otherwise send the
+ * interview's page URL, and the query an archify diagram reads its theme
+ * and embed mode from.
+ */
+const inlineSetup = (query: string) =>
+  `<meta name="referrer" content="no-referrer"><script>(function (query) {
+  var Native = window.URLSearchParams;
+  function Params(init) {
+    return new Native(init === undefined || init === window.location.search ? query : init);
+  }
+  Params.prototype = Native.prototype;
+  window.URLSearchParams = Params;
+})(${JSON.stringify(query)});</script>`;
+
+export function renderArtifact(
+  html: string,
+  values: ControlValues,
+  /** Framed with srcdoc: the query string the page would have had. */
+  inline?: { query: string },
+): string {
   const originals: ControlValues = {};
   let content = html;
   for (const [control, value] of Object.entries(values)) {
@@ -300,7 +321,7 @@ export function renderArtifact(html: string, values: ControlValues): string {
     );
   }
   const state = JSON.stringify({ values, originals }).replace(/</g, "\\u003c");
-  const script = `<script>${APPLIER_SOURCE}(window, ${state});${COMMENTS_SOURCE}(window);</script>`;
+  const script = `${inline ? inlineSetup(inline.query) : ""}<script>${APPLIER_SOURCE}(window, ${state});${COMMENTS_SOURCE}(window);</script>`;
   // In the head, but after a doctype: anything before one means quirks mode.
   const anchor =
     /<head\b[^>]*>/i.exec(content) ??

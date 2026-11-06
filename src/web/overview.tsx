@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProjectView, SessionSummary } from "../shared/schema.js";
+import { encryption } from "./keys.js";
 
 /**
  * Every interview, refetched whenever `version` changes (the server pings on
@@ -7,12 +8,17 @@ import type { ProjectView, SessionSummary } from "../shared/schema.js";
  */
 export function useOverview(version: number | null): SessionSummary[] | null {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  // Loads overlap when pings come quickly: only the latest one lands.
+  const latest = useRef(0);
   const load = useCallback(async () => {
+    const ticket = ++latest.current;
     const response = await fetch("/api/browser/overview").catch(() => null);
     if (!response?.ok) return;
-    setSessions(
-      ((await response.json()) as { sessions: SessionSummary[] }).sessions,
-    );
+    const { sessions } = (await response.json()) as {
+      sessions: SessionSummary[];
+    };
+    const opened = await encryption.unseal(sessions);
+    if (ticket === latest.current) setSessions(opened);
   }, []);
   useEffect(() => {
     if (version !== null) void load();

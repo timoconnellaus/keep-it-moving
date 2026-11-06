@@ -9,16 +9,18 @@ It began as Interviewer, grew into a workbench for every running project (an inb
 - **A personal layer, not a system of record.** It works over any repo for each person who signs in, each in a private workspace of their own, and nothing in a repo depends on it. The one opening is an interview its owner assigns to someone else's email: that person answers it, and sees nothing else of the workspace. Decisions stay in repo files.
 - **Two equal users.** People use the browser and phone (PWA with push). Agents use the CLI. Every feature gets both a screen and a CLI verb.
 - **Hosted.** It runs as one Cloudflare Worker and a SQLite Durable Object (`InterviewHub`) per user at keep-it-moving.zerobsai.com. The browser signs in with Google, run by the Worker; the CLI goes through OAuth (`/api/sessions/*`), or an agent key in a cloud session. Each user's state lives in their own Durable Object, so their local and cloud sessions reach the same thing.
+- **End-to-end encrypted.** Once an account turns it on, its new interviews' content is encrypted on the user's devices and their agents' machines; the service stores ciphertext and can't read it. A passkey or the recovery code unlocks a new device; lose both and those interviews can't be recovered.
 - **No destructive migrations.** Workspaces from the workbench era keep its tables; nothing reads them.
 
 ## Concepts
 
-| Concept       | What it is                                                                                                                                                                                                                                 |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Interview** | A session (the `sessions` table): a title, questions and answers, artifacts (the plan, documents, diagrams, mockups) on a stage, and one chat thread with the agent. Active or stopped. Its secret token is its page, `/s/<token>`.        |
-| **Project**   | A label on an interview: the normalised git remote (`github.com/owner/repo`) the CLI detects at creation, with a name and a fixed colour. `--project <name>` picks an existing one.                                                        |
-| **Assignee**  | Someone else's email an interview is assigned to. They sign in with Google as that email, see only that interview (under "Shared with you" on their home page), and their answers and messages come back to the owner's agent, attributed. |
-| **Agent key** | A long-lived, revocable credential for a cloud session's environment (`KEEP_IT_MOVING_TOKEN`). It can work on interviews, but not answer, delete or manage keys.                                                                           |
+| Concept         | What it is                                                                                                                                                                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Interview**   | A session (the `sessions` table): a title, questions and answers, artifacts (the plan, documents, diagrams, mockups) on a stage, and one chat thread with the agent. Active or stopped. Its secret token is its page, `/s/<token>`.        |
+| **Project**     | A label on an interview: the normalised git remote (`github.com/owner/repo`) the CLI detects at creation, with a name and a fixed colour. `--project <name>` picks an existing one.                                                        |
+| **Assignee**    | Someone else's email an interview is assigned to. They sign in with Google as that email, see only that interview (under "Shared with you" on their home page), and their answers and messages come back to the owner's agent, attributed. |
+| **Account key** | The key pair that opens a user's encrypted interviews. Each interview has its own key, granted to each member's public key; the account's private key is kept on the service only wrapped, by a passkey or the recovery code.              |
+| **Agent key**   | A long-lived, revocable credential for a cloud session's environment (`KEEP_IT_MOVING_TOKEN`). It can work on interviews, but not answer, delete or manage keys.                                                                           |
 
 ## Who an interview waits on
 

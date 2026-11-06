@@ -20,6 +20,9 @@ import type {
 } from "./Canvas.js";
 import { questionArtifacts } from "./canvasLayout.js";
 import { Chat, useChat } from "./Chat.js";
+import { EncryptionDialogHost, openEncryption } from "./Encryption.js";
+import { kidsIn } from "../shared/crypto.js";
+import { encryption, KidContext, useEncryption } from "./keys.js";
 import { useOverview } from "./overview.js";
 import { QuestionCard } from "./QuestionCard.js";
 import { MoreBelow, QuestionProgress } from "./QuestionNav.js";
@@ -30,6 +33,8 @@ import { Switcher } from "./Switcher.js";
 import { Workspace } from "./Workspace.js";
 
 const token = window.location.pathname.split("/").filter(Boolean).at(-1) ?? "";
+// An assignee's key to it comes by its token.
+encryption.noteToken(token);
 
 /** An agent that left a quarter of an hour ago is no longer "working". */
 const STALE_MS = 15 * 60_000;
@@ -65,7 +70,20 @@ function agentActivity(
 }
 
 export function App() {
-  const [session, setSession] = useState<SessionView | null>(null);
+  const [session, setSessionState] = useState<SessionView | null>(null);
+  const keys = useEncryption();
+  // Whether this browser holds the open interview's key; null until known.
+  const [canOpen, setCanOpen] = useState<boolean | null>(null);
+  // States are opened before they show, which takes a moment; only the
+  // latest to arrive is shown, so an older one never lands on a newer.
+  const arrivals = useRef(0);
+  const setSession = useCallback(async (next: SessionView) => {
+    const ticket = ++arrivals.current;
+    // A plain interview shows at once.
+    if (!kidsIn(next).size) return setSessionState(next);
+    const opened = await encryption.unseal(next);
+    if (ticket === arrivals.current) setSessionState(opened);
+  }, []);
   const [error, setError] = useState("");
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
   const [acceptingAll, setAcceptingAll] = useState(false);
@@ -171,8 +189,8 @@ export function App() {
       return;
     }
     const next = (await response.json()) as SessionView;
-    setSession(next);
-  }, []);
+    await setSession(next);
+  }, [setSession]);
 
   useEffect(() => {
     const disconnectedMessage =
@@ -196,13 +214,41 @@ export function App() {
         if (message.type === "overview")
           setOverviewVersion((value) => value + 1);
         if (message.type === "state" && message.session) {
-          setSession(message.session);
+          void setSession(message.session);
         }
       },
       onDrop: () => setError(disconnectedMessage),
       onStop: (reason) => setError(STOP_MESSAGES[reason]),
     });
   }, [refresh]);
+
+  // Unlocking, or a grant arriving, opens what was locked.
+  const kid = session?.kid ?? null;
+  useEffect(() => {
+    if (!kid) return setCanOpen(null);
+    let live = true;
+    void encryption.canOpen(kid).then((can) => {
+      if (!live) return;
+      setCanOpen(can);
+      if (can) void refresh();
+    });
+    return () => {
+      live = false;
+    };
+  }, [kid, keys.status]);
+  // The owner's page gives the key to whoever should hold it and doesn't
+  // yet: their own other keys, and an assignee who has set up since.
+  const shareFor =
+    session && !session.respondent && kid ? (session.assignee ?? "") : null;
+  const [assigneeWaiting, setAssigneeWaiting] = useState(false);
+  useEffect(() => {
+    if (shareFor === null || !canOpen || !session) return;
+    void encryption.shareKey(token, session).catch(() => undefined);
+    void encryption
+      .assigneeWaiting(session)
+      .then(setAssigneeWaiting)
+      .catch(() => setAssigneeWaiting(false));
+  }, [shareFor, canOpen]);
 
   // The agent's focus replaces the user's own; its "show" fits that frame.
   const agentFocus = session?.focusedQuestionId;
@@ -297,7 +343,12 @@ export function App() {
           {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ answer: defaultAnswerText(question) }),
+            body: JSON.stringify({
+              answer: await encryption.sealFor(
+                session.kid,
+                defaultAnswerText(question) ?? "",
+              ),
+            }),
           },
         );
         if (!response.ok) {
@@ -480,103 +531,167 @@ export function App() {
   );
   const activity = agentActivity(session);
   return (
-    <main className="shell">
-      <header className="topbar">
-        {session.respondent ? (
-          <div className="respondent-title">
-            <h1>{session.title}</h1>
-            {session.assignedBy && <span>From {session.assignedBy}</span>}
+    <KidContext.Provider value={session.kid}>
+      <main className="shell">
+        <header className="topbar">
+          {session.respondent ? (
+            <div className="respondent-title">
+              <h1>{session.title}</h1>
+              {session.assignedBy && <span>From {session.assignedBy}</span>}
+            </div>
+          ) : (
+            <Switcher session={session} sessions={sessions} />
+          )}
+          {activity && (
+            <span
+              className={`agent-status ${activity.busy ? "busy" : ""}`}
+              role="status"
+            >
+              {activity.label}
+            </span>
+          )}
+          <span className="topbar-spacer" />
+          <QuestionProgress questions={session.questions} />
+          {active && sendable.length > 0 && (
+            <button
+              className="accept-all send-drafts"
+              type="button"
+              disabled={sendingDrafts}
+              onClick={() => void sendDrafts()}
+              title="Send your agent's draft for every question you haven't edited"
+            >
+              {sendingDrafts
+                ? "Sending…"
+                : `Send ${sendable.length} draft${sendable.length === 1 ? "" : "s"}`}
+            </button>
+          )}
+          {active && acceptable.length > 0 && canOpen !== false && (
+            <button
+              className="accept-all"
+              type="button"
+              disabled={acceptingAll}
+              onClick={() => void acceptAll()}
+              title="Save the default answer for every open question you haven't edited"
+            >
+              {acceptingAll
+                ? "Accepting…"
+                : `Accept ${acceptable.length} default${acceptable.length === 1 ? "" : "s"}`}
+            </button>
+          )}
+          {session.artifacts.length > 0 && (
+            <button
+              className={`workspace-toggle ${workspaceOpen ? "on" : ""}`}
+              type="button"
+              aria-pressed={workspaceOpen}
+              onClick={() => void setStageVisible(!workspaceOpen)}
+              title={
+                workspaceOpen
+                  ? "Hide the canvas of the plan and other workspace items"
+                  : "Show the canvas of the plan and other workspace items"
+              }
+            >
+              Canvas
+              <span className="count">{session.artifacts.length}</span>
+            </button>
+          )}
+          {!session.respondent && (
+            <Assign token={token} session={session} onChanged={refresh} />
+          )}
+          <Account />
+        </header>
+        {error && (
+          <div className="notice" role="status">
+            {error}
           </div>
-        ) : (
-          <Switcher session={session} sessions={sessions} />
         )}
-        {activity && (
-          <span
-            className={`agent-status ${activity.busy ? "busy" : ""}`}
-            role="status"
-          >
-            {activity.label}
-          </span>
+        {assigneeWaiting && session.assignee && (
+          <div className="notice locked" role="status">
+            {session.assignee} can open encrypted interviews now. Give them
+            access to this one?
+            <button
+              type="button"
+              onClick={() =>
+                void encryption
+                  .shareKey(token, session, { assignee: true })
+                  .then(() => {
+                    setAssigneeWaiting(false);
+                    return refresh();
+                  })
+                  .catch((failure: Error) => setError(failure.message))
+              }
+            >
+              Give access
+            </button>
+          </div>
         )}
-        <span className="topbar-spacer" />
-        <QuestionProgress questions={session.questions} />
-        {active && sendable.length > 0 && (
-          <button
-            className="accept-all send-drafts"
-            type="button"
-            disabled={sendingDrafts}
-            onClick={() => void sendDrafts()}
-            title="Send your agent's draft for every question you haven't edited"
-          >
-            {sendingDrafts
-              ? "Sending…"
-              : `Send ${sendable.length} draft${sendable.length === 1 ? "" : "s"}`}
-          </button>
+        {session.kid && canOpen === false && (
+          <LockedNotice session={session} status={keys.status} />
         )}
-        {active && acceptable.length > 0 && (
-          <button
-            className="accept-all"
-            type="button"
-            disabled={acceptingAll}
-            onClick={() => void acceptAll()}
-            title="Save the default answer for every open question you haven't edited"
-          >
-            {acceptingAll
-              ? "Accepting…"
-              : `Accept ${acceptable.length} default${acceptable.length === 1 ? "" : "s"}`}
-          </button>
+        {session.status === "stopped" && (
+          <div className="notice stopped" role="status">
+            This interview is finished. Answers are available to review.
+          </div>
         )}
-        {session.artifacts.length > 0 && (
-          <button
-            className={`workspace-toggle ${workspaceOpen ? "on" : ""}`}
-            type="button"
-            aria-pressed={workspaceOpen}
-            onClick={() => void setStageVisible(!workspaceOpen)}
-            title={
-              workspaceOpen
-                ? "Hide the canvas of the plan and other workspace items"
-                : "Show the canvas of the plan and other workspace items"
-            }
-          >
-            Canvas
-            <span className="count">{session.artifacts.length}</span>
-          </button>
-        )}
-        {!session.respondent && (
-          <Assign token={token} session={session} onChanged={refresh} />
-        )}
-        <Account />
-      </header>
-      {error && (
-        <div className="notice" role="status">
-          {error}
+        {/* Questions on the left, the workspace in the middle, the chat on the right. */}
+        <div className={`workspace ${workspaceOpen ? "with-stage" : ""}`}>
+          {questions}
+          {workspaceOpen && (
+            <Workspace
+              token={token}
+              session={session}
+              valuesFor={(artifactId) =>
+                artifactValues(session.questions, artifactId, previews)
+              }
+              highlight={highlight}
+              compare={comparison}
+              pins={pins}
+              initial={fit?.ids ?? initial}
+              fit={fit}
+              onComment={placePin}
+            />
+          )}
+          <Chat token={token} session={session} chat={chat} onSent={refresh} />
         </div>
-      )}
-      {session.status === "stopped" && (
-        <div className="notice stopped" role="status">
-          This interview is finished. Answers are available to review.
-        </div>
-      )}
-      {/* Questions on the left, the workspace in the middle, the chat on the right. */}
-      <div className={`workspace ${workspaceOpen ? "with-stage" : ""}`}>
-        {questions}
-        {workspaceOpen && (
-          <Workspace
-            token={token}
-            session={session}
-            valuesFor={(artifactId) =>
-              artifactValues(session.questions, artifactId, previews)
-            }
-            highlight={highlight}
-            compare={comparison}
-            pins={pins}
-            initial={fit?.ids ?? initial}
-            fit={fit}
-            onComment={placePin}
-          />
-        )}
-        <Chat token={token} session={session} chat={chat} onSent={refresh} />
+        <EncryptionDialogHost />
+      </main>
+    </KidContext.Provider>
+  );
+}
+
+/** Why an encrypted interview reads as locked here, and what opens it. */
+function LockedNotice({
+  session,
+  status,
+}: {
+  session: SessionView;
+  status: ReturnType<typeof useEncryption>["status"];
+}) {
+  const owner = session.assignedBy ?? "its owner";
+  if (status === "locked")
+    return (
+      <div className="notice locked" role="status">
+        This interview is end-to-end encrypted. Unlock this browser to read it.
+        <button type="button" onClick={() => openEncryption("unlock")}>
+          Unlock
+        </button>
       </div>
-    </main>
+    );
+  if (status === "off")
+    return (
+      <div className="notice locked" role="status">
+        {session.respondent
+          ? `This interview is end-to-end encrypted. Turn on encryption, then ${owner} can give you access from its page.`
+          : "This interview is end-to-end encrypted. Turn on encryption to read it."}
+        <button type="button" onClick={() => openEncryption("setup")}>
+          Turn on
+        </button>
+      </div>
+    );
+  return (
+    <div className="notice locked" role="status">
+      {session.respondent
+        ? `This interview is end-to-end encrypted. It opens here once ${owner} gives you access from its page.`
+        : "This interview is end-to-end encrypted under another of your accounts. Open it there once to share it with this one."}
+    </div>
   );
 }

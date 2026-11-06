@@ -278,7 +278,7 @@ ${action}
     shell(
       `<h1>Plans</h1>
 ${notice ? `<p class="notice">${notice}</p>` : ""}
-<p>Every plan has the questions, the chat, the living plan, diagrams and mockups. A live interview is one an agent is waiting on for answers; half-done ones nobody is waiting on don't count.</p>
+<p>Every plan has end-to-end encryption, the questions, the chat, the living plan, diagrams and mockups. A live interview is one an agent is waiting on for answers; half-done ones nobody is waiting on don't count.</p>
 <div class="plans">
 ${card(
   "Free",

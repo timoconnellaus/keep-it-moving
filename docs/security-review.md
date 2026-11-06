@@ -157,3 +157,13 @@ Included allowances are account-wide and already used by normal traffic, so they
 - `wrangler.jsonc` adds the `API_LIMITER` binding (namespace 1002). Nothing needs setting up in the dashboard, and the installed Wrangler (4.146) is past the 4.36 the binding needs.
 - No secrets changed and nothing is migrated. The first use of each pre-records owner key writes one `agent-key:` KV record.
 - If Workers Logs show 429s for real users, raise `API_LIMITER`'s limit in `wrangler.jsonc`. Nothing else depends on the number.
+
+## Addendum, 6 November 2026: end-to-end encryption
+
+Interviews of accounts that turn encryption on are now end-to-end encrypted (see the README's "End-to-end encryption"). What that changes here:
+
+- **The service can't read encrypted interviews.** A leaked Durable Object, KV namespace or log holds ciphertext for them, and metadata: emails, timestamps, counts, sizes, question types and the project's repo. Plain interviews (older ones, and accounts that haven't turned it on) are as before.
+- **Finding 2's residual risk is gone for encrypted interviews.** Their HTML artifacts have no URL on this domain: the page frames them with `srcdoc` and `sandbox="allow-scripts"`, so they still run in an opaque origin, and a `no-referrer` meta keeps the page's URL out of what they load.
+- **Screenshots** render on the agent's machine (`kim inbox screenshot`), so Browser Run, its R2 bucket and its budget are gone, along with their cost.
+- **New trust in the client.** The web app is served by this Worker, so a malicious deploy could take keys from browsers. The public-key directory isn't verified either: a compromised service could list its own key for an assignee before the owner's client grants them access. Both are outside what this encryption protects against, and the README says so.
+- **New routes.** Grants (`…/grant`, `…/grants`) and the account key (`/api/browser/account/*`) are scoped like the rest: a grant is useless without its recipient's private key, assignees can read only their interview's grant, and only owners' clients add grants. Agent keys may read `kim/account`, `kim/pubkeys` and `kim/grants`, since a cloud environment holds the content key anyway.
