@@ -1,0 +1,36 @@
+// The storefront's checkout tables (db/schema.sql)
+Table users {
+  id uuid [pk]
+  email text [unique, not null]
+  name text
+  created_at timestamptz [not null]
+}
+
+Table products {
+  id uuid [pk]
+  name text [not null]
+  price_cents integer [not null]
+  stock integer [not null, default: 0]
+}
+
+Table orders {
+  id uuid [pk]
+  user_id uuid [not null, ref: > users.id]
+  status order_status [not null, default: 'cart']
+  total_cents integer [not null]
+  created_at timestamptz [not null]
+}
+
+Table order_items {
+  id uuid [pk]
+  order_id uuid [not null, ref: > orders.id]
+  product_id uuid [not null, ref: > products.id]
+  quantity integer [not null]
+  price_cents integer [not null]
+}
+
+Enum order_status {
+  cart
+  placed
+  shipped
+}

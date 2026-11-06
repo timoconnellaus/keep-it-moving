@@ -1,0 +1,54 @@
+// The storefront's checkout tables (db/schema.sql)
+Table users {
+  id uuid [pk]
+  email text [unique, not null]
+  name text
+  created_at timestamptz [not null]
+}
+
+Table products {
+  id uuid [pk]
+  name text [not null]
+  price_cents integer [not null]
+  stock integer [not null, default: 0]
+}
+
+Table orders {
+  id uuid [pk]
+  user_id uuid [ref: > users.id, note: 'Null for a guest checkout']
+  email text [not null, note: 'Where the receipt goes; a guest has no account']
+  status order_status [not null, default: 'cart']
+  total_cents integer [not null]
+  created_at timestamptz [not null]
+}
+
+Table order_items {
+  id uuid [pk]
+  order_id uuid [not null, ref: > orders.id]
+  product_id uuid [not null, ref: > products.id]
+  quantity integer [not null]
+  price_cents integer [not null]
+}
+
+Table payments {
+  id uuid [pk]
+  order_id uuid [not null, ref: > orders.id]
+  stripe_session_id text [unique, not null]
+  amount_cents integer [not null]
+  status payment_status [not null, default: 'pending']
+  created_at timestamptz [not null]
+  Note: 'One per Stripe Checkout session; the webhook updates status'
+}
+
+Enum order_status {
+  cart
+  placed
+  paid
+  shipped
+}
+
+Enum payment_status {
+  pending
+  succeeded
+  refunded
+}

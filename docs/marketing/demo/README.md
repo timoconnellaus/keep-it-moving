@@ -1,16 +1,27 @@
-# The marketing page and its product demo
+# The marketing page and its product demos
 
 `../keep-it-moving.html` is the marketing page, and the one source for it. It's published as the "Keep it moving" artifact, and `npm run build:web` wraps it into `web-dist/landing.html` (`scripts/build-landing.mjs`): a document, viewport, description and favicon, and the install command naming the deployment that serves it. The Worker serves that page at `/` to signed-out visitors; signed in, `/` is the app. Links to the site in it are relative (`/signin`, `/pricing`), so a self-hosted copy points at itself.
 
-Edit the page by hand, except for its two demo scripts, which `build.mjs` writes. The hero demo is the real app, not a drawing. The app was captured from a local run, and the page replays it.
+Edit the page by hand, except for its two demo scripts, which `build.mjs` writes. Under the hero copy is a row of five tabs, one per demo, over one demo frame. Each demo is the real app, not a drawing: it was captured from a local run, and the page replays it.
 
-- `capture.mjs` drives a fresh "Checkout rework" interview through the demo's story. The user's side is clicks in headless Chrome. The agent's side is `kim` calls: plans `plan-1..3.md`, mockups `layout-a/b.html`, questions, chat and stop. At each of nine steps it saves the page's `.shell` DOM to `states.json`.
-- `build.mjs` replaces the page's `#demo-doc` script with an iframe document. That document holds the captured states, with mockups as `srcdoc`, and the built app CSS from `web-dist/assets/*.css`, with `.demo-hover`/`.demo-focus` twins of its `:hover`/`:focus` rules. It also replaces the player script after the morphdom tag with `player.js`.
-- `player.js` scales the 1440×860 app to the frame and rounds the frame's corners in proportion. It moves between the states with morphdom, adds the cursor and typing, and highlights each plan revision's new lines. It plays only on screen, and shows a still frame for reduced motion.
+| Tab        | Folder    | What it shows                                                                                                                                                                                                                                                       |
+| ---------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 01 Answer  | `answer/` | The checkout interview: look at both layouts, keep the recommended one, the plan updates, ask the agent in the chat, accept the remaining defaults.                                                                                                                 |
+| 02 Design  | `design/` | The agent pulls `.kim/designs/data-model.dbml` onto the System tab (_From repo_, _Saves to repo_). Full screen, a comment pinned on `orders`, the agent's update (`data-model-2.dbml`), and the changes against the repo, in green and amber, with "6 changes". |
+| 03 Mock up | `mockup/` | Two phone mockups of the confirmation page on the Design canvas beside "Which confirmation page?". Hovering each option lights up its frame; a comment pinned on the Track order button; the agent revises it; the default is accepted.                            |
+| 04 Ship    | `ship/`   | The end of the checkout interview: the plan, then the System tab's badges. "Wrap it up" in the chat; the agent runs `kim design write`, lists the files in the chat and stops. A drawn pull request card shows those files, with the line counts and SVG kim wrote. |
+| 05 Share   | `share/`  | Assign the interview to `sam@client.co`, the home page showing it waiting on them, their answers arriving (`by sam@client.co`), and the agent's reply.                                                                                                             |
 
-To refresh it after an app change:
+- Each folder's `capture.mjs` drives a fresh interview through its story. The agent's side is `kim` calls; the user's is clicks and typing in headless Chrome. At each step it saves the page's `.shell` (or the home page) to that folder's `states.json`, with every frame's document (mockups, the design viewer's drawing) saved once, by hash, as `data-mock`. The files the agent writes or shows (plans, mockups, DBML) sit beside it.
+- `capture.mjs` runs them: it starts its own `wrangler dev` with throwaway storage and `DEV_EMAIL`, signs a `kim` in to it under a throwaway HOME (none of your config, login or agents' hooks are touched), gives each story an empty account and a scratch `acme/storefront` git repo, and stops the Worker at the end. 05 restarts it signed in as `sam@client.co` to answer as Sam, then as you again.
+- `lib.mjs` is what they share: the Worker, the signed-in CLI, Chrome over the DevTools protocol, and the snapshots.
+- `build.mjs` replaces the page's `#demo-doc` script with one iframe document: every story's states as `<template data-story data-state>`, each frame document once, and the built app CSS from `web-dist/assets/*.css` (once), with `.demo-hover`/`.demo-focus` twins of its `:hover`/`:focus` rules. It also replaces the player script after the morphdom tag with `player.js`.
+- `player.js` scales the 1440×860 app to the frame and rounds its corners in proportion. The tabs are a `tablist` (arrow keys, Home and End move between them). The chosen tab's story moves between its states with morphdom, adds the cursor and typing, and fills the tab's bar as it goes; at the end, the next tab starts. Its clock only runs while the demo is on screen and the page visible. Each story's length (`STORIES[…].ms`, its bar's 100%) is set by hand: open the page with `?demo-debug` and the console logs how long each one took. With reduced motion, each tab shows its story's last state, still, and nothing advances.
 
-1. `npm run build`, then `npx wrangler dev --local --host localhost --port 8787` (with `.dev.vars` as in the main README).
-2. `KIM_HOME=<a HOME with kim signed in to localhost> node docs/marketing/demo/capture.mjs`. It deletes every interview in that local account first.
+To refresh after an app change:
+
+1. `npm run build`.
+2. `node docs/marketing/demo/capture.mjs` captures all five; `node docs/marketing/demo/capture.mjs design ship` only those. `SCRATCH=<folder>` keeps a screenshot of every state there (default: a temp folder). It needs a Chrome (`CHROME=<path>` for another).
 3. `node docs/marketing/demo/build.mjs`, then `npm run build:web` (or `node scripts/build-landing.mjs`) for the landing page.
-4. Republish `docs/marketing/keep-it-moving.html` to the artifact.
+4. If a story's steps changed, check its length with `?demo-debug` and update `STORIES` in `player.js`, then build again.
+5. Republish `docs/marketing/keep-it-moving.html` to the artifact.
