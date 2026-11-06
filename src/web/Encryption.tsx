@@ -306,7 +306,7 @@ function UnlockPanel({
             value={code}
             autoComplete="off"
             spellCheck={false}
-            placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
+            placeholder="XXXX-XXXX-…"
             onChange={(event) => setCode(event.target.value)}
           />
         </label>

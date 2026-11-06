@@ -130,6 +130,24 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .row.second::before { content: ""; position: absolute; top: -30px; left: 25%; right: 25%; height: 30px; border-left: 1.5px solid #cfd3da; border-right: 1.5px solid #cfd3da; }
 .node.you::before { background: var(--pink); }
 
+/* Privacy */
+.privacy { padding-block: 72px 56px; display: grid; gap: 32px; border-top: 1px solid var(--line); }
+.privacy-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 40px; align-items: center; }
+.privacy-top h2 { font-size: clamp(30px, 4vw, 46px); line-height: 1.06; font-weight: 600; margin-top: 16px; }
+.privacy-top p { color: var(--muted); margin-top: 14px; max-width: 52ch; }
+.cipher { display: grid; gap: 12px; }
+.cipher-row { display: grid; gap: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; min-width: 0; }
+.cipher-row.dark { background: var(--night); border-color: var(--night); color: #e6e7ea; }
+.cipher-where { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.cipher-row.dark .cipher-where { color: var(--night-muted); }
+.cipher-text { font: 500 20px var(--display); overflow-wrap: anywhere; }
+.cipher-text.mono { font: 14px/1.6 var(--mono); color: #b9c6ff; }
+.privacy-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.pcard { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 20px; display: grid; gap: 8px; align-content: start; }
+.pcard h3 { font-size: 19px; font-weight: 500; }
+.pcard p { color: var(--muted); font-size: 15px; }
+.privacy-fine { color: var(--muted); font-size: 14px; text-align: center; max-width: 76ch; margin: 0 auto; }
+.privacy-fine a { color: var(--muted); }
 /* Night bands */
 .night { background: var(--night); color: #fff; border-radius: 28px; position: relative; overflow: hidden; }
 .blob { position: absolute; width: 230px; height: 230px; opacity: 0.9; }
@@ -181,7 +199,7 @@ footer a { color: var(--muted); }
 @media (max-width: 900px) {
   .app { grid-template-columns: minmax(0, 1fr); }
   .app-main { border-right: 0; border-bottom: 1px solid var(--line); }
-  .feature-grid, .plans, .source { grid-template-columns: minmax(0, 1fr); }
+  .feature-grid, .plans, .source, .privacy-top, .privacy-grid { grid-template-columns: minmax(0, 1fr); }
   .row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .row.second { max-width: none; }
   .lines { display: none; }
@@ -211,6 +229,7 @@ footer a { color: var(--muted); }
         </a>
         <a class="link" href="#how">How it works</a>
         <a class="link" href="#features">Features</a>
+        <a class="link" href="#privacy">Privacy</a>
         <a class="link" href="#pricing">Pricing</a>
         <a class="link" href="https://github.com/timoconnellaus/keep-it-moving">Source</a>
         <a class="btn btn-dark" href="/signin">Sign in</a>
@@ -222,7 +241,7 @@ footer a { color: var(--muted); }
           <h1>Your agent asks. You answer in <span class="mark">one click.</span></h1>
           <p class="lede">When your coding agent needs decisions from you, it opens an interview in your browser, with its recommended answer already picked and a plan that updates as you go.</p>
           <a class="btn btn-blue" href="#install">Install the skill <span class="arrow"><svg viewBox="0 0 10 10"><path d="M2 5h6M5.5 2.5 8 5 5.5 7.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></a>
-          <p class="agents-line"><b>Free</b> for up to 3 live interviews · Sign in with Google</p>
+          <p class="agents-line"><b>Free</b> for up to 3 live interviews · <b>End-to-end encrypted</b> · Sign in with Google</p>
         </div>
 
         <div class="demo-frame" id="demo" role="img" aria-label="Keep it moving in use: answering a question about two checkout mockups, the plan updating, a chat with the agent, and accepting the remaining defaults">
@@ -310,6 +329,44 @@ footer a { color: var(--muted); }
           <div class="node you"><b>It keeps going</b><span>Answers reach it in seconds, even tomorrow</span></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Privacy -->
+  <div class="panel" id="privacy">
+    <div class="inner privacy">
+      <div class="privacy-top">
+        <div>
+          <span class="pill">End-to-end encrypted</span>
+          <h2>We can&rsquo;t read your interviews.</h2>
+          <p>Questions, answers, chat, plans and mockups are encrypted on your devices and on your agent&rsquo;s machine before they reach us. Our servers only ever hold ciphertext, so a leak, a subpoena or a curious engineer gets nothing readable.</p>
+        </div>
+        <div class="cipher" aria-label="The same question on your device and on our servers">
+          <div class="cipher-row">
+            <span class="cipher-where">On your device</span>
+            <span class="cipher-text">Which checkout layout?</span>
+          </div>
+          <div class="cipher-row dark">
+            <span class="cipher-where">On our servers</span>
+            <span class="cipher-text mono">kim1.UKxM0MNiIL4.q9Fz8Lr0vW2xHc1pYtE7sNbK4dQmZaG6…</span>
+          </div>
+        </div>
+      </div>
+      <div class="privacy-grid">
+        <div class="pcard">
+          <h3>Your keys, your devices</h3>
+          <p>A passkey unlocks your interviews on a new device, and <code>kim login</code> hands your CLI its key straight from the browser. Someone you assign an interview to gets it wrapped to their own key.</p>
+        </div>
+        <div class="pcard">
+          <h3>What we can still see</h3>
+          <p>Who an interview is with, when things happen, how many questions are answered, how big things are, and which repo it&rsquo;s for. Not what any of it says.</p>
+        </div>
+        <div class="pcard">
+          <h3>Keep your recovery code</h3>
+          <p>Lose your passkey and your recovery code, and your encrypted interviews are gone for good: we hold no copy of your key, so we can&rsquo;t get them back either.</p>
+        </div>
+      </div>
+      <p class="privacy-fine">The web app is served by us, so it&rsquo;s only as trustworthy as the code we ship, which you can <a href="https://github.com/timoconnellaus/keep-it-moving">read on GitHub</a>. Interviews from before encryption, or from an account that hasn&rsquo;t turned it on, aren&rsquo;t encrypted.</p>
     </div>
   </div>
 

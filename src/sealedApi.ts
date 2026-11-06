@@ -226,8 +226,13 @@ export class Encryption {
 
   /** An error whose message names sealed fields, such as a title. */
   async openError(error: unknown): Promise<unknown> {
-    if (!(error instanceof Error) || !kidsIn(error.message).size) return error;
-    error.message = await this.open(error.message);
+    if (!(error instanceof Error)) return error;
+    const details = (error as { details?: Record<string, unknown> }).details;
+    if (kidsIn(error.message).size)
+      error.message = await this.open(error.message);
+    // A plan refusal lists the live interviews, titles and all.
+    if (details && kidsIn(details).size)
+      Object.assign(details, await this.open({ ...details }));
     return error;
   }
 

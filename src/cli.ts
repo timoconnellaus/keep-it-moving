@@ -1921,7 +1921,7 @@ async function login() {
     );
     writeCredentials(credentials);
     process.stderr.write(
-      "Signed in. If your browser asks, unlock or set up encryption to give kim your key.\n",
+      "Signed in. Finish in your browser to give kim your encryption key (unlock, or set it up), or choose Not now there. Ctrl-C is safe: you stay signed in.\n",
     );
     const keyTimeout = setTimeout(() => keyArrived(null), 600_000);
     const wrapped = await keyResult;

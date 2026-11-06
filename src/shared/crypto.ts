@@ -492,6 +492,11 @@ export class Keyring {
     this.keys.set(key.kid, key);
   }
 
+  /** Forgets every key: what was opened stays shut until the keys come again. */
+  clear(): void {
+    this.keys.clear();
+  }
+
   has(kid: string): boolean {
     return Boolean(this.keys.get(kid));
   }

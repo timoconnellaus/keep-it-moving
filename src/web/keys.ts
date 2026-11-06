@@ -451,6 +451,8 @@ class BrowserEncryption {
   async lock(): Promise<void> {
     if (this.state.email) await forgetKey(this.state.email);
     this.account = null;
+    this.keyring.clear();
+    this.triedTokens.clear();
     this.set({ status: this.state.server ? "locked" : "off" });
   }
 

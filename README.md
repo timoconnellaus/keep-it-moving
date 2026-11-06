@@ -114,6 +114,19 @@ Every interview's token is indexed to its owner (`owner:<token>` in `OAUTH_KV`, 
 
 These are the Worker's own pages for `/s/<token>`. The API and socket get the same message as JSON, with `code` `sent-elsewhere` or `other-account`. An unindexed token's calls go to the signed-in account's own workspace, as before; the app never gets that far, because its page is the Worker's. Only the masked address is shown, and only to someone holding the private link. "This interview was deleted." is kept for a deletion while the page is open.
 
+## End-to-end encryption
+
+Once an account turns encryption on, its new interviews are end-to-end encrypted: the service stores and relays ciphertext it can't read. Turning it on (from the home page's banner or the account menu) makes the account a key, a passkey to unlock it on other devices, and a recovery code shown once. Interviews from before, and from accounts that haven't turned it on, stay plain.
+
+- **What's sealed.** Every content field: titles, the agent session's name, branch and worktree, prompts, options, recommendations, defaults, the values controls set, answers, drafts, chat (and a comment pin's element), and artifacts' titles, descriptions, content and source. Events carry copies of these, so they're sealed too. Each is an envelope, `kim1.<key id>.<data>`: AES-256-GCM under the interview's own key, gzipped first when that helps (`src/shared/crypto.ts`).
+- **What isn't.** Ids, the browser token, question types, number ranges, control names and units, status, counts, who wrote what, timestamps, sizes, assignee emails, frame positions, and the project's name and git remote. Waiting state, limits, push and the home list's order work from these.
+- **Keys.** Each account has an ECDH P-256 key pair. An interview's key reaches each member wrapped to their public key (a grant), so the owner's devices, the accounts linked to theirs, and the assignee's each open it. The private key is on the service only wrapped: under a passkey's WebAuthn PRF output, or under the recovery code (160 random bits). Browsers keep it in IndexedDB once unlocked; **Lock this browser** forgets it.
+- **The CLI.** `kim login` ends on `/cli-key`, which wraps the private key to a one-off key the CLI made and sends it to the CLI's loopback server; the service never sees it. The CLI keeps it with its sign-in. A cloud environment gets it as `KEEP_IT_MOVING_CONTENT_KEY` (`kim cloud setup` prints it). `src/sealedApi.ts` seals what the CLI sends to an encrypted interview, after the checks the service makes on plain ones (options, defaults, bindings against the mockup's markup), and opens everything that comes back, including batches, hooks and inbox artifacts, which it renders with the saved answers itself.
+- **The service.** For an encrypted interview the hub checks that each content field is sealed under that interview's key, and leaves the checks that need the words to the clients. Its sandboxed artifact URL is refused: the page fetches the sealed artifact, opens it, and frames it with `srcdoc` and `sandbox="allow-scripts"`, so scripts still run in an opaque origin. Notifications for encrypted interviews say what happened, not what it was about. The Worker lists each account's public key in a KV directory (`pubkey:<email>`, `src/worker/directory.ts`), which owners' clients look up to make grants.
+- **Assigning.** The owner's client wraps the key for the assignee's public keys (theirs and their linked accounts'). An assignee who hasn't turned encryption on yet sees that it's encrypted; once they have, the owner's page grants them the key the next time it opens. Unassigning drops the assignee's grants.
+- **Lost keys.** Lose every unlocked device, every passkey and the recovery code, and the account's encrypted interviews can't be read again, by anyone. **Lost both?** in the unlock dialog starts over with a new key; the old interviews stay, unreadable.
+- **Limits.** The web app comes from this Worker, so it's only as trustworthy as the code deployed: encryption protects against leaks of stored data and people with access to it, not against a malicious deploy. The directory isn't verified, so a compromised service could list its own key for an assignee before they're given access.
+
 ## Plans and billing
 
 - **Free**: at most 3 interviews live at once. Live means an agent is waiting on an active interview (a `wait`, `attach` or `events next` connected), or its hook took answers in the last 15 minutes while it has questions open. Half-done interviews nobody is waiting on don't count, and there's no limit on how many exist. Free can't assign interviews to other people, though assignments made before keep working and can be taken back, and answering an interview someone assigned to you is always free.
@@ -319,7 +332,7 @@ kim cloud setup --json          # the same, as JSON
 It creates an agent key named "<project name> cloud" (`--key-name` picks another). Keys can't be read back, so if a live key already has that name it stops and says so: revoke the old one (`kim key revoke "Frockbot cloud"`) or pass `--key-name`. It needs a signed-in CLI, not a key.
 
 1. **Network access**: Custom, add `keep-it-moving.zerobsai.com`, and keep the default package registries included. The default Trusted level allows GitHub and the registries but not this host.
-2. **Environment variables**: `KEEP_IT_MOVING_TOKEN=kim_…`. Anyone who uses the environment can read it.
+2. **Environment variables**: `KEEP_IT_MOVING_TOKEN=kim_…`, and for an account with encryption on, `KEEP_IT_MOVING_CONTENT_KEY=…`, the key that opens its interviews. Anyone who uses the environment can read them.
 3. **Setup script**: it installs the CLI from the Worker. Every line ends in `|| true`, so a failure never stops a session from starting:
 
    ```bash
@@ -328,7 +341,7 @@ It creates an agent key named "<project name> cloud" (`--key-name` picks another
    exit 0
    ```
 
-The CLI package is served behind the agent API at `/api/sessions/kim/cli.tgz`, so the setup script fetches it with the environment's `KEEP_IT_MOVING_TOKEN` and nothing new is public. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependency, `env-paths`, and fails if the CLI imports a package that isn't a dependency. It stamps the package's `build.json` with a hash of its contents and writes the same to `web-dist/cli-version.json`. The docs don't say whether a setup script sees the environment's variables; if `kim` is missing in a cloud session, that's why, and `/cli.tgz` is public as a fallback.
+The CLI package is served behind the agent API at `/api/sessions/kim/cli.tgz`, so the setup script fetches it with the environment's `KEEP_IT_MOVING_TOKEN` and nothing new is public. `npm run build` packs it into `web-dist/cli.tgz` (`scripts/pack-cli.mjs`), with only its runtime dependencies, `env-paths` and `zod`, and fails if the CLI imports a package that isn't a dependency. It stamps the package's `build.json` with a hash of its contents and writes the same to `web-dist/cli-version.json`. The docs don't say whether a setup script sees the environment's variables; if `kim` is missing in a cloud session, that's why, and `/cli.tgz` is public as a fallback.
 
 ## On your phone
 
@@ -458,6 +471,7 @@ browser ──HTTPS/WSS (Google sign-in)── Worker ── InterviewHub Durabl
 - **Worker** (`src/worker`): wraps everything in `@cloudflare/workers-oauth-provider`. `/api/sessions/**` needs an OAuth access token or an agent key, and goes to its user's workspace. Every other route needs the browser session from Google sign-in (`/auth/google/start`, `/auth/google/callback`, `/auth/logout`): a random id in an HttpOnly cookie, kept in `OAUTH_KV` for 30 days from last use. Signed-out pages go to `/signin`, signed-out API calls get a 401. `/authorize` completes OAuth straight from that session, and only for loopback redirect URIs, so only the CLI can collect a code. An agent key's owner is recorded in `OAUTH_KV` when it is made; a key with none recorded predates other users and is the owner's.
 - **InterviewHub** (`src/worker/hub.ts`): one SQLite Durable Object per user, holding everything of theirs: interviews, projects, agent keys and devices. Tables from features that have since been removed stay in older workspaces, unused. `hubFor` (`src/worker/hubs.ts`) picks it: `user:<email>` for most, and the original `interviews` for `OWNER_EMAIL`. Browser WebSockets hibernate, tagged by session.
 - **Hub router and store** (`src/server`): the HTTP API (Hono) and the store, written against a small SQL interface so tests run them on `node:sqlite`.
+- **Encryption** (`src/shared/crypto.ts`, `src/sealedApi.ts`, `src/web/keys.ts`): see End-to-end encryption.
 - **CLI** (`src/cli.ts`): a thin client. `wait` chains 60 s requests with `partial=1` to stay under Cloudflare's 100 s idle cutoff; `attach` filters out the heartbeat lines that keep its stream alive.
 
 The Worker still serves the old interviewer.zerobsai.com while everything moves over; sign-in there moves the browser to keep-it-moving.zerobsai.com.

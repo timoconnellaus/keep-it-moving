@@ -64,7 +64,9 @@ JSON
 
 Put what you were doing and what's blocked in the question's `recommendation` or prompt. The URL goes to stderr; stdout gets one batch like `wait`'s, plus `interviewId`. If it times out before the user answers, run `kim wait <interviewId>` (in the background if you can). Everything else in this skill (adding questions, the plan, `session stop`) works on it too.
 
-In a claude.ai cloud session, the CLI authenticates with the environment's `KEEP_IT_MOVING_TOKEN`. If `kim` isn't installed or the host is unreachable there, the environment isn't set up: tell the user to run `kim cloud setup` from the repo on their own machine, rather than trying to install or sign in yourself. Never print or commit `KEEP_IT_MOVING_TOKEN`.
+In a claude.ai cloud session, the CLI authenticates with the environment's `KEEP_IT_MOVING_TOKEN`, and opens encrypted interviews with `KEEP_IT_MOVING_CONTENT_KEY`. If `kim` isn't installed or the host is unreachable there, the environment isn't set up: tell the user to run `kim cloud setup` from the repo on their own machine, rather than trying to install or sign in yourself. Never print or commit either variable.
+
+Interviews may be end-to-end encrypted. `kim` encrypts and decrypts for you, so nothing changes in how you use it. If it says it doesn't have the user's key (or shows `🔒 Encrypted` in place of text), tell the user to run `kim login` and unlock in the browser; in a cloud session, to add `KEEP_IT_MOVING_CONTENT_KEY` with `kim cloud setup`. Don't try to work around it.
 
 ## Workspace: plan, diagrams, mockups
 
