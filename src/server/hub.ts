@@ -634,6 +634,20 @@ export function createHub(options: HubOptions) {
       ),
     ),
   );
+  // What `kim design write` writes, also once the interview has stopped.
+  app.get("/api/sessions/:id/kept", (c) => {
+    const session = store.getSession(c.req.param("id"), baseUrl);
+    return c.json({
+      session: {
+        id: session.id,
+        title: session.title,
+        status: session.status,
+        createdAt: session.createdAt,
+        project: session.project,
+      },
+      artifacts: store.keptArtifacts(session.id),
+    });
+  });
   app.delete("/api/sessions/:id/artifacts/:artifactId", (c) => {
     store.deleteArtifact(c.req.param("id"), c.req.param("artifactId"));
     return c.json({ ok: true });

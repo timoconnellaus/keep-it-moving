@@ -108,7 +108,13 @@ export const QuestionPatchSchema = z.object(questionFields).partial().extend({
   id: z.string().uuid().optional(),
 });
 
-export const artifactKinds = ["plan", "document", "diagram", "mockup"] as const;
+export const artifactKinds = [
+  "plan",
+  "document",
+  "diagram",
+  "mockup",
+  "design",
+] as const;
 export type ArtifactKind = (typeof artifactKinds)[number];
 
 /**
@@ -117,6 +123,31 @@ export type ArtifactKind = (typeof artifactKinds)[number];
  * UTF-8 bytes; the store checks the pair.
  */
 export const ARTIFACT_MAX_BYTES = 1_900_000;
+
+export { designTypes, type DesignType } from "./designs.js";
+import { designTypes, type DesignType } from "./designs.js";
+
+/**
+ * Where an artifact came from in the repo: its path under .kim/, the
+ * commit it was copied at, and its content then, which the workspace
+ * compares it with.
+ */
+export const RepoOriginSchema = z.object({
+  path: z
+    .string()
+    .trim()
+    .min(1)
+    .max(500)
+    .refine(
+      (path) => !path.startsWith("/") && !path.split("/").includes(".."),
+      {
+        message: "path must be relative to the repo, inside it",
+      },
+    ),
+  baseCommit: z.string().trim().max(100).nullable().default(null),
+  baseContent: z.string().max(ARTIFACT_MAX_BYTES).nullable().default(null),
+});
+export type RepoOrigin = z.output<typeof RepoOriginSchema>;
 
 const artifactFields = {
   title: z.string().trim().min(1).max(200),
@@ -127,6 +158,15 @@ const artifactFields = {
   source: z.string().max(ARTIFACT_MAX_BYTES).nullable(),
   /** Put the artifact on screen as part of this change. */
   show: z.boolean(),
+  /** A design's type; required for a design, refused for anything else. */
+  designType: z.enum(designTypes).nullable(),
+  /** The repo file it was pulled from; null for one made in the interview. */
+  repo: RepoOriginSchema.nullable(),
+  /**
+   * Write it to the repo when the interview stops. The agent decides; the
+   * workspace shows it as a badge.
+   */
+  keep: z.boolean(),
 };
 
 export const ArtifactInputSchema = z
@@ -137,8 +177,15 @@ export const ArtifactInputSchema = z
     title: artifactFields.title,
     content: artifactFields.content,
     show: artifactFields.show.default(false),
+  })
+  .refine((input) => (input.kind === "design") === Boolean(input.designType), {
+    message: "A design needs designType, and only a design has one",
+    path: ["designType"],
   });
-export const ArtifactPatchSchema = z.object(artifactFields).partial();
+export const ArtifactPatchSchema = z
+  .object(artifactFields)
+  .omit({ designType: true })
+  .partial();
 
 export const AnswerInputSchema = z
   .object({
@@ -259,6 +306,19 @@ export interface ArtifactView {
   updatedAt: string;
   /** Agent responses to an edit: bound questions whose controls it no longer declares. */
   warnings?: string[];
+  /** A design's type. */
+  designType?: DesignType;
+  /** The repo file it came from, without its old content. */
+  repo?: RepoView;
+  /** It is written to the repo when the interview stops. */
+  keep: boolean;
+}
+/** Where an artifact came from, as views show it. */
+export interface RepoView {
+  path: string;
+  baseCommit: string | null;
+  /** It differs from the repo copy it was pulled from. */
+  changed: boolean;
 }
 export type ArtifactFormat = "markdown" | "html" | "svg" | "text";
 export type StageSource = "agent" | "user";

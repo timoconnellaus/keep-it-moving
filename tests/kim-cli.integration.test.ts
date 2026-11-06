@@ -1,5 +1,11 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -333,8 +339,11 @@ describe("the CLI package", () => {
       "package/build.json",
       "package/dist/checkbox.js",
       "package/dist/cli.js",
+      "package/dist/designFiles.js",
+      "package/dist/designSync.js",
       "package/dist/hook.js",
       "package/dist/hooks.js",
+      "package/dist/shared/designs.js",
       "package/dist/shared/remote.js",
       "package/dist/skill.js",
       "package/dist/update.js",
@@ -669,4 +678,187 @@ describe("the inbox, as the assignee's agent", () => {
       ),
     ).toEqual({ interviews: [], timedOut: true });
   }, 20_000);
+});
+
+describe("design", { timeout: 30_000 }, () => {
+  /** A repo with a data model in .kim/, and kim run from inside it. */
+  async function repoWithDesigns() {
+    const { address } = await listeningHarness();
+    const dir = tempDir();
+    const git = (...args: string[]) =>
+      exec("git", args, { cwd: dir, env: env(address) });
+    await git("init", "-q");
+    mkdirSync(join(dir, ".kim/designs"), { recursive: true });
+    writeFileSync(
+      join(dir, ".kim/designs/data-model.dbml"),
+      "Table users {\n  id uuid\n}\n",
+    );
+    await git("add", ".");
+    await git(
+      "-c",
+      "user.email=t@example.com",
+      "-c",
+      "user.name=T",
+      "commit",
+      "-q",
+      "-m",
+      "designs",
+    );
+    const run = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await exec(process.execPath, [tsx, cli, ...args], {
+            env: env(address),
+            cwd: dir,
+          })
+        ).stdout,
+      );
+    /** Runs it expecting a failure, for its exit code and output. */
+    const attempt = (...args: string[]) =>
+      exec(process.execPath, [tsx, cli, ...args], {
+        env: env(address),
+        cwd: dir,
+      }).then(
+        () => ({ code: 0, stdout: "", stderr: "" }),
+        (error: { code: number; stdout: string; stderr: string }) => error,
+      );
+    return { dir, run, attempt };
+  }
+
+  it("pulls a design, keeps it, and writes it back when the interview stops", async () => {
+    const { dir, run } = await repoWithDesigns();
+    expect((await run("design", "list")).files).toEqual([
+      {
+        path: ".kim/designs/data-model.dbml",
+        kind: "design",
+        designType: "data-model",
+      },
+    ]);
+    const session = await run("session", "create", "--title", "Plans table");
+    const pulled = await run(
+      "design",
+      "pull",
+      session.id,
+      ".kim/designs/data-model.dbml",
+    );
+    const [design] = pulled.artifacts;
+    expect(design).toMatchObject({
+      kind: "design",
+      designType: "data-model",
+      keep: false,
+      repo: { path: ".kim/designs/data-model.dbml", changed: false },
+    });
+    const changed = join(dir, "changed.dbml");
+    writeFileSync(changed, "Table users {\n  id uuid\n  plan text\n}\n");
+    await run("artifact", "update", session.id, design.id, "--file", changed);
+    expect((await run("design", "keep", session.id, design.id)).keep).toBe(
+      true,
+    );
+    const sequence = join(dir, "pull.mmd");
+    writeFileSync(sequence, "sequenceDiagram\n  Agent->>kim: pull\n");
+    await run(
+      "artifact",
+      "add",
+      session.id,
+      "--file",
+      sequence,
+      "--title",
+      "Pull a design",
+      "--keep",
+    );
+    expect(
+      (await run("design", "write", session.id, "--dry-run")).plan,
+    ).toEqual([
+      expect.objectContaining({
+        path: ".kim/designs/data-model.dbml",
+        action: "update",
+      }),
+      expect.objectContaining({
+        path: ".kim/designs/pull-a-design.mmd",
+        action: "create",
+      }),
+    ]);
+
+    const stopped = await run("session", "stop", session.id);
+    expect(stopped.ok).toBe(true);
+    expect(stopped.written.map((step: { path: string }) => step.path)).toEqual([
+      ".kim/designs/data-model.dbml",
+      ".kim/designs/pull-a-design.mmd",
+    ]);
+    expect(
+      readFileSync(join(dir, ".kim/designs/data-model.dbml"), "utf8"),
+    ).toContain("plan text");
+    expect(
+      readFileSync(join(dir, ".kim/designs/pull-a-design.mmd"), "utf8"),
+    ).toContain("Agent->>kim");
+  });
+
+  it("leaves the interview running when the repo file changed since the copy", async () => {
+    const { dir, run, attempt } = await repoWithDesigns();
+    const session = await run("session", "create", "--title", "Plans table");
+    const [design] = (
+      await run(
+        "design",
+        "pull",
+        session.id,
+        ".kim/designs/data-model.dbml",
+        "--keep",
+      )
+    ).artifacts;
+    const ours = join(dir, "ours.dbml");
+    writeFileSync(ours, "Table users {\n  id uuid\n  plan text\n}\n");
+    await run("artifact", "update", session.id, design.id, "--file", ours);
+    // Someone changed it on main meanwhile.
+    const theirs = "Table users {\n  id uuid\n  name text\n}\n";
+    writeFileSync(join(dir, ".kim/designs/data-model.dbml"), theirs);
+
+    const failed = await attempt("session", "stop", session.id);
+    expect(failed.code).toBe(1);
+    const result = JSON.parse(failed.stdout);
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({ path: ".kim/designs/data-model.dbml" }),
+    ]);
+    expect(readFileSync(result.conflicts[0].theirs, "utf8")).toBe(theirs);
+    expect(
+      readFileSync(join(dir, ".kim/designs/data-model.dbml"), "utf8"),
+    ).toBe(theirs);
+    expect((await run("session", "show", session.id)).status).toBe("active");
+
+    // The agent merges, rebases on the repo as it is now, and stops again.
+    const merged = join(dir, "merged.dbml");
+    writeFileSync(
+      merged,
+      "Table users {\n  id uuid\n  name text\n  plan text\n}\n",
+    );
+    const rebased = await run(
+      "design",
+      "rebase",
+      session.id,
+      design.id,
+      "--file",
+      merged,
+    );
+    expect(rebased.repo).toMatchObject({ changed: true });
+    const stopped = await run("session", "stop", session.id);
+    expect(stopped.written).toHaveLength(1);
+    expect(
+      readFileSync(join(dir, ".kim/designs/data-model.dbml"), "utf8"),
+    ).toContain("name text\n  plan text");
+  });
+
+  it("won't keep a past plan", async () => {
+    const { dir, attempt, run } = await repoWithDesigns();
+    mkdirSync(join(dir, ".kim/plans"), { recursive: true });
+    writeFileSync(join(dir, ".kim/plans/2026-10-01-old.md"), "# Old");
+    const session = await run("session", "create", "--title", "Plans table");
+    const failed = await attempt(
+      "design",
+      "pull",
+      session.id,
+      ".kim/plans/2026-10-01-old.md",
+      "--keep",
+    );
+    expect(failed.code).toBe(1);
+    expect(failed.stderr).toContain("past plan");
+  });
 });

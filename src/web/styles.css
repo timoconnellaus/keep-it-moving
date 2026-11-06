@@ -2929,3 +2929,115 @@ html.previewing-full body {
     animation: none !important;
   }
 }
+
+/* The System tab: designs listed by type beside the chosen one. */
+.system-pane {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  min-height: 0;
+}
+.design-list {
+  overflow: auto;
+  padding: 10px;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+.design-list h3 {
+  margin: 12px 6px 6px;
+  font: 600 11px/1.2 var(--body);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.design-list section:first-child h3 {
+  margin-top: 2px;
+}
+.design-list button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+}
+.design-list button:hover {
+  background: rgb(255 255 255 / 0.6);
+}
+.design-list button.on {
+  background: var(--card);
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+.design-list b {
+  font-weight: 600;
+  font-size: 13px;
+}
+.design-path {
+  font: 11px var(--mono);
+  color: var(--muted);
+  word-break: break-all;
+}
+.system-frame {
+  position: relative;
+  display: grid;
+  min-height: 0;
+}
+.repo-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.repo-badge {
+  padding: 1px 7px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--canvas);
+  color: var(--muted);
+}
+.repo-badge.from {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+.repo-badge.keep {
+  background: #e3f7ec;
+  color: #1a8f52;
+}
+.design-changes {
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--canvas);
+  color: var(--muted);
+}
+.design-changes.some {
+  background: #fff1d6;
+  color: #8a5a00;
+}
+.compare-toggle {
+  gap: 5px;
+}
+.compare-toggle input {
+  margin: 0;
+}
+@media (min-width: 761px) {
+  .system-pane .pane-picker {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .system-pane {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .design-list {
+    display: none;
+  }
+}

@@ -27,6 +27,8 @@ export function artifactFormat(
   content: string,
 ): ArtifactFormat {
   if (kind === "plan" || kind === "document") return "markdown";
+  // Served as the design viewer's page, built from the design's source.
+  if (kind === "design") return "html";
   if (kind === "mockup" || /^\s*(<!doctype html|<html)/i.test(content))
     return "html";
   if (/^\s*(<\?xml|<svg)/i.test(content)) return "svg";

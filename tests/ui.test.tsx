@@ -1185,6 +1185,91 @@ describe("questionnaire UI seam", () => {
         ).toBeNull();
       });
 
+      it("lists system designs by type on their own tab, off the canvas", async () => {
+        const session = workspace();
+        session.artifacts.push(
+          artifact({
+            id: "d1",
+            kind: "design",
+            format: "html",
+            designType: "data-model",
+            title: "Interviews schema",
+            content: "",
+            repo: {
+              path: ".kim/designs/data-model.dbml",
+              baseCommit: "8149a37",
+              changed: true,
+            },
+            keep: true,
+          }),
+          artifact({
+            id: "d2",
+            kind: "design",
+            format: "html",
+            designType: "sequence",
+            title: "Pull a design",
+            content: "",
+          }),
+        );
+        serve(session);
+        render(<App />);
+        fireEvent.click(await screen.findByRole("tab", { name: /System/ }));
+        expect(tab(/System/)).toHaveTextContent("System2");
+        expect(tab(/Design/)).toHaveTextContent("Design2");
+        const list = within(
+          screen.getByRole("navigation", { name: "Designs" }),
+        );
+        expect(
+          list.getAllByRole("heading").map((item) => item.textContent),
+        ).toEqual(["Data model", "Sequence"]);
+        const schema = list.getByRole("button", { name: /Interviews schema/ });
+        expect(schema).toHaveTextContent("From repo");
+        expect(schema).toHaveTextContent("Saves to repo");
+        expect(
+          list.getByRole("button", { name: /Pull a design/ }),
+        ).toHaveTextContent("Interview only");
+        expect(panel().querySelector("iframe")!.getAttribute("src")).toMatch(
+          /\/artifacts\/d1\/view\?/,
+        );
+        const iframe = panel().querySelector("iframe")!;
+        const sent = vi.fn();
+        Object.defineProperty(iframe, "contentWindow", {
+          value: { postMessage: sent },
+        });
+        // The viewer reports what changed against the repo copy.
+        fireEvent(
+          window,
+          new MessageEvent("message", {
+            data: {
+              type: "kim-design-changes",
+              added: 1,
+              changed: 2,
+              removed: 0,
+            },
+            source: iframe.contentWindow as Window,
+          }),
+        );
+        expect(
+          await within(panel()).findByText("3 changes"),
+        ).toBeInTheDocument();
+        fireEvent.click(
+          within(panel()).getByRole("checkbox", { name: /Compare/ }),
+        );
+        expect(sent).toHaveBeenCalledWith(
+          { type: "kim-compare", on: false },
+          "*",
+        );
+        expect(localStorage.getItem("kim.compareWithRepo")).toBe("off");
+        fireEvent.click(list.getByRole("button", { name: /Pull a design/ }));
+        expect(panel().querySelector("iframe")!.getAttribute("src")).toMatch(
+          /\/artifacts\/d2\/view\?/,
+        );
+        // Made in the interview: nothing to compare with.
+        expect(
+          within(panel()).queryByRole("checkbox", { name: /Compare/ }),
+        ).toBeNull();
+      });
+
       it("goes to the tab that holds what a question shows", async () => {
         serve(layoutQuestion(workspace()));
         render(<App />);

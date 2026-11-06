@@ -39,6 +39,7 @@ import {
   setComp,
 } from "./plans.js";
 import { checkout, portal, stripeWebhook } from "./stripe.js";
+import { DESIGN_VIEWER_PATH } from "../server/designPage.js";
 import {
   linkedEmails,
   linksResponse,
@@ -197,6 +198,14 @@ const agentApi: ExportedHandler<Env> = {
   },
 };
 
+/** A design viewer file, open to sandboxed frames. */
+async function designViewerFile(request: Request, env: Env): Promise<Response> {
+  const response = await env.ASSETS.fetch(request);
+  const headers = new Headers(response.headers);
+  headers.set("access-control-allow-origin", "*");
+  return new Response(response.body, { status: response.status, headers });
+}
+
 /** Everything else: Google sign-in, the OAuth authorize step, the browser UI, and its API. */
 const site: ExportedHandler<Env> = {
   async fetch(request, env) {
@@ -207,6 +216,10 @@ const site: ExportedHandler<Env> = {
     // environment's setup script installs the CLI from cli.tgz, and `kim`
     // checks cli-version.json for a newer one.
     if (PUBLIC_FILES.test(url.pathname)) return env.ASSETS.fetch(request);
+    // A design's frame is sandboxed with an opaque origin, so the viewer's
+    // modules (loaded with CORS) need to be readable from anywhere.
+    if (url.pathname.startsWith(DESIGN_VIEWER_PATH))
+      return designViewerFile(request, env);
     if (url.pathname === "/auth/google/start") return googleStart(request, env);
     if (url.pathname === "/auth/google/callback")
       return googleCallback(request, env);
