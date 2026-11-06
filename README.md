@@ -14,7 +14,7 @@
   <a href="https://keep-it-moving.zerobsai.com">Website</a> ·
   <a href="#use-it">Install</a> ·
   <a href="#deploy-your-own">Run your own</a> ·
-  <a href="LICENSE">FSL-1.1-MIT</a>
+  <a href="#license">Open source</a>
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@ Coding agents stall on decisions, and a terminal is a bad place to make them. Ke
 - **System designs that land in your PR.** Work through the data model, architecture, flows and API with your agent, starting from what's in your repo's `.kim/` folder. Changes are highlighted against main, and what you keep is written back for review with the code.
 - **Every agent you use.** Claude Code, Codex, Cursor, Gemini CLI, Copilot and 11 more, from one skill that kim keeps up to date.
 - **Send it to someone else.** Assign an interview to a client or colleague by email; their answers go straight back to your agent.
-- **Yours to run.** A Cloudflare Worker, the `kim` CLI and the skill, all here. Use the hosted version, or deploy your own.
+- **Open source.** A Cloudflare Worker, the `kim` CLI and the skill, all here. Use the hosted version, or deploy your own for free.
 
 Quick start (Node.js 22.13 or newer):
 
@@ -68,7 +68,7 @@ The code is at https://github.com/timoconnellaus/keep-it-moving. Sign in at http
 
 ## Deploy your own
 
-The license is the [Functional Source License](LICENSE) (FSL-1.1-MIT): use it, change it and run your own copy for yourself or your company, but don't sell it, or a service built on it, as a competing product. Each version becomes MIT two years after it's released.
+It's open source (see [License](#license)), so run your own copy for yourself or your company, for free.
 
 You need a Cloudflare account with a domain on it, and a Google Cloud project for the sign-in.
 
@@ -521,3 +521,12 @@ The suite runs the hub and store on in-memory `node:sqlite`, and the CLI against
 
 - One watcher per session (the newest takes over).
 - Canvas, drawing, uploads, ranking, and rich HTML questions are future work.
+
+## License
+
+Keep it moving is open source, under two licenses:
+
+- **MIT** for what runs on your machine: the `kim` CLI, the interviewer skill, and the code they share (`src/shared/`). The files are listed in [LICENSE-MIT](LICENSE-MIT). Use, change, bundle or redistribute them however you like.
+- **AGPL-3.0** for the service: the Cloudflare Worker, the hub, the web app and the design viewer. See [LICENSE](LICENSE). You can run, change and self-host it freely; if you offer a modified version as a service to others, you must publish your changes under the same license.
+
+Releases before 6 November 2026 were under the Functional Source License (FSL-1.1-MIT).

@@ -519,7 +519,11 @@ async function writeKept(
   sessionId: string,
   options: { dryRun: boolean; quiet: boolean },
 ) {
-  const kept = (await api(`/api/sessions/${sessionId}/kept`)) as KeptResponse;
+  // A deployment from before .kim/ has nothing kept, and stopping still works.
+  const response = await authorizedFetch(`/api/sessions/${sessionId}/kept`);
+  if (response.status === 404 && options.quiet) return null;
+  if (!response.ok) throw await apiError(response);
+  const kept = (await response.json()) as KeptResponse;
   if (!kept.artifacts.length) {
     if (options.quiet) return null;
     return { written: [], conflicts: [], note: "Nothing is marked to keep" };

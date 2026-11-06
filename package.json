@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Agent-driven interviews on a Cloudflare Worker: a browser questionnaire beside a living plan, diagrams, and mockups.",
   "type": "module",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "AGPL-3.0-only AND MIT",
   "engines": {
     "node": ">=22.13"
   },

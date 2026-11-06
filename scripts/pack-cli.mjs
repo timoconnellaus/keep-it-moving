@@ -82,14 +82,15 @@ try {
   for (const file of files)
     cpSync(join(dist, file), join(stage, "dist", file), { recursive: true });
   cpSync(join(repo, "skills"), join(stage, "skills"), { recursive: true });
-  for (const file of ["README.md", "LICENSE"])
-    cpSync(join(repo, file), join(stage, file));
+  cpSync(join(repo, "README.md"), join(stage, "README.md"));
+  // The CLI and the skill are MIT; the service around them is AGPL.
+  cpSync(join(repo, "LICENSE-MIT"), join(stage, "LICENSE"));
   const manifest = {
     name: root.name,
     version: root.version,
     description: "kim, the Keep it moving CLI.",
     type: "module",
-    license: root.license,
+    license: "MIT",
     engines: root.engines,
     bin: root.bin,
     files: ["dist", "skills", "build.json", "README.md", "LICENSE"],

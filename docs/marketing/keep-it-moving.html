@@ -126,8 +126,9 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .node::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--blue); }
 .node b { font: 500 16px var(--display); }
 .node span { font-size: 13px; color: var(--muted); }
-.row.second { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 50%; margin: 0 auto; margin-top: 30px; position: relative; }
-.row.second::before { content: ""; position: absolute; top: -30px; left: 25%; right: 25%; height: 30px; border-left: 1.5px solid #cfd3da; border-right: 1.5px solid #cfd3da; }
+.row.second { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 75%; margin: 0 auto; margin-top: 30px; position: relative; }
+.row.second::before { content: ""; position: absolute; top: -30px; left: calc(100% / 6); right: calc(100% / 6); height: 30px; border-left: 1.5px solid #cfd3da; border-right: 1.5px solid #cfd3da; }
+.row.second::after { content: ""; position: absolute; top: -30px; left: 50%; height: 30px; border-left: 1.5px solid #cfd3da; }
 .node.you::before { background: var(--pink); }
 
 /* Night bands */
@@ -192,12 +193,126 @@ footer a { color: var(--muted); }
   .hero { min-height: 0; }
   .row { grid-template-columns: minmax(0, 1fr); }
   .row.second { grid-template-columns: minmax(0, 1fr); }
-  .row.second::before { display: none; }
+  .row.second::before, .row.second::after { display: none; }
   .blob { width: 150px; height: 150px; }
   /* The commands keep their lines and scroll sideways; Copy sits beside the short last one. */
   .terminal pre { padding: 16px; font-size: 12.5px; white-space: pre; overflow-x: auto; overflow-wrap: normal; }
   .copy { top: auto; bottom: 12px; }
 }
+
+/* From interview to PR */
+#repo .repo {padding-block:72px 64px;display:grid;gap:40px}
+
+#repo .repo-grid {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:16px;align-items:stretch}
+
+#repo .steps {display:grid;gap:12px}
+
+#repo .step {background:var(--card);border:1px solid var(--line);border-radius:22px;padding:20px 22px;display:grid;grid-template-columns:36px 1fr;gap:4px 14px;align-items:start}
+
+#repo .step .n {grid-row:span 2;width:36px;height:36px;border-radius:50%;background:var(--ink);color:#fff;display:grid;place-items:center;font:600 15px var(--display)}
+
+#repo .step h3 {font-size:19px;font-weight:600}
+#repo .step p {color:var(--muted);font-size:15px}
+
+#repo .shot {background:var(--card);border:1px solid var(--line);border-radius:22px;padding:14px;display:grid;gap:12px;align-content:start}
+
+#repo .win {border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#eef0f3}
+
+#repo .win .bar {display:flex;gap:6px;align-items:center;padding:8px 10px;background:#fff;border-bottom:1px solid var(--line);font-size:12px;flex-wrap:wrap}
+
+#repo .tab {padding:3px 9px;border-radius:7px;color:var(--muted);font-weight:500}
+#repo .tab.on {background:var(--ink);color:#fff}
+
+#repo .chip {font-size:11px;padding:2px 8px;border-radius:99px;background:#fff1d6;color:#8a5a00;font-weight:600}
+
+#repo .erd {position:relative;height:250px;background-image:radial-gradient(#d3d7dd 1px,transparent 1px);background-size:16px 16px}
+
+#repo .ent {position:absolute;background:#fff;border:1px solid #d3d7dd;border-radius:9px;width:136px;font-size:11px;box-shadow:0 4px 12px -8px rgb(0 0 0/.3)}
+
+#repo .ent b {display:block;padding:6px 9px;border-bottom:1px solid var(--line);font:600 12px var(--display)}
+
+#repo .ent span {display:flex;justify-content:space-between;padding:3px 9px;font-family:var(--mono);font-size:10.5px}
+#repo .ent span i {font-style:normal;color:#9aa0a9}
+
+#repo .ent.add {border-color:#2fbf71;box-shadow:0 0 0 3px #e3f7ec}
+#repo .ent.add b {background:#e3f7ec}
+
+#repo .f-add {background:#e3f7ec}
+#repo .f-chg {background:#fff1d6}
+
+#repo .pr {border:1px solid var(--line);border-radius:14px;background:#fff;font-size:13px}
+
+#repo .pr .h {padding:10px 14px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+#repo .pr .h b {font-weight:600}
+#repo .pr-state {background:#2fbf71;color:#fff;border-radius:99px;padding:2px 9px;font-size:11px;font-weight:600}
+
+#repo .file {display:flex;gap:10px;align-items:center;padding:7px 14px;font-family:var(--mono);font-size:12px;border-top:1px solid #f0f1f3}
+
+#repo .file:first-of-type {border-top:0}
+#repo .file .d {margin-left:auto;font-size:11px}
+#repo .plus {color:#1a8f52}
+#repo .minus {color:#d64545}
+
+@media (max-width: 860px) { #repo .repo-grid { grid-template-columns: 1fr; } }
+/* Design system */
+#design-system .ds {padding-block:72px 64px;display:grid;gap:40px}
+
+#design-system .ds-grid {display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.3fr);gap:16px}
+
+#design-system .card {background:var(--card);border:1px solid var(--line);border-radius:22px;padding:20px;display:grid;gap:14px;align-content:start}
+
+#design-system .card h3 {font-size:19px;font-weight:600}
+#design-system .card p {color:var(--muted);font-size:15px}
+
+#design-system .file-tag {font:12px var(--mono);color:var(--muted)}
+
+#design-system .sw {display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+
+#design-system .sw div {border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:11px}
+
+#design-system .sw i {display:block;height:38px}
+#design-system .sw span {display:block;padding:4px 7px;font-family:var(--mono)}
+
+#design-system .sw .chg {border-color:#d98a00;box-shadow:0 0 0 3px #fff1d6}
+
+#design-system .chat {display:grid;gap:8px}
+
+#design-system .bubble {padding:9px 12px;border-radius:12px;font-size:13.5px;max-width:90%}
+
+#design-system .me {background:var(--blue-soft);justify-self:end}
+
+#design-system .agent {background:var(--panel)}
+
+#design-system .screens {display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+#design-system .scr {border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+
+#design-system .scr .t {font-size:11px;color:var(--muted);padding:6px 10px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+
+#design-system .scr .b {padding:16px;display:grid;gap:8px}
+
+#design-system .ln {height:8px;border-radius:4px;background:#e4e6ea}
+#design-system .ln.w6 {width:60%}
+#design-system .ln.w8 {width:80%}
+#design-system .ln.w4 {width:40%}
+
+#design-system .cta {width:110px;height:28px;border-radius:7px;background:#4b3bff}
+
+#design-system .price {display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#design-system .price div {border:1px solid var(--line);border-radius:8px;padding:8px;display:grid;gap:6px}
+
+#design-system .upd {font-size:10px;color:#8a5a00;background:#fff1d6;border-radius:99px;padding:1px 7px}
+
+@media (max-width: 860px) { #design-system .ds-grid, #design-system .screens { grid-template-columns: 1fr; } }
+.gh-btn { display: inline-flex; align-items: center; gap: 7px; font: 600 14px var(--body); color: var(--ink); text-decoration: none; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.gh-btn:hover { border-color: #cfd3da; }
+.gh-btn svg { width: 15px; height: 15px; }
+.gh-btn.big { padding: 11px 18px; font-size: 15px; line-height: normal; }
+.gh-stars { border-left: 1px solid var(--line); padding-left: 8px; margin-left: 2px; color: var(--muted); font-weight: 500; }
+.hero-ctas, .source-ctas { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.source-ctas { justify-content: flex-start; align-items: center; margin-top: 22px; }
+.source .source-ctas .btn { margin-top: 0; }
 </style>
 
 <div class="page">
@@ -212,7 +327,7 @@ footer a { color: var(--muted); }
         <a class="link" href="#how">How it works</a>
         <a class="link" href="#features">Features</a>
         <a class="link" href="#pricing">Pricing</a>
-        <a class="link" href="https://github.com/timoconnellaus/keep-it-moving">Source</a>
+        <a class="gh-btn" href="https://github.com/timoconnellaus/keep-it-moving"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0a8 8 0 0 0-2.5 15.6c.4 0 .5-.2.5-.4v-1.5c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.3 1.9.9 2.4.7 0-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.4 1.1.2 1.9.1 2.1.5.6.8 1.3.8 2.1 0 3.1-1.9 3.7-3.6 3.9.3.3.6.8.6 1.5v2.2c0 .2.1.5.6.4A8 8 0 0 0 8 0z"/></svg>GitHub<span class="gh-stars" data-stars hidden></span></a>
         <a class="btn btn-dark" href="/signin">Sign in</a>
       </nav>
 
@@ -221,8 +336,8 @@ footer a { color: var(--muted); }
           <span class="pill">For Claude Code, Codex, Cursor and 13 more</span>
           <h1>Your agent asks. You answer in <span class="mark">one click.</span></h1>
           <p class="lede">When your coding agent needs decisions from you, it opens an interview in your browser, with its recommended answer already picked and a plan that updates as you go.</p>
-          <a class="btn btn-blue" href="#install">Install the skill <span class="arrow"><svg viewBox="0 0 10 10"><path d="M2 5h6M5.5 2.5 8 5 5.5 7.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></a>
-          <p class="agents-line"><b>Free</b> for up to 3 live interviews · Sign in with Google</p>
+          <div class="hero-ctas"><a class="btn btn-blue" href="#install">Install the skill <span class="arrow"><svg viewBox="0 0 10 10"><path d="M2 5h6M5.5 2.5 8 5 5.5 7.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></a><a class="gh-btn big" href="https://github.com/timoconnellaus/keep-it-moving"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0a8 8 0 0 0-2.5 15.6c.4 0 .5-.2.5-.4v-1.5c-2.2.5-2.7-1-2.7-1-.4-.9-.9-1.2-.9-1.2-.7-.5.1-.5.1-.5.8.1 1.2.8 1.2.8.7 1.3 1.9.9 2.4.7 0-.5.3-.9.5-1.1-1.8-.2-3.6-.9-3.6-4 0-.9.3-1.6.8-2.1-.1-.2-.4-1 .1-2.1 0 0 .7-.2 2.2.8a7.5 7.5 0 0 1 4 0c1.5-1 2.2-.8 2.2-.8.4 1.1.2 1.9.1 2.1.5.6.8 1.3.8 2.1 0 3.1-1.9 3.7-3.6 3.9.3.3.6.8.6 1.5v2.2c0 .2.1.5.6.4A8 8 0 0 0 8 0z"/></svg>Star on GitHub<span class="gh-stars" data-stars hidden></span></a></div>
+          <p class="agents-line"><b>Free</b> for up to 3 live interviews · <b>Self-host</b> it free, forever</p>
         </div>
 
         <div class="demo-frame" id="demo" role="img" aria-label="Keep it moving in use: answering a question about two checkout mockups, the plan updating, a chat with the agent, and accepting the remaining defaults">
@@ -267,7 +382,7 @@ footer a { color: var(--muted); }
             <div class="mini"><span class="ico blue"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="2" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M2.5 6.5h11" stroke="#fff" stroke-width="1.6"/></svg></span><div>Layout A vs Layout B<small>Mockups beside the question</small></div></div>
           </div>
           <h3>Diagrams and mockups</h3>
-          <p>Architecture diagrams and HTML mockups sit next to the question they're about. “Which layout?” shows you the layouts.</p>
+          <p>Data models, architecture, API contracts and HTML mockups sit next to the question they're about. “Which layout?” shows you the layouts.</p>
         </div>
         <div class="fcard">
           <div class="stage">
@@ -282,6 +397,76 @@ footer a { color: var(--muted); }
       </div>
     </div>
   </div>
+
+  <!-- Open source -->
+  <div class="panel" id="source">
+    <div class="inner source">
+      <div>
+        <span class="pill">Open source</span>
+        <h2 style="margin-top:16px">All of it is on GitHub. Run your own.</h2>
+        <p>The Worker, the <code>kim</code> CLI and the skill. Read every line, run it on your own Cloudflare account for you or your company, and send fixes back.</p>
+        <div class="source-ctas"><a class="btn btn-dark" href="https://github.com/timoconnellaus/keep-it-moving">View on GitHub</a><a class="gh-btn big" href="https://github.com/timoconnellaus/keep-it-moving#deploy-your-own">Self-hosting guide</a></div>
+      </div>
+      <div class="license" aria-label="What you get">
+        <div><span>Self-hosted, your interviews stay in</span><span>Your Cloudflare account</span></div>
+        <div><span>Self-hosting costs</span><span>Nothing: no seats, no key</span></div>
+        <div><span>The CLI and the skill</span><span>MIT</span></div>
+        <div><span>The Worker and the web app</span><span>AGPL-3.0</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- From interview to PR -->
+  <div class="panel" id="repo">
+ <div class="inner repo">
+  <div class="section-head">
+   <span class="pill">Plan it properly</span>
+   <h2>Design it in the interview. Ship it in the PR.</h2>
+   <p>Work through the data model, architecture and flows with your agent. Start from what's already in your repo, and end with updated files your reviewers can read.</p>
+  </div>
+  <div class="repo-grid">
+   <div class="steps">
+    <div class="step"><span class="n">1</span><h3>Starts from your repo</h3><p>Your agent pulls the data model or API it needs from <code>.kim/</code> in your repo. Nothing else clutters the screen.</p></div>
+    <div class="step"><span class="n">2</span><h3>Every change, highlighted</h3><p>New tables in green, changed fields in amber, compared with main. Pin a comment on any box or arrow.</p></div>
+    <div class="step"><span class="n">3</span><h3>Lands in your PR</h3><p>When the interview ends, the designs your agent kept and the plan are written back, with a picture of each for review.</p></div>
+    <div class="step"><span class="n">4</span><h3>Six kinds of design</h3><p>Data models, architecture, data flow, sequences, state machines and API contracts, in DBML, D2, Mermaid and OpenAPI.</p></div>
+   </div>
+   <div class="shot">
+    <div class="win"><div class="bar"><span class="tab">Document</span><span class="tab">HTML</span><span class="tab">Design</span><span class="tab on">System</span><span style="flex:1"></span><span class="chip">3 changes</span></div><div class="erd">
+<svg width="100%" height="250" style="position:absolute;inset:0"><g stroke="#9aa0a9" stroke-width="1.4" fill="none"><path d="M156 60 H180"/><path d="M248 120 V160"/></g><path d="M316 75 C340 75 318 176 338 176" stroke="#2fbf71" stroke-width="1.8" stroke-dasharray="4 3" fill="none"/></svg>
+<div class="ent" style="left:20px;top:20px"><b>users</b><span>id<i>uuid pk</i></span><span>email<i>text</i></span><span class="f-chg">plan<i>enum → text</i></span></div>
+<div class="ent" style="left:180px;top:20px"><b>interviews</b><span>id<i>uuid pk</i></span><span>user_id<i>fk</i></span><span class="f-add">branch<i>text</i></span></div>
+<div class="ent" style="left:180px;top:160px"><b>answers</b><span>id<i>uuid pk</i></span><span>question_id<i>fk</i></span></div>
+<div class="ent add" style="left:338px;top:136px"><b>designs</b><span>id<i>uuid pk</i></span><span>path<i>text</i></span><span>base_commit<i>text</i></span></div>
+</div></div>
+    <div class="pr"><div class="h"><span class="pr-state">Open</span><b>Add designs table</b><span style="color:var(--muted)">feat/designs → main</span></div>
+     <div class="file">.kim/designs/data-model.dbml<span class="d"><span class="plus">+9</span> <span class="minus">−1</span></span></div>
+     <div class="file">.kim/designs/data-model.svg<span class="d">image diff</span></div>
+     <div class="file">.kim/plans/2026-11-06-designs-table.md<span class="d"><span class="plus">+48</span></span></div>
+     <div class="file">src/server/store.ts<span class="d"><span class="plus">+112</span> <span class="minus">−8</span></span></div>
+    </div>
+   </div>
+  </div>
+ </div>
+</div>
+
+  <!-- Design system -->
+  <div class="panel" id="design-system"><div class="inner ds">
+ <div class="section-head"><span class="pill">Optional</span><h2>Your design system, in every mockup</h2>
+ <p>Keep your colours, type and spacing in your repo. Your agent's mockups are drawn with them, and one change updates every screen.</p></div>
+ <div class="ds-grid">
+  <div class="card"><span class="file-tag">.kim/design-system/tokens.css</span>
+   <div class="sw"><div><i style="background:#0e0f11"></i><span>--ink</span></div><div class="chg"><i style="background:linear-gradient(90deg,#1f6bff 50%,#4b3bff 50%)"></i><span>--accent</span></div><div><i style="background:#ffd23f"></i><span>--yellow</span></div><div><i style="background:#f6f6f7"></i><span>--panel</span></div><div><i style="background:#2fbf71"></i><span>--green</span></div><div><i style="background:#f2357b"></i><span>--pink</span></div></div>
+   <div class="chat"><div class="bubble me">Let's make the brand more violet</div><div class="bubble agent">Changed <code>--accent</code> in the design system. Your 3 mockups use it, and they've all updated.</div></div>
+  </div>
+  <div class="card"><div class="screens">
+   <div class="scr"><div class="t">Landing <span class="upd">updated</span></div><div class="b"><div class="ln w8"></div><div class="ln w6"></div><div class="cta"></div></div></div>
+   <div class="scr"><div class="t">Pricing <span class="upd">updated</span></div><div class="b"><div class="price"><div><div class="ln w6"></div><div class="cta" style="width:100%;height:20px"></div></div><div><div class="ln w4"></div><div class="cta" style="width:100%;height:20px"></div></div></div></div></div>
+   <div class="scr"><div class="t">Sign in <span class="upd">updated</span></div><div class="b"><div class="ln"></div><div class="ln"></div><div class="cta" style="width:100%"></div></div></div>
+   <div class="scr" style="display:grid;place-items:center;color:var(--muted);font-size:13px;padding:16px;text-align:center">No design system? Mockups bring their own styles, as before.</div>
+  </div></div>
+ </div>
+</div></div>
 
   <!-- How it works -->
   <div class="panel" id="how">
@@ -308,6 +493,7 @@ footer a { color: var(--muted); }
         <div class="row second">
           <div class="node you"><b>You answer in the browser</b><span>Or ask back in the chat</span></div>
           <div class="node you"><b>It keeps going</b><span>Answers reach it in seconds, even tomorrow</span></div>
+          <div class="node you"><b>Writes it back</b><span>Designs and the plan land in <code>.kim/</code> for your PR</span></div>
         </div>
       </div>
     </div>
@@ -351,6 +537,7 @@ footer a { color: var(--muted); }
           <ul>
             <li><svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="7.5" fill="none" stroke="#6f737b"/><path d="M5.8 9.2 8 11.4l4.2-4.6" fill="none" stroke="#e6e7ea" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>3 live interviews at once</li>
             <li><svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="7.5" fill="none" stroke="#6f737b"/><path d="M5.8 9.2 8 11.4l4.2-4.6" fill="none" stroke="#e6e7ea" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Plans, diagrams, mockups and chat</li>
+            <li><svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="7.5" fill="none" stroke="#6f737b"/><path d="M5.8 9.2 8 11.4l4.2-4.6" fill="none" stroke="#e6e7ea" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>System designs and repo sync</li>
             <li><svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="7.5" fill="none" stroke="#6f737b"/><path d="M5.8 9.2 8 11.4l4.2-4.6" fill="none" stroke="#e6e7ea" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>All 16 agents</li>
             <li><svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="7.5" fill="none" stroke="#6f737b"/><path d="M5.8 9.2 8 11.4l4.2-4.6" fill="none" stroke="#e6e7ea" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Answer interviews sent to you</li>
           </ul>
@@ -388,30 +575,28 @@ footer a { color: var(--muted); }
     </div>
   </div>
 
-  <!-- Source -->
-  <div class="panel">
-    <div class="inner source">
-      <div>
-        <span class="pill">Source available</span>
-        <h2 style="margin-top:16px">Read it. Run it yourself.</h2>
-        <p>A Cloudflare Worker, the <code>kim</code> CLI and the skill, all on GitHub. Run your own copy for you or your company, with the steps in the README.</p>
-        <a class="btn btn-dark" href="https://github.com/timoconnellaus/keep-it-moving">View on GitHub</a>
-      </div>
-      <div class="license" aria-label="License summary">
-        <div><span>License</span><span>FSL-1.1-MIT</span></div>
-        <div><span>Use, change, self-host</span><span>Yes</span></div>
-        <div><span>Sell it as a competing product</span><span>No</span></div>
-        <div><span>Becomes MIT</span><span>2 years after each release</span></div>
-      </div>
-    </div>
-  </div>
-
   <footer>
     <span>Keep it moving · made by Zero BS AI</span>
     <span><a href="/signin">Sign in</a> · <a href="https://github.com/timoconnellaus/keep-it-moving">GitHub</a></span>
   </footer>
 </div>
 
+<script>
+// The repo's stars, when GitHub answers; the buttons read fine without them.
+fetch("https://api.github.com/repos/timoconnellaus/keep-it-moving")
+  .then((response) => (response.ok ? response.json() : null))
+  .then((repo) => {
+    const stars = repo && repo.stargazers_count;
+    // No count until there is one to show.
+    if (typeof stars !== "number" || stars < 1) return;
+    const text = stars >= 1000 ? `${(stars / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(stars);
+    document.querySelectorAll("[data-stars]").forEach((node) => {
+      node.textContent = `★ ${text}`;
+      node.hidden = false;
+    });
+  })
+  .catch(() => {});
+</script>
 <script>
 document.getElementById("copy-install").addEventListener("click", (event) => {
   const button = event.currentTarget;
