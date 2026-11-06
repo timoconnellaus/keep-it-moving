@@ -201,6 +201,10 @@ export function installSkill(
     unlinked: [],
     skipped: [],
   };
+  // The choice is kept even when the skill folder isn't kim's to replace
+  // (say, a link to a checkout), so every run still keeps the hooks current.
+  mkdirSync(dirname(paths.choiceFile), { recursive: true });
+  writeFileSync(paths.choiceFile, `${JSON.stringify({ agents })}\n`);
   const kind = kindOf(canonical, canonical);
   if ((kind === "other" || kind === "other-link") && !force) {
     result.skipped.push({ path: canonical, reason: refusal(kind) });
@@ -233,8 +237,6 @@ export function installSkill(
     symlinkSync(canonical, link, "dir");
     result.linked.push(link);
   }
-  mkdirSync(dirname(paths.choiceFile), { recursive: true });
-  writeFileSync(paths.choiceFile, `${JSON.stringify({ agents })}\n`);
   return result;
 }
 

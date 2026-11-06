@@ -129,6 +129,18 @@ describe("skill install", () => {
     expect(skillText(checkout)).toBe("dev copy");
   });
 
+  it("remembers the agents even when the canonical folder is a link it didn't make", () => {
+    const paths = setup();
+    const checkout = join(paths.home, "repo", "skills", "interviewer");
+    mkdirSync(checkout, { recursive: true });
+    mkdirSync(join(paths.home, ".agents", "skills"), { recursive: true });
+    symlinkSync(checkout, canonicalSkill(paths.home), "dir");
+    installSkill(paths, ["claude", "codex"]);
+    // So every run keeps the chosen agents' hooks current.
+    expect(rememberedAgents(paths.choiceFile)).toEqual(["claude", "codex"]);
+    expect(readlinkSync(canonicalSkill(paths.home))).toBe(checkout);
+  });
+
   it("won't replace a canonical folder it didn't make, and links nothing then", () => {
     const paths = setup();
     const canonical = canonicalSkill(paths.home);
