@@ -1,0 +1,328 @@
+@import url("https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Outfit:wght@500;600&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+/* The design viewer, in the site's light palette (see src/web/styles.css). */
+:root {
+  color-scheme: light;
+  --panel: #f6f6f7;
+  --card: #ffffff;
+  --ink: #0e0f11;
+  --muted: #676c74;
+  --faint: #9aa0a9;
+  --line: #e4e6ea;
+  --line-strong: #d3d7dd;
+  --blue: #1f6bff;
+  --blue-soft: #e8f0ff;
+  --green: #2fbf71;
+  --green-soft: #e3f7ec;
+  --green-ink: #1a8f52;
+  --amber: #d98a00;
+  --amber-soft: #fff1d6;
+  --amber-ink: #8a5a00;
+  --red: #d64545;
+  --red-soft: #fde8e8;
+  --red-ink: #b42318;
+  --display: "Outfit", "Avenir Next", ui-sans-serif, system-ui, sans-serif;
+  --body:
+    "Figtree", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--body);
+  color: var(--ink);
+  background: var(--card);
+  -webkit-font-smoothing: antialiased;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--card);
+  font-size: 14px;
+  line-height: 1.5;
+}
+#kim-design-root {
+  position: relative;
+  min-height: 100vh;
+}
+.kim-canvas {
+  padding: 16px;
+  width: max-content;
+  min-width: 100%;
+}
+.kim-legend + .kim-canvas {
+  padding-top: 52px;
+}
+html[data-kim-type="api"] .kim-canvas {
+  width: auto;
+}
+.kim-canvas > svg {
+  display: block;
+  max-width: none;
+  height: auto;
+}
+
+/* Compare legend */
+.kim-legend {
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  gap: 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: rgb(255 255 255 / 0.92);
+  box-shadow: 0 4px 14px -10px rgb(14 15 17 / 0.4);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.kim-legend .item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.kim-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.kim-legend i.added {
+  background: var(--green);
+}
+.kim-legend i.changed {
+  background: var(--amber);
+}
+.kim-legend i.removed {
+  background: var(--red);
+}
+
+/* Errors */
+.kim-error {
+  margin: 20px;
+  max-width: 900px;
+  border: 1px solid #f2c4c4;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+.kim-error h2 {
+  margin: 0;
+  padding: 12px 16px 0;
+  font: 600 16px var(--display);
+}
+.kim-error .where {
+  margin: 4px 16px 0;
+  font: 500 12px var(--mono);
+  color: var(--red-ink);
+}
+.kim-error .message {
+  margin: 8px 16px 14px;
+  white-space: pre-wrap;
+}
+.kim-error .source {
+  margin: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font: 12px/1.6 var(--mono);
+  overflow: auto;
+  max-height: 70vh;
+}
+.kim-error .ln {
+  display: block;
+  padding: 0 16px 0 0;
+  white-space: pre;
+}
+.kim-error .ln b {
+  display: inline-block;
+  width: 44px;
+  padding-right: 12px;
+  text-align: right;
+  font-weight: 400;
+  color: var(--faint);
+  user-select: none;
+}
+.kim-error .ln.bad {
+  background: var(--red-soft);
+  box-shadow: inset 3px 0 var(--red);
+}
+.kim-error .ln.bad b {
+  color: var(--red-ink);
+  font-weight: 600;
+}
+
+/* API contract */
+.kim-api {
+  max-width: 1040px;
+  padding: 4px 0;
+}
+.kim-api .api-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  flex-wrap: wrap;
+}
+.kim-api h1 {
+  margin: 0;
+  font: 600 18px var(--display);
+}
+.kim-api .pill {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--panel);
+  color: var(--muted);
+}
+.kim-api .empty {
+  color: var(--muted);
+}
+.ep {
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.ep.added {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px var(--green-soft);
+}
+.ep.changed {
+  border-color: var(--amber);
+}
+.ep.removed {
+  border: 1.5px dashed var(--red);
+  opacity: 0.85;
+}
+.ep.removed pre {
+  color: var(--red-ink);
+  text-decoration: line-through;
+}
+.ep.removed .path {
+  text-decoration: line-through;
+  color: var(--red-ink);
+}
+.ep.deprecated .path {
+  color: var(--muted);
+}
+.ep .head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.ep .m {
+  font: 600 11px var(--mono);
+  padding: 2px 7px;
+  border-radius: 5px;
+  color: #fff;
+  background: var(--muted);
+}
+.ep .m-GET {
+  background: #1f6bff;
+}
+.ep .m-POST {
+  background: #2fbf71;
+}
+.ep .m-PUT {
+  background: #7a5af5;
+}
+.ep .m-PATCH {
+  background: #d98a00;
+}
+.ep .m-DELETE {
+  background: #d64545;
+}
+.ep .path {
+  font: 500 13px var(--mono);
+}
+.ep .desc {
+  color: var(--muted);
+  font-size: 13px;
+}
+.ep .desc.c {
+  background: var(--amber-soft);
+  color: var(--amber-ink);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.ep .tag {
+  font: 600 10px var(--body);
+  padding: 1px 7px;
+  border-radius: 99px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #fff;
+}
+.ep .tag.added {
+  background: var(--green);
+}
+.ep .tag.changed {
+  background: var(--amber);
+}
+.ep .tag.removed {
+  background: var(--red);
+}
+.ep .tag.old {
+  background: var(--faint);
+}
+.ep .cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.ep .cols > div {
+  padding: 10px 12px;
+  min-width: 0;
+}
+.ep .cols > div + div {
+  border-left: 1px solid var(--line);
+}
+.ep h6 {
+  margin: 0 0 6px;
+  font: 600 11px var(--body);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--faint);
+}
+.ep pre + h6 {
+  margin-top: 10px;
+}
+.ep h6.a {
+  color: var(--green-ink);
+}
+.ep h6.d {
+  color: var(--red-ink);
+  text-decoration: line-through;
+}
+.ep pre {
+  margin: 0;
+  font: 11.5px/1.6 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ep .ln.a {
+  background: var(--green-soft);
+}
+.ep .ln.c {
+  background: var(--amber-soft);
+}
+.ep .ln.d {
+  background: var(--red-soft);
+  color: var(--red-ink);
+  text-decoration: line-through;
+}
+@media (max-width: 640px) {
+  .ep .cols {
+    grid-template-columns: 1fr;
+  }
+  .ep .cols > div + div {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}

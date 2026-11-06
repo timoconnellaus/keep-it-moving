@@ -68,7 +68,7 @@ In a claude.ai cloud session, the CLI authenticates with the environment's `KEEP
 
 ## Workspace: plan, diagrams, mockups
 
-An interview exists to produce a plan, so build the plan alongside it where the user can see it. The workspace has three tabs: **Document** (the plan and Markdown documents, read one at a time), **HTML** (html pages such as mockups, used one at a time at desktop, tablet or phone width) and **Design**, a canvas of the designs (html pages and diagrams; documents stay on the Document tab): every design is a frame the user can pan to, zoom, drag, open at full size on desktop, tablet and phone widths, and pin comments to. Frames lay themselves out in a row per question (the first question that names an artifact by `artifactId` or `optionArtifacts`), after a row of designs tied to no question.
+An interview exists to produce a plan, so build the plan alongside it where the user can see it. The workspace has four tabs: **Document** (the plan and Markdown documents, read one at a time), **HTML** (html pages such as mockups, used one at a time at desktop, tablet or phone width), **System** (system designs, below) and **Design**, a canvas of the visual designs (html pages and diagrams): every design is a frame the user can pan to, zoom, drag, open at full size on desktop, tablet and phone widths, and pin comments to. Frames lay themselves out in a row per question (the first question that names an artifact by `artifactId` or `optionArtifacts`), after a row of designs tied to no question.
 
 ```sh
 kim plan <session-id> --file plan.md            # the one living plan (Markdown); replaces content
@@ -79,7 +79,7 @@ kim artifact show <session-id> <artifact-id>     # put it on screen
 ```
 
 - **Plan:** create it early and rewrite it after each batch of answers. Record decisions (what was chosen and why), open questions, and next steps. The user reads it, so keep it short and current.
-- **Diagrams:** use one when structure matters, such as architecture, workflow, a request sequence, data flow or state. Diagrams need the [archify](https://github.com/tt-a1i/archify) skill; if it isn't installed, describe the structure in the plan instead, or use a mockup. Author an archify spec by following the archify skill: pick the type, then read its schema and one example. Don't hand-write HTML or run `archify deliver` yourself. Pass the spec to `artifact add` or `artifact update`: it validates, and on failure returns archify's diagnostics with `supportedFixes`, so fix only what they name and retry. Keep the spec file and update it rather than adding near-duplicates. Keep labels meaningful.
+- **Diagrams:** for planning software, use a system design (below): it lives in the repo and the next interview can build on it. An archify diagram suits a one-off explainer. Diagrams need the [archify](https://github.com/tt-a1i/archify) skill; if it isn't installed, describe the structure in the plan instead, or use a mockup. Author an archify spec by following the archify skill: pick the type, then read its schema and one example. Don't hand-write HTML or run `archify deliver` yourself. Pass the spec to `artifact add` or `artifact update`: it validates, and on failure returns archify's diagnostics with `supportedFixes`, so fix only what they name and retry. Keep the spec file and update it rather than adding near-duplicates. Keep labels meaningful.
 - **Mockups:** use self-contained HTML (inline CSS; CDN scripts work), written as real responsive pages: the user previews them at 1280, 834 and 390 wide, and scrolls and clicks through them. Put `data-name="pay button"` (a short, plain name) on each meaningful element, so a comment pinned there names it. A frame is desktop-sized (1280 × 800) unless the title or description says mobile/phone (390 × 844) or tablet (834 × 1112). Always pass `--description`; it keeps the options readable.
 - **Whether the workspace is shown:** the workspace column starts closed, and you decide whether to open it. Keep it closed when the user follows the plan somewhere else, for example a Markdown file you are writing in the repo or a design open beside the interviewer, or when the interview is just questions. Open it (`kim stage open <session-id>`, or `session create --open-stage`) when the user should look at something here: a diagram, a mockup to choose between, or a plan they have no other view of. Close it with `kim stage close <session-id>` when it stops being useful. You can change your mind during the session. The user can toggle it too; `stage.visibility` events and `stageVisible` in each batch tell you its state. If the user closed it, don't reopen it unless you are showing something new they need to see.
 - **What's on screen:** `--show` (or `artifact show`) takes every viewer to that artifact (its Document or HTML tab, or its frame on the Design canvas), but doesn't open a closed workspace. Don't yank the canvas around while the user is mid-question; show a new item when you ask about it. Focusing a question fits its frames.
@@ -104,6 +104,28 @@ kim artifact show <session-id> <artifact-id>     # put it on screen
   ```
 
 Artifact ids come back from `artifact add`. `session show` lists artifacts without their content.
+
+## System designs and the repo's .kim/ folder
+
+When you plan a feature technically, work through its data model, architecture and flows as **system designs** on the System tab. Each is a text file in the format that suits it, and the user comments on its tables, boxes and arrows as on a mockup:
+
+| Type                        | Format                                         | File                                      |
+| --------------------------- | ---------------------------------------------- | ----------------------------------------- |
+| `data-model`                | DBML                                           | `.dbml`                                   |
+| `architecture`, `data-flow` | D2                                             | `.d2` (`name.data-flow.d2` for data flow) |
+| `sequence`, `state`         | Mermaid (`sequenceDiagram`, `stateDiagram-v2`) | `.mmd`                                    |
+| `api`                       | OpenAPI 3 YAML                                 | `.yaml`                                   |
+
+`kim artifact add <session> --file checkout.dbml --title "Checkout schema" --description "…"` detects the type (`--type` sets it). Put notes and reasons in the file itself (DBML `Note`, D2 labels and `#` comments, Mermaid `%%` comments and `Note`, OpenAPI `description`), so they travel with the design. Update the same artifact as the design changes, rather than adding another.
+
+The repo's `.kim/` folder holds what earlier interviews kept: `designs/`, `mockups/`, an optional `design-system/`, and `plans/` (each finished interview's plan). It is context you may use, not required reading:
+
+- **Pull only what the conversation needs.** `kim design list` shows what's there; `kim design pull <session> .kim/designs/data-model.dbml` adds a copy, and the workspace highlights what changed compared with the repo. A conversation about the schema gets the data model, not the design system. Nothing from `.kim/` is shown unless you pull it.
+- **Past plans are read only.** Pull one for context when it helps; record what changed in this interview's own plan.
+- **You decide what goes back.** `kim design keep <session> <artifact>` marks a design, mockup or the plan to be written to `.kim/` when the interview stops; `kim design drop` unmarks it. The user sees a _Saves to repo_ or _Interview only_ badge on each, and may ask you to change it. Keep what the PR should carry, such as the finished data model and the plan (it goes to `.kim/plans/<date>-<title>.md`); leave drafts and rejected options.
+- **The design system is optional.** Without one, mockups carry their own styles, as they always have. Never ask for one or create one unless the user asks. When they do, draft it from the app's own CSS or Tailwind theme: `tokens.css` (colours, type, spacing, radius and shadows as CSS custom properties on `:root`), a `components.html` gallery that links it, and a short `README.md`. Add the tokens with `kim artifact add <session> --file tokens.css --title "Design system" --keep`, and the gallery with `--repo-path .kim/design-system/components.html --keep`.
+- **Mockups that use it link it** (`<link rel="stylesheet" href="../design-system/tokens.css">`) and use `var(--…)`. In the interview they are drawn with its current tokens, and `kim design pull` brings the tokens along with such a mockup. The tokens stay out of sight until you change them: then they appear on the Design canvas with the change highlighted, and every mockup using them redraws. When the user asks for a visual change ("make it blue"), decide whether it's the brand (change the token) or one screen (change that mockup), and say which in your reply, e.g. "changed `--accent` in the design system, which affects 3 mockups".
+- **Stopping writes them.** Run `kim session stop` inside the repo: it writes the kept items to `.kim/`, each design with an `.svg` preview drawn in a Chrome, Edge or Chromium on this machine (without one, the design is written and `previewsFailed` says why), (pulled items to their own path, new ones under `designs/`, `mockups/` or `plans/`), for the user to commit with the code. If a file changed since you pulled it, nothing is written and the interview stays running. Merge the saved `ours`, `theirs` and `base` versions, run `kim design rebase <session> <artifact> --file <merged>`, tell the user what you merged (the canvas now compares with the repo's current version), and stop again.
 
 ## Watch and adapt
 
@@ -146,4 +168,4 @@ Stop the interview when its decision frontier is empty:
 kim session stop <session-id>
 ```
 
-A stopped interview is review-only. Use `kim session resume <session-id>` before adding questions or collecting more answers. Cancelling `attach` only releases the watcher; it does not stop the interview.
+Stopping writes what you kept to the repo's `.kim/` folder first (see above); `--no-write` skips that. A stopped interview is review-only. Use `kim session resume <session-id>` before adding questions or collecting more answers. Cancelling `attach` only releases the watcher; it does not stop the interview.

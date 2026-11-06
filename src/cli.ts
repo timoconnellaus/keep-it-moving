@@ -22,7 +22,12 @@ import { fileURLToPath } from "node:url";
 import envPaths from "env-paths";
 import { checkbox } from "./checkbox.js";
 import { normalizeRemote, projectName } from "./shared/remote.js";
-import { NoBrowser, renderScreenshot } from "./render.js";
+import {
+  findBrowser,
+  NoBrowser,
+  renderDesignSvg,
+  renderScreenshot,
+} from "./render.js";
 import {
   type AgentId,
   canonicalSkill,
@@ -66,6 +71,23 @@ import {
   updateLocked,
   writeUpdateState,
 } from "./update.js";
+import { designTypeOf, parseDesignType } from "./designFiles.js";
+import {
+  applyWrites,
+  defaultPath,
+  keepRefusal,
+  kimPath,
+  linksTokens,
+  TOKENS_PATH,
+  listKimFiles,
+  planWrites,
+  previewPath,
+  pullItem,
+  repoRoot,
+  type KeptItem,
+  type KeptSession,
+  type WriteStep,
+} from "./designSync.js";
 
 /**
  * KEEP_IT_MOVING_<name>, else the older INTERVIEWER_<name>, so environments
@@ -94,6 +116,7 @@ async function main(args: string[]): Promise<void> {
   if (group === "session") return sessionCommand(action, rest);
   if (group === "question") return questionCommand(action, rest);
   if (group === "artifact") return artifactCommand(action, rest);
+  if (group === "design") return designCommand(action, rest);
   if (group === "stage") return stageCommand(action, rest);
   if (group === "chat") return chatCommand(action, rest);
   if (group === "project") return projectCommand(action);
@@ -161,10 +184,24 @@ async function sessionCommand(action: string | undefined, args: string[]) {
   const id = positional(args, 0);
   if (action === "show") return output(await api(`/api/sessions/${id}`));
   if (action === "stop" || action === "resume") {
-    const result = await api(`/api/sessions/${id}/${action}`, {
+    // What the agent kept goes into the repo first; a conflict leaves the
+    // interview running so the agent can merge and stop again.
+    const write =
+      action === "stop" && !args.includes("--no-write")
+        ? await writeKept(id, { dryRun: false, quiet: true })
+        : null;
+    if (write?.conflicts.length) {
+      output(write);
+      process.exitCode = 1;
+      return;
+    }
+    const result = (await api(`/api/sessions/${id}/${action}`, {
       method: "POST",
-    });
-    return output(result);
+    })) as Record<string, unknown>;
+    if (!write) return output(result);
+    const wrote: Record<string, unknown> = { ...write };
+    delete wrote.conflicts;
+    return output({ ...result, ...wrote });
   }
   if (action === "assign") {
     const email = args.includes("--clear") ? null : positional(args, 1);
@@ -288,6 +325,7 @@ const KIND_BY_EXTENSION: Record<string, string> = {
   svg: "diagram",
   html: "mockup",
   htm: "mockup",
+  css: "tokens",
 };
 
 const ARCHIFY_TYPES = new Set([
@@ -431,7 +469,275 @@ function artifactFields(
   const description = flag(args, "--description");
   if (description !== undefined) fields.description = description;
   if (args.includes("--show")) fields.show = true;
+  if (args.includes("--keep")) fields.keep = true;
+  if (args.includes("--no-keep")) fields.keep = false;
+  const base = flag(args, "--base");
+  const repoPath = flag(args, "--repo-path");
+  if (base !== undefined || repoPath !== undefined) {
+    if (!repoPath)
+      throw new Error(
+        "--base needs --repo-path, the file's path in the repo (e.g. .kim/designs/data-model.dbml)",
+      );
+    fields.repo = {
+      path: repoPath,
+      baseCommit: flag(args, "--base-commit") ?? null,
+      baseContent: base === undefined ? null : readFileSync(base, "utf8"),
+    };
+  }
   return fields;
+}
+
+/** The repo the current directory is in, which must be the interview's. */
+async function interviewRepo(sessionId: string): Promise<string> {
+  const root = repoRoot(process.cwd());
+  if (!root)
+    throw new Error(
+      "Run this inside the interview's repo: kim reads and writes its .kim/ folder",
+    );
+  const session = (await api(`/api/sessions/${sessionId}`)) as {
+    project: { key: string } | null;
+  };
+  const here = repoOrigin(root).projectKey;
+  if (session.project && here && session.project.key !== here)
+    throw new Error(
+      `This interview belongs to ${session.project.key}, but this folder is in ${here}; run it from that repo`,
+    );
+  return root;
+}
+
+interface KeptResponse {
+  session: KeptSession & { status: string };
+  artifacts: KeptItem[];
+}
+
+/**
+ * Writes what the agent kept into the repo's .kim/ folder. Nothing is
+ * written if any file changed since the interview copied it: each
+ * conflict's versions are saved for the agent to merge.
+ */
+async function writeKept(
+  sessionId: string,
+  options: { dryRun: boolean; quiet: boolean },
+) {
+  const kept = (await api(`/api/sessions/${sessionId}/kept`)) as KeptResponse;
+  if (!kept.artifacts.length) {
+    if (options.quiet) return null;
+    return { written: [], conflicts: [], note: "Nothing is marked to keep" };
+  }
+  const root = await interviewRepo(sessionId);
+  const steps = planWrites(root, kept.session, kept.artifacts);
+  const summary = (step: WriteStep) => ({
+    artifactId: step.artifactId,
+    title: step.title,
+    path: step.path,
+    action: step.action,
+  });
+  if (options.dryRun) return { plan: steps.map(summary), conflicts: [] };
+  const { written, conflicts } = applyWrites(root, steps);
+  const previews = conflicts.length
+    ? { written: [], failed: [] }
+    : await writePreviews(sessionId, root, kept.artifacts, steps);
+  return {
+    written: written.map(summary),
+    ...(previews.written.length ? { previews: previews.written } : {}),
+    ...(previews.failed.length ? { previewsFailed: previews.failed } : {}),
+    unchanged: steps
+      .filter((step) => step.action === "unchanged")
+      .map((step) => step.path),
+    conflicts,
+    ...(conflicts.length
+      ? {
+          nextStep:
+            "Nothing was written. Each conflict's file changed since the interview copied it. Merge ours with theirs (base is what the interview started from), then run `kim design rebase <session> <artifact> --file <merged>` for each, show the user, and write again.",
+        }
+      : {}),
+  };
+}
+
+/**
+ * Each written design's rendered SVG, beside it in the repo, so a PR shows
+ * the picture: the design viewer draws it in a browser on this machine
+ * and exports it. A design that didn't change gets one only if it has
+ * none. A preview that fails leaves the design written, and says why.
+ */
+async function writePreviews(
+  sessionId: string,
+  root: string,
+  items: KeptItem[],
+  steps: WriteStep[],
+) {
+  const written: string[] = [];
+  const failed: Array<{ path: string; error: string }> = [];
+  let browser: string | null | undefined;
+  for (const step of steps) {
+    const item = items.find((candidate) => candidate.id === step.artifactId);
+    if (item?.kind !== "design") continue;
+    const path = previewPath(step.path);
+    if (step.action === "unchanged" && existsSync(join(root, path))) continue;
+    if (browser === undefined)
+      try {
+        browser = findBrowser();
+      } catch (error) {
+        if (!(error instanceof NoBrowser)) throw error;
+        browser = null;
+      }
+    if (!browser) {
+      failed.push({
+        path,
+        error:
+          "No Chrome, Edge or Chromium here to draw it with (KIM_BROWSER names one); the design is written without its preview",
+      });
+      continue;
+    }
+    try {
+      const { content } = (await api(
+        `/api/sessions/${sessionId}/artifacts/${item.id}/page`,
+      )) as { content: string };
+      writeFileSync(
+        join(root, path),
+        await renderDesignSvg(content, defaultBase, browser),
+      );
+      written.push(path);
+    } catch (error) {
+      failed.push({
+        path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { written, failed };
+}
+
+async function designCommand(action: string | undefined, args: string[]) {
+  if (action === "list") {
+    const root = repoRoot(process.cwd());
+    if (!root) throw new Error("Run this inside a repo");
+    return output({ root, files: listKimFiles(root) });
+  }
+  const sessionId = positional(args, 0);
+  if (!sessionId) throw new Error("A session id is required");
+  if (action === "pull") {
+    const paths = args.slice(1).filter((arg, index, all) => {
+      if (arg.startsWith("--")) return false;
+      const previous = all[index - 1];
+      return previous !== "--title" && previous !== "--description";
+    });
+    if (!paths.length) throw new Error("Name the .kim/ files to pull");
+    const root = await interviewRepo(sessionId);
+    const added = [];
+    // A mockup using the design system needs its tokens to draw; they
+    // come along, out of sight until the interview changes them.
+    const linked = paths.some((path) => {
+      const file = kimPath(root, process.cwd(), path);
+      return (
+        /\.html?$/i.test(file) &&
+        linksTokens(readFileSync(join(root, file), "utf8"))
+      );
+    });
+    if (
+      linked &&
+      existsSync(join(root, TOKENS_PATH)) &&
+      !paths.some((path) => kimPath(root, process.cwd(), path) === TOKENS_PATH)
+    ) {
+      const session = (await api(`/api/sessions/${sessionId}`)) as {
+        artifacts: Array<{ kind: string }>;
+      };
+      if (!session.artifacts.some((artifact) => artifact.kind === "tokens"))
+        added.push(
+          await api(`/api/sessions/${sessionId}/artifacts`, {
+            method: "POST",
+            body: JSON.stringify({
+              ...pullItem(root, TOKENS_PATH),
+              title: "Design system",
+            }),
+          }),
+        );
+    }
+    for (const path of paths) {
+      const item = pullItem(root, kimPath(root, process.cwd(), path));
+      const refusal = args.includes("--keep") && keepRefusal(item);
+      if (refusal) throw new Error(refusal);
+      const title = paths.length === 1 ? flag(args, "--title") : undefined;
+      const description = flag(args, "--description");
+      added.push(
+        await api(`/api/sessions/${sessionId}/artifacts`, {
+          method: "POST",
+          body: JSON.stringify({
+            ...item,
+            title: title ?? item.title,
+            ...(description !== undefined ? { description } : {}),
+            keep: args.includes("--keep"),
+            show: args.includes("--show"),
+          }),
+        }),
+      );
+    }
+    return output({ artifacts: added });
+  }
+  if (action === "keep" || action === "drop") {
+    const artifactId = positional(args, 1);
+    if (!artifactId) throw new Error("An artifact id is required");
+    if (action === "keep") {
+      const session = (await api(`/api/sessions/${sessionId}`)) as {
+        artifacts: Array<{
+          id: string;
+          kind: KeptItem["kind"];
+          title: string;
+          repo?: { path: string };
+        }>;
+      };
+      const artifact = session.artifacts.find((item) => item.id === artifactId);
+      if (!artifact) throw new Error("Artifact not found");
+      const refusal = keepRefusal({ ...artifact, repo: artifact.repo ?? null });
+      if (refusal) throw new Error(refusal);
+    }
+    return output(
+      await api(`/api/sessions/${sessionId}/artifacts/${artifactId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ keep: action === "keep" }),
+      }),
+    );
+  }
+  if (action === "write")
+    return output(
+      (await writeKept(sessionId, {
+        dryRun: args.includes("--dry-run"),
+        quiet: false,
+      }))!,
+    );
+  if (action === "rebase") {
+    // After a conflict: the merged version becomes the interview's, and
+    // the repo file as it is now becomes what it is compared with.
+    const artifactId = positional(args, 1);
+    const file = flag(args, "--file");
+    if (!artifactId || !file)
+      throw new Error(
+        "Usage: kim design rebase <session> <artifact> --file <merged>",
+      );
+    const kept = (await api(`/api/sessions/${sessionId}/kept`)) as KeptResponse;
+    const item = kept.artifacts.find((artifact) => artifact.id === artifactId);
+    if (!item) throw new Error("That artifact isn't marked to keep");
+    const root = await interviewRepo(sessionId);
+    const path = item.repo?.path ?? defaultPath(item, kept.session);
+    const current = join(root, path);
+    return output(
+      await api(`/api/sessions/${sessionId}/artifacts/${artifactId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          content: readFileSync(file === "-" ? 0 : file, "utf8"),
+          repo: {
+            path,
+            baseCommit: git(root, "rev-parse", "HEAD"),
+            baseContent: existsSync(current)
+              ? readFileSync(current, "utf8")
+              : null,
+          },
+          show: true,
+        }),
+      }),
+    );
+  }
+  throw new Error(`Unknown design action: ${action ?? ""}`);
 }
 
 async function artifactCommand(action: string | undefined, args: string[]) {
@@ -441,15 +747,27 @@ async function artifactCommand(action: string | undefined, args: string[]) {
     if (input.content === undefined)
       throw new Error("--file <path|-> or --content is required");
     const file = flag(args, "--file");
-    const kind =
-      flag(args, "--kind") ??
-      input.kind ??
-      KIND_BY_EXTENSION[file?.split(".").pop()?.toLowerCase() ?? ""];
+    const typeFlag = flag(args, "--type");
+    const designType = typeFlag
+      ? parseDesignType(typeFlag)
+      : input.kind
+        ? null
+        : designTypeOf(file, input.content);
+    const kind = designType
+      ? "design"
+      : (flag(args, "--kind") ??
+        input.kind ??
+        KIND_BY_EXTENSION[file?.split(".").pop()?.toLowerCase() ?? ""]);
     if (!kind)
       throw new Error(
-        "--kind is required (document, diagram, mockup); archify specs are detected",
+        "--kind is required (document, diagram, mockup); archify specs and designs (.dbml, .d2, .mmd, OpenAPI .yaml) are detected",
+      );
+    if (kind === "design" && !designType)
+      throw new Error(
+        "A design needs --type (data-model, architecture, data-flow, sequence, state, api)",
       );
     const fields = artifactFields(args, input);
+    if (designType) fields.designType = designType;
     fields.title ??= input.title ?? file?.split("/").pop() ?? "Untitled";
     return output(
       await api(`/api/sessions/${sessionId}/artifacts`, {
@@ -2014,9 +2332,19 @@ Commands:
   artifact add <session> --file <path|-> [--kind document|diagram|mockup] [--title T] [--description D] [--show]
     diagrams: an archify spec (.json with diagram_type) is validated and rendered; also archify HTML or SVG
   artifact update <session> <artifact> [--file|--content] [--title] [--description] [--show] [--quality showcase]
+    designs: .dbml (data-model), .d2 (architecture; name.data-flow.d2), .mmd (sequence, state), OpenAPI .yaml (api);
+    [--type T] [--keep|--no-keep] [--repo-path .kim/… --base <file> [--base-commit SHA]] compares it with a repo copy
   artifact show <session> <artifact|none>   choose what the workspace shows
   artifact delete <session> <artifact>
   stage open|close <session>   show or hide the workspace column
+
+The repo's .kim/ folder (designs, mockups, design system, plans; run these inside the repo):
+  design list   what .kim/ holds, to pull what the conversation needs
+  design pull <session> <.kim/ file>… [--keep] [--show] [--title T]   a copy, compared with the repo as it changes
+  design keep|drop <session> <artifact>   write it to .kim/ when the interview stops, or not (a badge shows it)
+  design write <session> [--dry-run]   write what's kept now; \`session stop\` does this first (--no-write skips)
+    a file that changed since the copy is a conflict: nothing is written, and the three versions are saved
+  design rebase <session> <artifact> --file <merged>   after merging a conflict: the merge, against the repo as it is now
 
 Interviews sent to you (someone assigned you one; your agent drafts, you send):
   inbox   the interviews sent to you (or a linked account) still open: url, sender, open and drafted counts
