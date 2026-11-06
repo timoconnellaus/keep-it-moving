@@ -2,7 +2,6 @@ import { DRAFTER_HEADER, RESPONDENT_HEADER } from "../server/hub.js";
 import type { Env } from "./env.js";
 import { hubFor } from "./hubs.js";
 import { samePerson } from "./links.js";
-import { screenshot } from "./screenshots.js";
 import { shareFor, sharedWith } from "./shares.js";
 
 /**
@@ -15,7 +14,7 @@ import { shareFor, sharedWith } from "./shares.js";
  */
 const INBOX = /^\/api\/sessions\/inbox(?:\/([^/]+)(\/.*)?)?$/;
 const TOKEN = /^[A-Za-z0-9_-]{32}$/;
-const SCREENSHOT = /^(\/artifacts\/[^/]+)\/screenshot$/;
+const SCREENSHOT = /^\/artifacts\/[^/]+\/screenshot$/;
 
 export const isInbox = (path: string) => INBOX.test(path);
 
@@ -69,10 +68,14 @@ export async function inbox(
   if (!share || !(await samePerson(env, email, share.assignee)))
     return notSentToYou();
   const reached = { token: first, ...share };
-  const shot = SCREENSHOT.exec(rest);
-  if (shot && request.method === "GET")
-    return screenshot(request, env, email, first, () =>
-      toOwner(env, email, reached, shot[1]!, new Request(request.url)),
+  // Older CLIs asked the service to render; kim does it on the machine now.
+  if (SCREENSHOT.test(rest))
+    return Response.json(
+      {
+        error:
+          "Screenshots render on your machine now. Update kim with `kim update`, then run the same command again.",
+      },
+      { status: 410 },
     );
   return toOwner(env, email, reached, rest, request);
 }

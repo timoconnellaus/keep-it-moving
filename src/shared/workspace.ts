@@ -27,6 +27,8 @@ export function artifactFormat(
   content: string,
 ): ArtifactFormat {
   if (kind === "plan" || kind === "document") return "markdown";
+  // Served as the design viewer's page, built from the design's source.
+  if (kind === "design" || kind === "tokens") return "html";
   if (kind === "mockup" || /^\s*(<!doctype html|<html)/i.test(content))
     return "html";
   if (/^\s*(<\?xml|<svg)/i.test(content)) return "svg";
@@ -44,6 +46,8 @@ export function artifactViewUrl(
     theme: "light",
   });
   if (options.embed) params.set("embed", "1");
+  if (artifact.tokensRevision)
+    params.set("tokens", String(artifact.tokensRevision));
   return `/api/browser/${token}/artifacts/${artifact.id}/view?${params}`;
 }
 

@@ -1,4 +1,48 @@
-# Keep it moving
+<p align="center">
+  <img src="src/web/public/icons/icon.svg" width="72" height="72" alt="">
+</p>
+
+<h1 align="center">Keep it moving</h1>
+
+<p align="center">
+  <b>Your agent asks. You answer in one click.</b><br>
+  When your coding agent needs decisions from you, it opens an interview in your browser,<br>
+  with its recommended answer already picked and a plan that updates as you go.
+</p>
+
+<p align="center">
+  <a href="https://keep-it-moving.zerobsai.com">Website</a> ·
+  <a href="#use-it">Install</a> ·
+  <a href="#deploy-your-own">Run your own</a> ·
+  <a href="#license">Open source</a>
+</p>
+
+<p align="center">
+  <img src="docs/images/interview.png" width="900" alt="An interview in Keep it moving: answered questions on the left with the agent's recommended answers, the plan it keeps up to date in the middle, and the chat with the agent on the right">
+</p>
+
+## Why
+
+Coding agents stall on decisions, and a terminal is a bad place to make them. Keep it moving gives your agent a proper place to ask:
+
+- **Recommended answers.** Every question comes with the agent's pick and its reasoning, already selected. Agree with all of them in one click, or change the ones you disagree with.
+- **A plan that keeps up.** The agent rewrites the plan after each batch of answers, beside the questions, with diagrams and HTML mockups you can click through and comment on.
+- **System designs that land in your PR.** Work through the data model, architecture, flows and API with your agent, starting from what's in your repo's `.kim/` folder. Changes are highlighted against main, and what you keep is written back for review with the code.
+- **Every agent you use.** Claude Code, Codex, Cursor, Gemini CLI, Copilot and 11 more, from one skill that kim keeps up to date.
+- **Send it to someone else.** Assign an interview to a client or colleague by email; their answers go straight back to your agent.
+- **Open source.** A Cloudflare Worker, the `kim` CLI and the skill, all here. Use the hosted version, or deploy your own for free.
+
+Quick start (Node.js 22.13 or newer):
+
+```sh
+npm install -g https://keep-it-moving.zerobsai.com/cli.tgz
+kim skill install
+kim login
+```
+
+Then ask your agent to "interview me about this feature".
+
+## About
 
 Keep it moving (formerly Interviewer) runs interviews between agents and people: an agent asks questions in the browser, beside a living plan, diagrams and mockups, and waits for the answers; the person answers, chats with the agent, or hands the interview to someone else. The home page lists every interview and what's left to do on it. It's hosted on a Cloudflare Worker at https://keep-it-moving.zerobsai.com. The CLI is `kim`; `interviewer` is the same command, kept so older scripts still work.
 
@@ -24,7 +68,7 @@ The code is at https://github.com/timoconnellaus/keep-it-moving. Sign in at http
 
 ## Deploy your own
 
-The license is the [Functional Source License](LICENSE) (FSL-1.1-MIT): use it, change it and run your own copy for yourself or your company, but don't sell it, or a service built on it, as a competing product. Each version becomes MIT two years after it's released.
+It's open source (see [License](#license)), so run your own copy for yourself or your company, for free.
 
 You need a Cloudflare account with a domain on it, and a Google Cloud project for the sign-in.
 
@@ -76,7 +120,7 @@ An interview sent to you can also be worked on by your own agent, signed in to `
 kim inbox                                    # sent to you and still open: id, url, sender, open and drafted counts
 kim inbox show <interview>                   # questions with answers, drafts and chat threads; the chat; the workspace
 kim inbox artifact <interview> <artifact> --out layout.html   # as its frame serves it, saved answers applied
-kim inbox screenshot <interview> <artifact> [--width 390] [--full-page]   # a PNG, rendered by the service (Pro)
+kim inbox screenshot <interview> <artifact> [--width 390] [--full-page]   # a PNG, rendered on your machine
 kim draft <interview> 3 --option "Two steps" --note "fewer fields on mobile"
 kim draft <interview> 4 --clear
 kim inbox chat <interview> --question 2 "Is the order summary sticky on mobile?"
@@ -85,7 +129,7 @@ kim inbox wait [<interview>]                 # blocks until something new arrive
 
 `<interview>` is the interview's token or URL, and `<question>` its id or number. Drafts are checked as the answer form checks an answer (options must be the question's, numbers in range), then stored per question in the owner's hub with whose agent wrote them, apart from answers: they make no event, so the owner's agent, hooks and pages never see them. The assignee's page shows each draft prefilled with "Drafted by your agent", and **Send N drafts** in the top bar sends every one they haven't edited; saving a card sends that one. Either way it is an ordinary answer from the assignee's address, with nothing to say an agent drafted it. `kim draft … --send` answers at once instead, for when the user has said to, and `kim inbox chat` posts as the assignee, as if they'd typed it.
 
-`kim inbox wait` holds a socket in your own hub. The owner's hub tells it (and your linked accounts' hubs) when it adds a question, its agent replies in the chat, it adds, revises, removes or shows an artifact, or it assigns you an interview. The CLI then takes what changed: questions, replies with the question whose thread they're in, one entry per artifact however many edits it had (with its revision), and a note for any draft written against an older revision of its question's artifact. What it prints counts as delivered, as does reading the interview with `inbox show`; each interview keeps that mark, so the next wait brings only what is newer. With hooks installed, an agent session that has worked on an interview sent to you gets the same changes between its steps. `kim inbox screenshot` never opens a browser on your machine: the Worker renders the page as served in one of Cloudflare's headless browsers (Browser Run) and the CLI saves the PNG. It's for Pro and Team (a Free account gets a plan refusal pointing at `kim inbox artifact`). Each PNG is kept in R2 by interview, artifact, revision, content, width and full page, so asking again opens no browser; a bucket rule deletes them after 7 days. To keep screenshots inside the 10 browser hours a month Workers Paid includes, a Durable Object (`ScreenshotBudget`) counts the browser time each render actually used and pauses new renders at 9 hours over the last 32 days, runs at most 3 at once, and allows each person 100 a day (UTC). Each render times out after 30 seconds and its browser is closed however it ends.
+`kim inbox wait` holds a socket in your own hub. The owner's hub tells it (and your linked accounts' hubs) when it adds a question, its agent replies in the chat, it adds, revises, removes or shows an artifact, or it assigns you an interview. The CLI then takes what changed: questions, replies with the question whose thread they're in, one entry per artifact however many edits it had (with its revision), and a note for any draft written against an older revision of its question's artifact. What it prints counts as delivered, as does reading the interview with `inbox show`; each interview keeps that mark, so the next wait brings only what is newer. With hooks installed, an agent session that has worked on an interview sent to you gets the same changes between its steps. `kim inbox screenshot` renders on your machine, not the service: the CLI fetches the artifact as its frame serves it and drives a Chrome, Edge or Chromium already installed (or one Playwright or Puppeteer downloaded; `KIM_BROWSER` picks another) headless over the DevTools protocol on a pipe. The page is served to that browser from memory with the frame's sandbox headers, so its scripts run in an opaque origin. With no browser found, it saves the page and says where, for the agent's own browser tool. It's on every plan, and costs the service nothing.
 
 ### Linked accounts
 
@@ -508,3 +552,12 @@ The suite runs the hub and store on in-memory `node:sqlite`, and the CLI against
 
 - One watcher per session (the newest takes over).
 - Canvas, drawing, uploads, ranking, and rich HTML questions are future work.
+
+## License
+
+Keep it moving is open source, under two licenses:
+
+- **MIT** for what runs on your machine: the `kim` CLI, the interviewer skill, and the code they share (`src/shared/`). The files are listed in [LICENSE-MIT](LICENSE-MIT). Use, change, bundle or redistribute them however you like.
+- **AGPL-3.0** for the service: the Cloudflare Worker, the hub, the web app and the design viewer. See [LICENSE](LICENSE). You can run, change and self-host it freely; if you offer a modified version as a service to others, you must publish your changes under the same license.
+
+Releases before 6 November 2026 were under the Functional Source License (FSL-1.1-MIT).
