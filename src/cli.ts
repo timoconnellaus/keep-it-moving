@@ -50,11 +50,13 @@ import {
 } from "./skill.js";
 import {
   armWaiter,
+  bindSession,
   disarmWaiter,
   liveBinding,
   readBindings,
   runHook,
   runStop,
+  unbindInterview,
   waiterArmed,
   type HookPayload,
   type InboxNews,
@@ -175,6 +177,7 @@ async function sessionCommand(action: string | undefined, args: string[]) {
         origin: detectOrigin(args),
       }),
     });
+    bindToAgentSession((session as { id: string }).id);
     const assignee = flag(args, "--assign");
     if (!assignee) return output(session);
     const { id } = session as { id: string };
@@ -216,6 +219,8 @@ async function sessionCommand(action: string | undefined, args: string[]) {
     const result = (await api(`/api/sessions/${id}/${action}`, {
       method: "POST",
     })) as Record<string, unknown>;
+    if (action === "stop") forgetBinding(id);
+    else bindToAgentSession(id);
     if (!write) return output(result);
     const wrote: Record<string, unknown> = { ...write };
     delete wrote.conflicts;
@@ -255,6 +260,7 @@ async function deleteSessions(args: string[]) {
       const { title, assignee } = (await api(`/api/sessions/${id}`, {
         method: "DELETE",
       })) as { title: string; assignee: string | null };
+      forgetBinding(id);
       deleted.push({ id, title, assignee });
     } catch (error) {
       failed.push({
@@ -1380,6 +1386,7 @@ async function ask(args: string[]) {
       origin: detectOrigin(args),
     }),
   })) as { id: string; url: string };
+  bindToAgentSession(session.id);
   await api(`/api/sessions/${session.id}/questions`, {
     method: "POST",
     body: JSON.stringify(questions),
@@ -2006,6 +2013,26 @@ async function sessionEndHookCommand() {
  * stops it first. Knows the session from CLAUDE_CODE_SESSION_ID, so only in
  * Claude Code; elsewhere the hooks follow the newest.
  */
+/** Links the Claude Code session running this command to its interview. */
+function bindToAgentSession(id: string) {
+  const sessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  if (!sessionId) return;
+  try {
+    bindSession(configFile("hooks.json"), sessionId, id, process.cwd());
+  } catch {
+    // The hooks can still bind it from a later command.
+  }
+}
+
+/** Forgets a stopped or deleted interview, however its id was passed. */
+function forgetBinding(id: string) {
+  try {
+    unbindInterview(configFile("hooks.json"), id);
+  } catch {
+    // A stale binding finds out from the service.
+  }
+}
+
 async function refuseSecondInterview(resuming?: string) {
   const sessionId = process.env.CLAUDE_CODE_SESSION_ID;
   if (!sessionId) return;

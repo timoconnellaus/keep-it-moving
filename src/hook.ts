@@ -391,6 +391,35 @@ export const liveBinding = (
         .at(-1)
     : undefined;
 
+/**
+ * Links an agent session to the interview it just started or resumed, from
+ * kim itself. The PostToolUse hook only sees what the command printed, and
+ * an agent often keeps that in a variable (`S=$(kim session create …)`).
+ */
+export function bindSession(
+  file: string,
+  sessionId: string,
+  interviewId: string,
+  cwd: string,
+  now = Date.now(),
+): void {
+  writeBindings(file, [
+    ...readBindings(file).filter(
+      (binding) =>
+        binding.interviewId !== interviewId &&
+        (binding.inbox || binding.agentSessionId !== sessionId),
+    ),
+    { interviewId, agentSessionId: sessionId, cwd, boundAt: now },
+  ]);
+}
+
+/** Forgets an interview that was stopped or deleted, whoever it was bound to. */
+export function unbindInterview(file: string, interviewId: string): void {
+  const bindings = readBindings(file);
+  const kept = bindings.filter((known) => known.interviewId !== interviewId);
+  if (kept.length !== bindings.length) writeBindings(file, kept);
+}
+
 /** What a wait for the Stop hook found. */
 export type StopWaitOutcome =
   | { batch: Batch }

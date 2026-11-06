@@ -112,7 +112,7 @@ export const hookEntry = (
             command: command(event, agent),
             asyncRewake: true,
             timeout: STOP_WAIT_TIMEOUT_S,
-            rewakeMessage: "Keep it moving:",
+            rewakeMessage: "From your interview:",
             rewakeSummary: "Keep it moving: new answers",
           }
         : {

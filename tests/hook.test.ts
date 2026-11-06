@@ -483,6 +483,46 @@ describe("kim hook, end to end", () => {
     ).toBe(0);
   }, 30_000);
 
+  it("links an interview kept in a variable, which the hook can't see, and waits on it", async () => {
+    const { store, env } = await served();
+    const agent = { ...env, CLAUDE_CODE_SESSION_ID: "claude-1" };
+    const kim = (...args: string[]) =>
+      new Promise<string>((resolve, reject) =>
+        execFile(
+          process.execPath,
+          [tsx, cli, ...args],
+          { env: agent },
+          (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        ),
+      );
+    const { id } = JSON.parse(await kim("session", "create", "--title", "A"));
+    // `S=$(kim session create …)`: the tool's output has no id in it.
+    await hook(
+      "post-tool-use",
+      JSON.stringify({
+        session_id: "claude-1",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_input: { command: "S=$(kim session create --title A)" },
+        tool_response: { stdout: "" },
+      }),
+      env,
+    );
+    const [question] = store.addQuestions(id, [
+      { type: "text", prompt: "Ship it?" },
+    ]);
+    const woken = hook("stop", JSON.stringify({ session_id: "claude-1" }), env);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    store.answerQuestion(id, question!.id, { answer: "Yes" });
+    expect(await woken).toMatchObject({ code: 2 });
+
+    // Stopped through a variable too: nothing keeps it linked.
+    await kim("session", "stop", id, "--no-write");
+    expect(
+      await hook("stop", JSON.stringify({ session_id: "claude-1" }), env),
+    ).toMatchObject({ code: 0, stderr: "" });
+  }, 60_000);
+
   it("lets the agent stop once the interview is stopped", async () => {
     const { store, env } = await served();
     const session = store.createSession("", { title: "Plan" });

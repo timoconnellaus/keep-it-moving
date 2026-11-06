@@ -94,7 +94,7 @@ describe("installing the hooks into Claude Code's settings.json", () => {
                 command: "kim hook stop",
                 asyncRewake: true,
                 timeout: 86_400,
-                rewakeMessage: "Keep it moving:",
+                rewakeMessage: "From your interview:",
                 rewakeSummary: "Keep it moving: new answers",
               },
             ],

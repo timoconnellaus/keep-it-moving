@@ -282,7 +282,7 @@ A `wait` only delivers while it runs. With the hooks, which kim installs for Cla
             "command": "kim hook stop",
             "asyncRewake": true,
             "timeout": 86400,
-            "rewakeMessage": "Keep it moving:",
+            "rewakeMessage": "From your interview:",
             "rewakeSummary": "Keep it moving: new answers"
           }
         ]
@@ -305,7 +305,7 @@ A `wait` only delivers while it runs. With the hooks, which kim installs for Cla
 
 Codex gets the same entries, except that its Stop hook is `kim hook stop --hold` with a 3600-second timeout and a `statusMessage`. Codex runs a new hook only once it's trusted: open `/hooks` in Codex after installing.
 
-`kim hook <event>` reads the hook's JSON payload on stdin and prints its JSON response. When the agent runs a kim command that names an interview (`kim ask`, `session create`, `question add <id>`, `wait <id>`…), the PostToolUse hook binds that interview to the agent's session, in `hooks.json` in kim's config folder. `session stop` or `delete`, or an interview that turns out stopped or gone, unbinds it.
+`kim hook <event>` reads the hook's JSON payload on stdin and prints its JSON response. When the agent runs a kim command that names an interview (`kim ask`, `session create`, `question add <id>`, `wait <id>`…), the PostToolUse hook binds that interview to the agent's session, in `hooks.json` in kim's config folder. In Claude Code, `session create`, `ask` and `session resume` bind it themselves through `CLAUDE_CODE_SESSION_ID`, since the hook can't see an id the agent kept in a variable (`S=$(kim session create …)`). `session stop` or `delete`, or an interview that turns out stopped or gone, unbinds it.
 
 A session follows **one interview of the user's own** at a time. `create`, `ask` or `resume` moves it to that interview; other commands only renew the one it's on, so reading an old interview doesn't move it. In Claude Code, which tells kim the session through `CLAUDE_CODE_SESSION_ID`, `session create`, `ask` and `resume` refuse a second live interview with `"code": "interview_running"` and name the first. Interviews sent to the user don't count. Then:
 
