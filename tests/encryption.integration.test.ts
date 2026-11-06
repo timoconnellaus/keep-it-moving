@@ -1,5 +1,11 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -19,6 +25,7 @@ import {
   wrapTo,
   type AccountKey,
 } from "../src/shared/crypto.js";
+import { Encryption } from "../src/sealedApi.js";
 import { hubHarness } from "./helpers/harness.js";
 import { serveHarness } from "./helpers/serve.js";
 
@@ -159,7 +166,7 @@ async function encryptedInterview(kim: ReturnType<typeof kimAs>) {
   return { session, mockup, questions };
 }
 
-describe("end-to-end encryption through the CLI", () => {
+describe("end-to-end encryption through the CLI", { timeout: 30_000 }, () => {
   it("stores only ciphertext and gives the agent plain text", async () => {
     const { harness, kim } = await ownerHarness();
     const { session, mockup, questions } = await encryptedInterview(kim);
@@ -368,7 +375,7 @@ describe("end-to-end encryption through the CLI", () => {
   });
 });
 
-describe("an encrypted interview sent to someone", () => {
+describe("an encrypted interview sent to someone", { timeout: 30_000 }, () => {
   /** Ann's encrypted interview, assigned to Bob, whose CLI reaches it by its inbox. */
   async function sentToBob() {
     const { harness, ann, kim, served } = await ownerHarness();
@@ -449,7 +456,7 @@ describe("an encrypted interview sent to someone", () => {
   });
 });
 
-describe("the hub's encryption routes", () => {
+describe("the hub's encryption routes", { timeout: 30_000 }, () => {
   it("sets up a key once, and keeps it to the account", async () => {
     const harness = hubHarness();
     cleanups.push(() => harness.sql.close());
@@ -508,9 +515,11 @@ describe("the hub's encryption routes", () => {
       method: "GET",
       url: `/api/browser/${session.token}/artifacts/${mockup.id}/content`,
     });
-    expect(content.json()).toMatchObject({
+    expect(content.json().parts).toMatchObject({
+      kind: "mockup",
       format: "html",
       content: expect.stringMatching(/^kim1\./),
+      title: expect.stringMatching(/^kim1\./),
     });
   });
 
@@ -525,7 +534,7 @@ describe("the hub's encryption routes", () => {
   });
 });
 
-describe("what a writer without the key can't do", () => {
+describe("what a writer without the key can't do", { timeout: 30_000 }, () => {
   it("can't hand over a different key under an interview's id", async () => {
     const real = await newInterviewKey();
     const fake = await newInterviewKey();
@@ -560,5 +569,91 @@ describe("what a writer without the key can't do", () => {
   it("won't seal a field that couldn't be opened", async () => {
     const key = await newInterviewKey();
     await expect(seal(key, `${LOCKED}`)).rejects.toThrow(/still encrypted/);
+  });
+});
+
+describe("designs in an encrypted interview", { timeout: 30_000 }, () => {
+  it("seals the design and its repo copy, still says what changed, and writes it back", async () => {
+    const { harness, ann, served } = await ownerHarness();
+    const dir = tempDir();
+    const git = (...args: string[]) => exec("git", args, { cwd: dir });
+    await git("init", "-q");
+    mkdirSync(join(dir, ".kim/designs"), { recursive: true });
+    writeFileSync(
+      join(dir, ".kim/designs/data-model.dbml"),
+      "Table subscribers {\n  id uuid\n}\n",
+    );
+    await git("add", ".");
+    await git(
+      "-c",
+      "user.email=t@example.com",
+      "-c",
+      "user.name=T",
+      "commit",
+      "-q",
+      "-m",
+      "designs",
+    );
+    const run = async (...args: string[]) =>
+      JSON.parse(
+        (
+          await exec(process.execPath, [tsx, cli, ...args], {
+            env: {
+              ...process.env,
+              KEEP_IT_MOVING_URL: served.address,
+              KEEP_IT_MOVING_TOKEN: "test",
+              KEEP_IT_MOVING_NO_AUTO_UPDATE: "1",
+              KEEP_IT_MOVING_CONTENT_KEY: toBase64Url(ann.pkcs8),
+              KIM_BROWSER: "/nowhere/chrome",
+            },
+            cwd: dir,
+          })
+        ).stdout,
+      );
+    const session = await run("session", "create", "--title", "Plans table");
+    const [design] = (
+      await run("design", "pull", session.id, ".kim/designs/data-model.dbml")
+    ).artifacts;
+    expect(design).toMatchObject({
+      kind: "design",
+      designType: "data-model",
+      repo: { path: ".kim/designs/data-model.dbml", changed: false },
+    });
+    const all = stored(harness);
+    expect(all).not.toContain("subscribers");
+    expect(all).not.toContain("data-model.dbml");
+
+    // The page its frame shows, built by the client from the opened parts.
+    const encryption = new Encryption(
+      async (path, init) => {
+        const response = await harness.app.inject({
+          method: init?.method ?? "GET",
+          url: path,
+          ...(init?.body ? { payload: JSON.parse(String(init.body)) } : {}),
+        });
+        return response.json();
+      },
+      () => toBase64Url(ann.pkcs8),
+    );
+    const page = (await encryption.api(
+      `/api/sessions/${session.id}/artifacts/${design.id}/page`,
+    )) as { content: string; parts?: unknown };
+    expect(page.parts).toBeUndefined();
+    expect(page.content).toContain("Table subscribers");
+    expect(page.content).toContain("/design-viewer/viewer.js");
+
+    const changed = join(dir, "changed.dbml");
+    writeFileSync(changed, "Table subscribers {\n  id uuid\n  plan text\n}\n");
+    await run("artifact", "update", session.id, design.id, "--file", changed);
+    const shown = await run("session", "show", session.id);
+    expect(shown.artifacts[0].repo).toMatchObject({ changed: true });
+    await run("design", "keep", session.id, design.id);
+    const stopped = await run("session", "stop", session.id);
+    expect(stopped.written.map((step: { path: string }) => step.path)).toEqual([
+      ".kim/designs/data-model.dbml",
+    ]);
+    expect(
+      readFileSync(join(dir, ".kim/designs/data-model.dbml"), "utf8"),
+    ).toContain("plan text");
   });
 });

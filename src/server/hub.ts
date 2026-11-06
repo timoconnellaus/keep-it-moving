@@ -703,6 +703,37 @@ export function createHub(options: HubOptions) {
       ),
     ),
   );
+  // A design as its frame serves it, for its SVG preview.
+  app.get("/api/sessions/:id/artifacts/:artifactId/page", (c) => {
+    const id = c.req.param("id");
+    const artifact = store
+      .getSession(id, "")
+      .artifacts.find((item) => item.id === c.req.param("artifactId"));
+    if (!artifact) throw new Error("Artifact not found");
+    // Sealed, the CLI builds the page from its parts once it has opened them.
+    return c.json({
+      id: artifact.id,
+      kind: artifact.kind,
+      revision: artifact.revision,
+      ...(store.kidOf(id)
+        ? { parts: store.artifactParts(id, artifact.id) }
+        : { content: store.artifactContent(id, artifact.id).content }),
+    });
+  });
+  // What `kim design write` writes, also once the interview has stopped.
+  app.get("/api/sessions/:id/kept", (c) => {
+    const session = store.getSession(c.req.param("id"), baseUrl);
+    return c.json({
+      session: {
+        id: session.id,
+        title: session.title,
+        status: session.status,
+        createdAt: session.createdAt,
+        project: session.project,
+      },
+      artifacts: store.keptArtifacts(session.id),
+    });
+  });
   app.delete("/api/sessions/:id/artifacts/:artifactId", (c) => {
     store.deleteArtifact(c.req.param("id"), c.req.param("artifactId"));
     return c.json({ ok: true });
@@ -955,14 +986,14 @@ export function createHub(options: HubOptions) {
     );
     return c.json({ grants: grants.map(({ fp, role }) => ({ fp, role })) });
   });
-  // A sealed html artifact: the page opens it and frames it itself.
+  // A sealed html artifact's parts: the page opens them and builds its frame.
   app.get("/api/browser/:token/artifacts/:artifactId/content", (c) =>
-    c.json(
-      store.artifactContent(
+    c.json({
+      parts: store.artifactParts(
         tokenSession(c.req.param("token")),
         c.req.param("artifactId"),
       ),
-    ),
+    }),
   );
   app.get("/api/browser/:token/session", (c) => {
     const id = tokenSession(c.req.param("token"));
@@ -1097,7 +1128,8 @@ export function createHub(options: HubOptions) {
     );
     if (!artifact) throw new Error("Artifact not found");
     const { content } = store.artifactContent(id, artifact.id);
-    // Sealed, the agent's CLI applies the answers: it sends the questions.
+    // Sealed, the agent's CLI builds the page and applies the answers: it
+    // gets the parts and the questions.
     const sealed = Boolean(store.kidOf(id));
     return c.json({
       ...artifactSummary(artifact),
@@ -1111,6 +1143,7 @@ export function createHub(options: HubOptions) {
       ...(artifact.source ? { source: artifact.source } : {}),
       ...(sealed && artifact.format === "html"
         ? {
+            parts: store.artifactParts(id, artifact.id),
             questions: session.questions.filter(
               (question) => question.artifactId === artifact.id,
             ),

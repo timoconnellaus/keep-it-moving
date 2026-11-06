@@ -23,6 +23,8 @@ import {
   type Grant,
   type ArtifactView,
   type ChatAuthor,
+  type DesignType,
+  type RepoOrigin,
   type ChatMessageView,
   type DraftView,
   type InterviewEvent,
@@ -45,6 +47,8 @@ import {
 } from "../shared/questions.js";
 import { projectName } from "../shared/remote.js";
 import { artifactFormat } from "../shared/workspace.js";
+import { framePage, type FrameParts } from "./framePage.js";
+import { usesTokens } from "./tokensPage.js";
 import { first, type Row, type Sql } from "./sql.js";
 
 const now = () => new Date().toISOString();
@@ -96,6 +100,11 @@ const ATTRIBUTION_COLUMNS = [
   ["chat_messages", "author_email"],
   // When an agent's hook last asked for answers, which keeps it live.
   ["sessions", "hook_seen_at"],
+  // A design's type, the repo file an artifact came from (JSON), and
+  // whether it is written back when the interview stops ("1").
+  ["artifacts", "design_type"],
+  ["artifacts", "repo"],
+  ["artifacts", "keep"],
   // A question's controls in its artifact (optionValues, control, unit), as JSON.
   ["questions", "binding"],
   // A comment's pin on an artifact, as JSON.
@@ -107,6 +116,8 @@ const ATTRIBUTION_COLUMNS = [
   ["sessions", "kid"],
   // How a sealed artifact renders, which the service can't tell from it.
   ["artifacts", "format"],
+  // A sealed artifact's keyed hash, compared with its repo copy's.
+  ["artifacts", "content_tag"],
 ] as const;
 
 type Binding = Pick<QuestionView, "optionValues" | "control" | "unit">;
@@ -596,7 +607,7 @@ export class InterviewStore {
                 answeredBy: optional(row.answered_by),
               },
       })),
-      artifacts: artifacts.map(this.mapArtifact),
+      artifacts: this.withTokensRevision(id, artifacts.map(this.mapArtifact)),
       positions: this.positions(id, new Set(artifacts.map((row) => row.id))),
       stage: session.stage_artifact_id
         ? {
@@ -1350,7 +1361,7 @@ export class InterviewStore {
   addArtifact(sessionId: string, input: unknown): ArtifactView {
     this.requireActive(sessionId);
     const kid = this.kidOf(sessionId);
-    const parsed: { format?: ArtifactFormat } & ReturnType<
+    const parsed: { format?: ArtifactFormat; contentTag?: string } & ReturnType<
       typeof ArtifactInputSchema.parse
     > = kid
       ? sealedUnder(kid, SealedArtifactInputSchema.parse(input))
@@ -1373,7 +1384,7 @@ export class InterviewStore {
           show: parsed.show,
         });
     }
-    fitsInRow(parsed.content, parsed.source);
+    fitsInRow(parsed.content, parsed.source, parsed.repo);
     if (this.count("artifacts", sessionId) >= LIMITS.artifacts)
       throw new Error(
         `${LIMIT_REACHED}: an interview holds at most ${LIMITS.artifacts} artifacts; update one instead, or start a new interview`,
@@ -1381,7 +1392,7 @@ export class InterviewStore {
     const id = crypto.randomUUID();
     const time = now();
     this.sql.all(
-      "INSERT INTO artifacts (id,session_id,kind,title,content,description,source,created_at,updated_at,format) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO artifacts (id,session_id,kind,title,content,description,source,design_type,repo,keep,created_at,updated_at,format,content_tag) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       id,
       sessionId,
       parsed.kind,
@@ -1389,9 +1400,13 @@ export class InterviewStore {
       parsed.content,
       parsed.description ?? null,
       parsed.source ?? null,
+      parsed.designType ?? null,
+      parsed.repo ? JSON.stringify(parsed.repo) : null,
+      parsed.keep ? "1" : null,
       time,
       time,
       parsed.format ?? null,
+      parsed.contentTag ?? null,
     );
     this.emit(sessionId, "artifact.added", {
       artifactId: id,
@@ -1411,7 +1426,7 @@ export class InterviewStore {
     const current = this.liveArtifact(sessionId, artifactId);
     if (!current) throw new Error("Artifact not found");
     const kid = this.kidOf(sessionId);
-    const parsed: { format?: ArtifactFormat } & ReturnType<
+    const parsed: { format?: ArtifactFormat; contentTag?: string } & ReturnType<
       typeof ArtifactPatchSchema.parse
     > = kid
       ? sealedUnder(kid, SealedArtifactPatchSchema.parse(patch))
@@ -1420,21 +1435,37 @@ export class InterviewStore {
       parsed.title !== undefined ||
       parsed.content !== undefined ||
       parsed.description !== undefined ||
-      parsed.source !== undefined;
+      parsed.source !== undefined ||
+      parsed.repo !== undefined;
+    if (parsed.keep !== undefined && parsed.keep !== (current.keep === "1")) {
+      // A badge, not a new version: the frame doesn't reload for it.
+      this.sql.all(
+        "UPDATE artifacts SET keep=?, updated_at=? WHERE id=?",
+        parsed.keep ? "1" : null,
+        now(),
+        artifactId,
+      );
+      this.emit(sessionId, "artifact.kept", { artifactId, keep: parsed.keep });
+    }
     if (changed) {
+      const repo = parsed.repo === undefined ? repoOf(current) : parsed.repo;
       fitsInRow(
         parsed.content ?? String(current.content),
         parsed.source === undefined ? optional(current.source) : parsed.source,
+        repo,
       );
       this.sql.all(
-        "UPDATE artifacts SET title=?, content=?, description=?, source=?, format=?, revision=revision+1, updated_at=? WHERE id=?",
+        "UPDATE artifacts SET title=?, content=?, description=?, source=?, repo=?, format=?, content_tag=?, revision=revision+1, updated_at=? WHERE id=?",
         parsed.title ?? String(current.title),
         parsed.content ?? String(current.content),
         parsed.description === undefined
           ? optional(current.description)
           : parsed.description,
         parsed.source === undefined ? optional(current.source) : parsed.source,
+        repo ? JSON.stringify(repo) : null,
         parsed.format ?? optional(current.format),
+        parsed.contentTag ??
+          (parsed.content === undefined ? optional(current.content_tag) : null),
         now(),
         artifactId,
       );
@@ -1521,30 +1552,123 @@ export class InterviewStore {
     return this.mapArtifact(this.liveArtifact(sessionId, artifactId)!);
   }
 
-  private mapArtifact = (row: Row): ArtifactView => ({
-    id: String(row.id),
-    kind: row.kind as ArtifactView["kind"],
-    title: String(row.title),
-    format:
-      (optional(row.format) as ArtifactFormat | null) ??
-      artifactFormat(row.kind as ArtifactView["kind"], String(row.content)),
-    content: String(row.content),
-    size: String(row.content).length,
-    description: optional(row.description),
-    source: optional(row.source),
-    revision: Number(row.revision),
-    updatedAt: String(row.updated_at),
-  });
+  private mapArtifact = (row: Row): ArtifactView => {
+    const repo = repoOf(row);
+    return {
+      id: String(row.id),
+      kind: row.kind as ArtifactView["kind"],
+      title: String(row.title),
+      format:
+        (optional(row.format) as ArtifactFormat | null) ??
+        artifactFormat(row.kind as ArtifactView["kind"], String(row.content)),
+      content: String(row.content),
+      size: String(row.content).length,
+      description: optional(row.description),
+      source: optional(row.source),
+      revision: Number(row.revision),
+      updatedAt: String(row.updated_at),
+      ...(row.design_type ? { designType: row.design_type as DesignType } : {}),
+      ...(repo
+        ? {
+            repo: {
+              path: repo.path,
+              baseCommit: repo.baseCommit,
+              pulled: repo.baseContent !== null,
+              // Sealed, the client's keyed hashes are compared instead.
+              changed: repo.baseTag
+                ? repo.baseTag !== optional(row.content_tag)
+                : repo.baseContent !== String(row.content),
+            },
+          }
+        : {}),
+      keep: row.keep === "1",
+    };
+  };
 
-  /** The raw artifact, for serving html artifacts by URL. */
+  /** What an artifact's frame is built from; sealed in an encrypted interview. */
+  artifactParts(sessionId: string, artifactId: string): FrameParts {
+    const row = this.liveArtifact(sessionId, artifactId);
+    if (!row) throw new Error("Artifact not found");
+    const tokens = this.tokensOf(sessionId);
+    return {
+      kind: row.kind as ArtifactView["kind"],
+      designType: (optional(row.design_type) as DesignType | null) ?? null,
+      title: String(row.title),
+      content: String(row.content),
+      format: optional(row.format) as ArtifactFormat | null,
+      base: repoOf(row)?.baseContent ?? null,
+      tokens: tokens && tokens.id !== row.id ? String(tokens.content) : null,
+    };
+  }
+
+  /**
+   * The artifact as its frame serves it: a design as the viewer's page,
+   * the tokens as theirs, a mockup with the tokens inlined. In an
+   * encrypted interview, the sealed content as stored: the client builds
+   * the page from artifactParts once it has opened them.
+   */
   artifactContent(
     sessionId: string,
     artifactId: string,
   ): { format: ArtifactView["format"]; content: string } {
-    const row = this.liveArtifact(sessionId, artifactId);
-    if (!row) throw new Error("Artifact not found");
-    const view = this.mapArtifact(row);
-    return { format: view.format, content: view.content! };
+    const parts = this.artifactParts(sessionId, artifactId);
+    if (this.kidOf(sessionId))
+      return {
+        format: parts.format ?? artifactFormat(parts.kind, parts.content),
+        content: parts.content,
+      };
+    return framePage(parts);
+  }
+
+  /** The interview's design system tokens, if it has them. */
+  private tokensOf(sessionId: string): Row | undefined {
+    return first(
+      this.sql,
+      "SELECT * FROM artifacts WHERE session_id=? AND kind='tokens' AND deleted=0 ORDER BY created_at LIMIT 1",
+      sessionId,
+    );
+  }
+
+  /** Mockups that use the tokens learn their revision, to reload when they change. */
+  private withTokensRevision(
+    sessionId: string,
+    artifacts: ArtifactView[],
+  ): ArtifactView[] {
+    const tokens = this.tokensOf(sessionId);
+    if (!tokens) return artifacts;
+    return artifacts.map((artifact) =>
+      artifact.format === "html" &&
+      artifact.kind !== "tokens" &&
+      artifact.kind !== "design" &&
+      // Sealed, it can't be told whether a mockup uses them: say so for all.
+      (this.kidOf(sessionId) !== null || usesTokens(artifact.content ?? ""))
+        ? { ...artifact, tokensRevision: Number(tokens.revision) }
+        : artifact,
+    );
+  }
+
+  /**
+   * What `kim` writes to the repo when the interview stops: each artifact
+   * the agent kept, whole, with the repo copy it was pulled from.
+   */
+  keptArtifacts(sessionId: string): KeptArtifact[] {
+    this.requireSession(sessionId);
+    return this.sql
+      .all(
+        "SELECT * FROM artifacts WHERE session_id=? AND deleted=0 AND keep='1' ORDER BY created_at",
+        sessionId,
+      )
+      .map((row) => ({
+        id: String(row.id),
+        kind: row.kind as ArtifactView["kind"],
+        title: String(row.title),
+        ...(row.design_type
+          ? { designType: row.design_type as DesignType }
+          : {}),
+        content: String(row.content),
+        repo: repoOf(row),
+        revision: Number(row.revision),
+      }));
   }
 
   private validateLinks(
@@ -1862,10 +1986,44 @@ function sealedUnder<T>(kid: string, value: T): T {
 }
 
 /** An artifact's content and source share a row, which holds at most 2 MB. */
-function fitsInRow(content: string, source: string | null | undefined) {
+/** An artifact to write to the repo, with the copy it came from. */
+export interface KeptArtifact {
+  id: string;
+  kind: ArtifactView["kind"];
+  title: string;
+  designType?: DesignType;
+  content: string;
+  repo: RepoOrigin | null;
+  revision: number;
+}
+
+/** The repo origin stored with an artifact, if it came from the repo. */
+function repoOf(row: Row): RepoOrigin | null {
+  if (!row.repo) return null;
+  try {
+    const repo = JSON.parse(String(row.repo)) as Partial<RepoOrigin>;
+    if (typeof repo.path !== "string") return null;
+    return {
+      path: repo.path,
+      baseCommit: repo.baseCommit ?? null,
+      baseContent: repo.baseContent ?? null,
+      ...(repo.baseTag ? { baseTag: repo.baseTag } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function fitsInRow(
+  content: string,
+  source: string | null | undefined,
+  repo: RepoOrigin | null | undefined = null,
+) {
   const encoder = new TextEncoder();
   const bytes =
-    encoder.encode(content).length + encoder.encode(source ?? "").length;
+    encoder.encode(content).length +
+    encoder.encode(source ?? "").length +
+    encoder.encode(repo?.baseContent ?? "").length;
   if (bytes > ARTIFACT_MAX_BYTES)
     throw new Error(
       `${LIMIT_REACHED}: an artifact's content and source together hold at most ${(ARTIFACT_MAX_BYTES / 1e6).toFixed(1)} MB; this is ${(bytes / 1e6).toFixed(1)} MB`,

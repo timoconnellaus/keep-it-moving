@@ -19,7 +19,19 @@ import type { Readable, Writable } from "node:stream";
  * opaque origin that can't reach this machine's other pages or files.
  */
 
+/** A file the page loads, which kim serves to the browser itself. */
+export interface ServedFile {
+  type: string;
+  body: Buffer;
+}
+
 export interface RenderInput {
+  /**
+   * Files under the page's own address that kim serves (the design
+   * viewer's scripts), so they load as the site serves them, with no
+   * request from the page to the network.
+   */
+  files?: (path: string) => Promise<ServedFile | null>;
   format: "html" | "svg";
   content: string;
   width: number;
@@ -211,10 +223,28 @@ function devtools(input: Writable, output: Readable) {
  * the canvas frames it), after its fonts load, and with `fullPage` as tall
  * as the page. The browser and its profile go however it ends.
  */
-export async function renderScreenshot(
+export function renderScreenshot(
   input: RenderInput,
   browser = findBrowser(),
 ): Promise<{ png: Buffer; height: number }> {
+  return inBrowser(input, browser, (send) => capture(send, input));
+}
+
+/** The DevTools protocol, for one page. */
+type Send = (
+  method: string,
+  params?: Record<string, unknown>,
+) => Promise<Record<string, unknown>>;
+
+/**
+ * Loads the page in a fresh headless browser, as its frame serves it, and
+ * runs `work` on it. The browser and its profile go however it ends.
+ */
+async function inBrowser<T>(
+  input: RenderInput,
+  browser: string,
+  work: (send: Send) => Promise<T>,
+): Promise<T> {
   const profile = mkdtempSync(join(tmpdir(), "kim-browser-"));
   const child = spawn(
     browser,
@@ -259,7 +289,7 @@ export async function renderScreenshot(
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      capture(cdp, input),
+      open(cdp, input).then(work),
       exited,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
@@ -282,10 +312,11 @@ export async function renderScreenshot(
   }
 }
 
-async function capture(
+/** A page with the artifact loaded, at the frame's size. */
+async function open(
   cdp: ReturnType<typeof devtools>,
   input: RenderInput,
-): Promise<{ png: Buffer; height: number }> {
+): Promise<Send> {
   const { targetId } = (await cdp.send("Target.createTarget", {
     url: "about:blank",
   })) as { targetId: string };
@@ -305,20 +336,63 @@ async function capture(
   const body = Buffer.from(input.content, "utf8").toString("base64");
   let loaded: () => void;
   const load = new Promise<void>((resolve) => (loaded = resolve));
+  const respond = (
+    requestId: string,
+    status: number,
+    responseHeaders: Record<string, string>,
+    content: string,
+  ) =>
+    send("Fetch.fulfillRequest", {
+      requestId,
+      responseCode: status,
+      responseHeaders: Object.entries(responseHeaders).map(([name, value]) => ({
+        name,
+        value,
+      })),
+      body: content,
+    });
+  const fulfill = async (requestId: string, url: string) => {
+    const path = url.slice(PAGE_URL.length - 1).split(/[?#]/)[0]!;
+    if (path === "/" || !input.files)
+      return respond(requestId, 200, headers, body);
+    const file = await input.files(path).catch(() => null);
+    if (!file) return respond(requestId, 404, {}, "");
+    // The page's scripts run in an opaque origin, so modules need CORS.
+    return respond(
+      requestId,
+      200,
+      { "content-type": file.type, "access-control-allow-origin": "*" },
+      file.body.toString("base64"),
+    );
+  };
   cdp.on((message) => {
     if (message.sessionId !== sessionId) return;
     if (message.method === "Fetch.requestPaused")
-      void send("Fetch.fulfillRequest", {
-        requestId: message.params!.requestId,
-        responseCode: 200,
-        responseHeaders: Object.entries(headers).map(([name, value]) => ({
-          name,
-          value,
-        })),
-        body,
-      }).catch(() => undefined);
+      void fulfill(
+        String(message.params!.requestId),
+        String((message.params!.request as { url: string }).url),
+      ).catch(() => undefined);
     if (message.method === "Page.loadEventFired") loaded();
   });
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: input.width,
+    height: input.height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await send("Fetch.enable", {
+    patterns: [{ urlPattern: input.files ? `${PAGE_URL}*` : PAGE_URL }],
+  });
+  await send("Page.enable");
+  await send("Page.navigate", { url: PAGE_URL });
+  await load;
+  return send;
+}
+
+async function capture(
+  send: Send,
+  input: RenderInput,
+): Promise<{ png: Buffer; height: number }> {
   let height = input.height;
   const viewport = () =>
     send("Emulation.setDeviceMetricsOverride", {
@@ -327,11 +401,6 @@ async function capture(
       deviceScaleFactor: 1,
       mobile: false,
     });
-  await viewport();
-  await send("Fetch.enable", { patterns: [{ urlPattern: PAGE_URL }] });
-  await send("Page.enable");
-  await send("Page.navigate", { url: PAGE_URL });
-  await load;
   const measured = (await send("Runtime.evaluate", {
     expression: SETTLE_AND_MEASURE,
     awaitPromise: true,
@@ -349,4 +418,58 @@ async function capture(
     format: "png",
   })) as { data: string };
   return { png: Buffer.from(data, "base64"), height };
+}
+
+/** Waits for the design viewer to draw, then asks it for the design as SVG. */
+const EXPORT_SVG = `(async () => {
+  const until = Date.now() + 25000;
+  while (!document.documentElement.dataset.kimRendered && Date.now() < until)
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  const state = document.documentElement.dataset.kimRendered;
+  if (state !== "ok") return { error: state === "error" ? "the design has an error; fix it in the interview" : "the viewer didn't finish drawing" };
+  if (document.fonts) await document.fonts.ready;
+  return { svg: await window.kimDesignSvg() };
+})()`;
+
+/**
+ * A system design's preview, for the repo: its page, as its frame serves
+ * it, drawn by the design viewer in a local headless browser, which
+ * exports it as SVG. kim fetches the viewer's scripts from `site` and
+ * serves them to the browser, as it serves the page.
+ */
+export function renderDesignSvg(
+  page: string,
+  site: string,
+  browser = findBrowser(),
+): Promise<string> {
+  const files = async (path: string): Promise<ServedFile | null> => {
+    if (!path.startsWith("/design-viewer/")) return null;
+    const response = await fetch(`${site}${path}`);
+    if (!response.ok) return null;
+    return {
+      type: response.headers.get("content-type") ?? "text/javascript",
+      body: Buffer.from(await response.arrayBuffer()),
+    };
+  };
+  return inBrowser(
+    {
+      format: "html",
+      content: page,
+      width: 1280,
+      height: 800,
+      fullPage: false,
+      files,
+    },
+    browser,
+    async (send) => {
+      const evaluated = (await send("Runtime.evaluate", {
+        expression: EXPORT_SVG,
+        awaitPromise: true,
+        returnByValue: true,
+      })) as { result?: { value?: { svg?: string; error?: string } } };
+      const value = evaluated.result?.value;
+      if (!value?.svg) throw new Error(value?.error ?? "no SVG came back");
+      return value.svg;
+    },
+  );
 }

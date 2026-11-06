@@ -9,6 +9,7 @@ import {
   newInterviewKey,
   openGrant,
   seal,
+  tagFor,
   toBase64Url,
   unsealDeep,
   type AccountKey,
@@ -36,6 +37,7 @@ import {
 } from "./shared/schema.js";
 import { artifactFormat } from "./shared/workspace.js";
 import { renderArtifact } from "./server/artifactView.js";
+import { framePage, type FrameParts } from "./server/framePage.js";
 
 /**
  * End-to-end encryption in the CLI: between kim's commands and the
@@ -198,7 +200,7 @@ export class Encryption {
       if (route === "POST /api/sessions")
         sealed = await this.createSession(body);
       else if (inbox) sealed = await this.inboxRequest(route, inbox, body);
-      else if (body !== undefined) {
+      else if (body !== undefined || /\/artifacts\/[^/]+\/page$/.test(path)) {
         const id = SESSION.exec(path)?.[1];
         const key =
           id && id !== "kim" && id !== "inbox" && id !== "projects"
@@ -336,15 +338,28 @@ export class Encryption {
           kind: input.kind,
           format: artifactFormat(input.kind, input.content),
           show: input.show,
-          ...(await sealArtifact(input, s)),
+          ...(input.designType ? { designType: input.designType } : {}),
+          ...(input.keep !== undefined ? { keep: input.keep } : {}),
+          ...(await sealArtifact(input, key)),
         },
       };
     }
+    // A design's preview: the page, built here from its opened parts.
+    if (/^GET \/artifacts\/[^/]+\/page$/.test(tail))
+      return {
+        body,
+        after: async (response) => {
+          const page = response as Json & { parts?: FrameParts };
+          if (!page.parts) return response;
+          const { parts, ...rest } = page;
+          return { ...rest, content: framePage(parts).content };
+        },
+      };
     const artifact = /^PATCH \/artifacts\/([^/]+)$/.exec(tail)?.[1];
     if (artifact) {
       const patch = ArtifactPatchSchema.parse(body);
       if (patch.content === undefined)
-        return { body: { ...patch, ...(await sealArtifact(patch, s)) } };
+        return { body: { ...patch, ...(await sealArtifact(patch, key)) } };
       const session = await this.session(id);
       const current = session.artifacts.find((item) => item.id === artifact);
       if (!current) throw new Error("Artifact not found");
@@ -357,7 +372,7 @@ export class Encryption {
         content: patch.content,
       });
       return {
-        body: { ...patch, format, ...(await sealArtifact(patch, s)) },
+        body: { ...patch, format, ...(await sealArtifact(patch, key)) },
         after: async (response) =>
           warnings.length ? { ...(response as Json), warnings } : response,
       };
@@ -443,13 +458,13 @@ export class Encryption {
       questions?: QuestionView[];
     };
     if (!artifact.questions) return response;
-    const { questions, ...rest } = artifact;
+    const { questions, parts, ...rest } = artifact as typeof artifact & {
+      parts?: FrameParts;
+    };
+    const page = parts ? framePage(parts).content : (artifact.content ?? "");
     return {
       ...rest,
-      content: renderArtifact(
-        artifact.content ?? "",
-        artifactValues(questions, artifact.id),
-      ),
+      content: renderArtifact(page, artifactValues(questions!, artifact.id)),
     };
   }
 
@@ -595,12 +610,37 @@ async function sealArtifact(
     content?: string | undefined;
     description?: string | null | undefined;
     source?: string | null | undefined;
+    repo?:
+      | {
+          path: string;
+          baseCommit: string | null;
+          baseContent: string | null;
+        }
+      | null
+      | undefined;
   },
-  s: (text: string) => Promise<string>,
+  key: InterviewKey,
 ): Promise<Json> {
+  const s = (text: string) => seal(key, text);
   const out: Json = {};
   if (input.title !== undefined) out.title = await s(input.title);
-  if (input.content !== undefined) out.content = await s(input.content);
+  if (input.content !== undefined) {
+    out.content = await s(input.content);
+    out.contentTag = await tagFor(key, input.content);
+  }
+  // The repo copy is content too; its tag lets the service say "changed".
+  if (input.repo !== undefined)
+    out.repo = input.repo && {
+      path: await s(input.repo.path),
+      baseCommit: input.repo.baseCommit,
+      baseContent:
+        input.repo.baseContent === null
+          ? null
+          : await s(input.repo.baseContent),
+      ...(input.repo.baseContent !== null
+        ? { baseTag: await tagFor(key, input.repo.baseContent) }
+        : {}),
+    };
   if (input.description !== undefined)
     out.description =
       input.description === null ? null : await s(input.description);

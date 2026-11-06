@@ -12,6 +12,7 @@ import type { ControlValues } from "../shared/bindings.js";
 import type { ArtifactView } from "../shared/schema.js";
 import { artifactViewUrl } from "../shared/workspace.js";
 import { renderArtifact } from "../server/artifactView.js";
+import { framePage, type FrameParts } from "../server/framePage.js";
 import { LOCKED } from "../shared/crypto.js";
 import { svgImageUrl } from "./diagram.js";
 import { encryption, KidContext, useEncryption } from "./keys.js";
@@ -34,7 +35,8 @@ export function useFrameSource(
   const kid = useContext(KidContext);
   const keys = useEncryption();
   const html = artifact.format === "html";
-  const key = `${kid}:${artifact.id}:${artifact.revision}`;
+  // A mockup that uses the tokens rebuilds when they change.
+  const key = `${kid}:${artifact.id}:${artifact.revision}:${artifact.tokensRevision ?? 0}`;
   const [content, setContent] = useState<{ key: string; html: string } | null>(
     null,
   );
@@ -46,18 +48,22 @@ export function useFrameSource(
       load = fetch(`/api/browser/${token}/artifacts/${artifact.id}/content`)
         .then((response) =>
           response.ok
-            ? (response.json() as Promise<{ content: string }>)
+            ? (response.json() as Promise<{ parts: FrameParts }>)
             : null,
         )
-        .then((body) => (body ? encryption.unseal(body.content) : null))
+        .then((body) => (body ? encryption.unseal(body.parts) : null))
         .catch(() => null)
-        .then((value) => {
+        .then((parts) => {
           // Not opened yet: ask again once it can be.
-          if (value === null || value.includes(LOCKED)) {
+          if (
+            parts === null ||
+            parts.content.includes(LOCKED) ||
+            parts.tokens?.includes(LOCKED)
+          ) {
             opened.delete(key);
             return null;
           }
-          return value;
+          return framePage(parts).content;
         });
       opened.set(key, load);
     }

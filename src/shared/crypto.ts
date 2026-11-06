@@ -217,6 +217,34 @@ export async function seal(key: InterviewKey, text: string): Promise<string> {
   return `kim1.${key.kid}.${toBase64Url(concat(iv, new Uint8Array(sealed)))}`;
 }
 
+/**
+ * A keyed hash of some text under an interview's key: equal text gives an
+ * equal tag, so the service can tell content changed from its repo copy
+ * without reading either.
+ */
+export async function tagFor(key: InterviewKey, text: string): Promise<string> {
+  const derived = await subtle().digest(
+    "SHA-256",
+    concat(encoder.encode("kim1 tag"), key.raw),
+  );
+  const hmac = await subtle().importKey(
+    "raw",
+    new Uint8Array(derived),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return toBase64Url(
+    new Uint8Array(
+      await (
+        subtle() as unknown as {
+          sign(a: unknown, k: CryptoKey, d: Uint8Array): Promise<ArrayBuffer>;
+        }
+      ).sign("HMAC", hmac, encoder.encode(text)),
+    ),
+  );
+}
+
 /** Opens a sealed field; throws when the key is wrong or it was changed. */
 export async function open(
   key: InterviewKey,
