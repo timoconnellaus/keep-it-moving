@@ -12,13 +12,13 @@
 ## Decisions
 
 - **A new section** between Features and How it works, headlined *Design it in the interview. Ship it in the PR.* It has four steps beside an illustration of the System tab and the PR's files.
-- **The hero stays**, with one new line under the subhead about designs and the plan landing in the repo.
+- **The hero gets five tabbed demos**, as on os.cloudflare.app: 01 Answer, 02 Design, 03 Mock up, 04 Ship, 05 Share. Each tab is numbered, with a caption and a progress bar that fills while its demo plays, and the current one is highlighted. Each demo is a replay of the real app. The hero copy stays, with no extra subhead line.
 - **Elsewhere on the page:** Free's pricing lists "System designs and repo sync", *How it works* gets a final "Writes it back" step, and the Diagrams and mockups card mentions data models and APIs.
 - **The design system gets its own section** after the first, headlined *Your design system, in every mockup*, with an *Optional* pill. It shows a tokens card with one changed swatch and the chat that changed it, beside three mockups marked updated, and a tile saying mockups bring their own styles without one.
-- **Re-record the hero demo now**, with a schema step in the checkout story.
+- **Open source, clearly:** the CLI and the skill are MIT, and the Worker and web app AGPL-3.0 (previously FSL-1.1-MIT). The page has a GitHub button with the star count in the nav and the hero (the count shows once there's at least one star), a "Self-host it free, forever" line, and an open source section after Features.
 
 ## Next steps
 
-1. Edit `docs/marketing/keep-it-moving.html`: the hero line, both new sections, the feature card, How it works and pricing.
-2. Re-record the demo with a schema step (`docs/marketing/demo/`: story, capture, build).
+1. ~~Both new sections, the feature card, How it works, pricing, the open source treatment and the licence~~ (shipped).
+2. Capture the five demos and build the tabbed hero (`docs/marketing/demo/`).
 3. Rebuild the landing page and deploy.

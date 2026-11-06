@@ -946,6 +946,28 @@ describe("design", { timeout: 30_000 }, () => {
     ]);
   });
 
+  it("still writes back after the repo gets a remote", async () => {
+    const { dir, run } = await repoWithDesigns();
+    const session = await run("session", "create", "--title", "Plans table");
+    await run(
+      "design",
+      "pull",
+      session.id,
+      ".kim/designs/data-model.dbml",
+      "--keep",
+    );
+    // The project key was local/<folder>; now it's the remote's.
+    await exec(
+      "git",
+      ["remote", "add", "origin", "https://github.com/acme/storefront.git"],
+      { cwd: dir },
+    );
+    const written = await run("design", "write", session.id, "--dry-run");
+    expect(written.plan).toEqual([
+      expect.objectContaining({ path: ".kim/designs/data-model.dbml" }),
+    ]);
+  });
+
   it("won't keep a past plan", async () => {
     const { dir, attempt, run } = await repoWithDesigns();
     mkdirSync(join(dir, ".kim/plans"), { recursive: true });

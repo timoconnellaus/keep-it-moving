@@ -140,6 +140,14 @@ describe("writing back", () => {
       keepRefusal({ kind: "document", title: "Notes", repo: null }),
     ).toMatch(/keeps designs/);
     expect(keepRefusal({ kind: "plan", title: "Plan", repo: null })).toBeNull();
+    // This interview's own plan, after a conflict and a rebase.
+    expect(
+      keepRefusal({
+        kind: "plan",
+        title: "Plan",
+        repo: { path: ".kim/plans/2026-11-06-marketing.md" },
+      }),
+    ).toBeNull();
   });
 
   it("updates files the interview copied, creates new ones, and skips the same", () => {

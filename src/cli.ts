@@ -498,7 +498,18 @@ async function interviewRepo(sessionId: string): Promise<string> {
     project: { key: string } | null;
   };
   const here = repoOrigin(root).projectKey;
-  if (session.project && here && session.project.key !== here)
+  // A repo keeps the key it had before it got a remote: its folder's name.
+  const common = git(
+    root,
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  );
+  const keys = [
+    here,
+    common && `local/${basename(dirname(common)).toLowerCase()}`,
+  ];
+  if (session.project && here && !keys.includes(session.project.key))
     throw new Error(
       `This interview belongs to ${session.project.key}, but this folder is in ${here}; run it from that repo`,
     );

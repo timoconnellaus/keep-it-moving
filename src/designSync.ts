@@ -208,7 +208,9 @@ export function keepRefusal(item: {
   title: string;
   repo: { path: string } | null;
 }): string | null {
-  if (item.repo?.path.startsWith(PLANS_DIR))
+  // A past plan comes in as a document; this interview's own plan may
+  // have a path there too, once it has been written and rebased.
+  if (item.kind !== "plan" && item.repo?.path.startsWith(PLANS_DIR))
     return `"${item.title}" is a past plan, which stays as it was decided; write what changed in this interview's plan`;
   if (item.repo) return null;
   if (["design", "mockup", "plan", "tokens"].includes(item.kind)) return null;
