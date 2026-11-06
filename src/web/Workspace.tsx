@@ -361,7 +361,7 @@ function SystemPane({
           checked={compare}
           onChange={(event) => toggleCompare(event.target.checked)}
         />
-        <span className="ptext">Compare with repo</span>
+        <span className="compare-text">Compare</span>
       </label>
     </>
   );

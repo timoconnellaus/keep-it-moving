@@ -3022,8 +3022,12 @@ html.previewing-full body {
   background: #fff1d6;
   color: #8a5a00;
 }
-.compare-toggle {
+/* A checkbox alone says nothing: the word stays at every width. */
+.preview .pbtn.compare-toggle {
   gap: 5px;
+  padding: 0 9px;
+  width: auto;
+  font-size: 12px;
 }
 .compare-toggle input {
   margin: 0;
