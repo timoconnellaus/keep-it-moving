@@ -150,7 +150,7 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .pricing { padding-block: 80px; display: grid; gap: 48px; }
 .pricing .section-head p { color: var(--night-muted); }
 .plans { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; max-width: 980px; margin: 0 auto; width: 100%; }
-.plan { position: relative; background: var(--night-card); border: 1px solid var(--night-line); border-radius: 22px; padding: 56px 24px 24px; display: grid; gap: 18px; align-content: start; box-shadow: 0 0 0 6px #ffffff06; margin-top: 30px; }
+.plan { position: relative; background: var(--night-card); border: 1px solid var(--night-line); border-radius: 22px; padding: 56px 24px 24px; display: flex; flex-direction: column; align-items: flex-start; gap: 18px; box-shadow: 0 0 0 6px #ffffff06; margin-top: 30px; }
 .badge { position: absolute; top: -30px; left: 22px; width: 60px; height: 60px; border-radius: 50%; background: #121214; border: 1px solid var(--night-line); box-shadow: 0 0 0 6px #ffffff08; display: grid; place-items: center; }
 .badge svg { width: 26px; height: 26px; }
 .tier { justify-self: start; font-size: 13px; font-weight: 600; padding: 4px 12px; border-radius: 999px; background: #0f0f11; border: 1px solid var(--night-line); }
@@ -161,7 +161,8 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .plan ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; font-size: 15px; color: #e6e7ea; }
 .plan li { display: flex; gap: 10px; align-items: flex-start; }
 .plan li svg { width: 18px; height: 18px; flex: none; margin-top: 3px; }
-.plan .btn { width: 100%; }
+.plan .btn { width: 100%; margin-top: auto; }
+.plan ul { width: 100%; }
 .plan.soon .btn { background: #26262b; color: #c9cbd0; box-shadow: none; }
 .fine { text-align: center; color: var(--night-muted); font-size: 14px; max-width: 70ch; margin: 0 auto; }
 
