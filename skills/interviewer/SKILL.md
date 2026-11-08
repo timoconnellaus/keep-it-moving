@@ -131,10 +131,10 @@ The repo's `.kim/` folder holds what earlier interviews kept: `designs/`, `mocku
 
 ## Watch and adapt
 
-In Claude Code and Codex, kim's hooks connect your session to its interview. kim installs them and keeps them current, unless the user ran `kim hooks uninstall`. A session has one interview of the user's own at a time: `session create`, `ask` or `resume` for another is refused with `"code": "interview_running"`, naming the live one. Stop that one first, or carry on in it.
+In Claude Code and Codex, kim's hooks connect your session to its interview. kim installs them and keeps them current, unless the user ran `kim hooks uninstall`. A session can run several interviews at once: each one you start or resume joins the ones already live, and answers from any of them reach you. Each batch names its interview (`answers to interview <id>`), so act on it in that interview.
 
 - **While you work**, answers and messages reach you after each tool call, and when the user types to you. They arrive as a line starting `Keep it moving: answers to interview <id>`, followed by a batch in `wait`'s JSON.
-- **When you have nothing else to do, end your turn.** The Stop hook waits for the user. In Claude Code, the turn ends and you're woken with the next batch. In Codex, the turn is held open until the batch arrives. You can't leave a live interview behind: the only way out is `kim session stop <session-id>`.
+- **When you have nothing else to do, end your turn.** The Stop hook waits for the user. In Claude Code, the turn ends and you're woken with the next batch. In Codex, the turn is held open until the batch arrives. It waits on all your live interviews at once and brings whichever answers come first. You can't leave a live interview behind: the only way out is `kim session stop <session-id>`, for each one.
 - **Wait on purpose** with `kim wait <session-id>`, when you need the answers before your next step mid-task, or where the hooks aren't installed. In Claude Code, run it through the Bash tool with `run_in_background`. Elsewhere, run it as a background process, or loop on it in the foreground. It exits with one JSON batch when the user pauses (15 s by default, `--idle` to change), finishes every open question, or stops the interview. An empty `events` list means it timed out with nothing new.
 
 Act on a batch the same way however it reached you. It has been delivered, and the user sees it marked read, so the next one brings only later answers. Each batch contains:

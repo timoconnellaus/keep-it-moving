@@ -18,6 +18,7 @@ export function homeEnv(
     "XDG_CONFIG_HOME",
     "APPDATA",
     "CLAUDE_CODE_SESSION_ID",
+    "CODEX_THREAD_ID",
     "CLAUDE_CODE_REMOTE",
     "CLAUDE_CODE_REMOTE_SESSION_ID",
   ])

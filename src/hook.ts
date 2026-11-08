@@ -269,18 +269,21 @@ export async function runHook(
   if (event === "PostToolUse") {
     const changes = bindingChanges(payload);
     const { unbind, inbox } = changes;
-    // One interview of the user's own per agent session. Starting or
-    // resuming one moves the session to it; other commands only renew it,
-    // or bind the first, so looking at an old interview doesn't move it.
-    const current = liveBinding(bindings, sessionId);
-    const next =
-      changes.started?.at(-1) ??
-      (current && !unbind.includes(current.interviewId)
-        ? changes.bind.includes(current.interviewId)
-          ? current.interviewId
-          : undefined
-        : changes.bind.at(-1));
-    const bind = next ? [next] : [];
+    // A session can work on several interviews of the user's own. Starting
+    // or resuming one adds it; other commands renew the ones it has, or
+    // bind the first, so looking at an old interview doesn't add it.
+    const own = new Set(
+      liveBindings(bindings, sessionId).map((binding) => binding.interviewId),
+    );
+    const bind = [
+      ...new Set([
+        ...(changes.started ?? []),
+        ...changes.bind.filter((id) => own.has(id)),
+        ...(!own.size && !changes.started?.length
+          ? changes.bind.slice(-1)
+          : []),
+      ]),
+    ];
     if (bind.length || unbind.length || inbox.length) {
       changed = true;
       const touched = new Set([...bind, ...unbind, ...inbox]);
@@ -288,15 +291,7 @@ export async function runHook(
         bindings.map((binding) => [binding.interviewId, binding]),
       );
       bindings = [
-        ...bindings.filter(
-          (binding) =>
-            !touched.has(binding.interviewId) &&
-            !(
-              bind.length &&
-              !binding.inbox &&
-              binding.agentSessionId === sessionId
-            ),
-        ),
+        ...bindings.filter((binding) => !touched.has(binding.interviewId)),
         ...bind.map((interviewId) => ({
           interviewId,
           agentSessionId: sessionId,
@@ -378,22 +373,20 @@ export async function runHook(
     : {};
 }
 
-/** The interview of the user's own that an agent session is on, if any. */
-export const liveBinding = (
+/** The interviews of the user's own that an agent session is on, oldest first. */
+export const liveBindings = (
   bindings: Binding[],
   sessionId: string,
-): Binding | undefined =>
+): Binding[] =>
   sessionId
-    ? bindings
-        .filter(
-          (binding) => !binding.inbox && binding.agentSessionId === sessionId,
-        )
-        .at(-1)
-    : undefined;
+    ? bindings.filter(
+        (binding) => !binding.inbox && binding.agentSessionId === sessionId,
+      )
+    : [];
 
 /**
- * Links an agent session to the interview it just started or resumed, from
- * kim itself. The PostToolUse hook only sees what the command printed, and
+ * Links an agent session to an interview it just started or resumed, from
+ * kim itself, alongside any others it's on. The PostToolUse hook only sees what the command printed, and
  * an agent often keeps that in a variable (`S=$(kim session create …)`).
  */
 export function bindSession(
@@ -405,9 +398,7 @@ export function bindSession(
 ): void {
   writeBindings(file, [
     ...readBindings(file).filter(
-      (binding) =>
-        binding.interviewId !== interviewId &&
-        (binding.inbox || binding.agentSessionId !== sessionId),
+      (binding) => binding.interviewId !== interviewId,
     ),
     { interviewId, agentSessionId: sessionId, cwd, boundAt: now },
   ]);
@@ -435,58 +426,113 @@ const fromUser = (batch: Batch) =>
     (Array.isArray(batch.messages) && batch.messages.length),
   );
 
+/** After the first interview's answers, how long the others get to send theirs too. */
+export const STOP_GATHER_MS = 300;
+
 /**
  * What the Stop hook does: Claude Code's waits in the background and wakes
  * the model (`wake`), Codex's holds the turn open and hands the model the
- * answers as its next prompt (`block`). Either way the agent can't leave a
- * live interview behind: only stopping it ends the waiting. `null` lets the
- * agent stop: there's no interview, it ended, or a newer waiter took over.
+ * answers as its next prompt (`block`). It waits on every live interview
+ * the session is on at once, and the first to bring something from the
+ * user ends the wait, with whatever the others brought by then. Either way
+ * the agent can't leave a live interview behind: only stopping it ends the
+ * waiting. `null` lets the agent stop: there's no interview, they all
+ * ended, or a newer waiter took over.
  */
 export async function runStop(
   payload: HookPayload,
   deps: {
     stateFile: string;
-    /** Waits until `deadline` for a batch, as `kim wait` does. */
-    wait: (interviewId: string, deadline: number) => Promise<StopWaitOutcome>;
+    /**
+     * Waits until `deadline` for a batch, as `kim wait` does. `signal`
+     * ends it early, once another interview's answers came; a batch it
+     * already has must still be returned then.
+     */
+    wait: (
+      interviewId: string,
+      deadline: number,
+      signal: AbortSignal,
+    ) => Promise<StopWaitOutcome>;
     /** How long to wait before saying "still waiting". */
     waitMs: number;
     now?: number;
     /** The time, to tell a wait that ran its course from one cut short. */
     clock?: () => number;
+    gatherMs?: number;
   },
 ): Promise<{ text: string } | null> {
   const now = deps.now ?? Date.now();
   const clock = deps.clock ?? Date.now;
-  const binding = liveBinding(
+  const live = liveBindings(
     readBindings(deps.stateFile),
     payload.session_id ?? "",
   );
-  if (!binding) return null;
-  const { interviewId } = binding;
+  if (!live.length) return null;
   const started = clock();
-  // A refusal (the Free plan's limit, signed out) lets it stop: waking the
-  // model to say "still waiting" would only fail the same way again.
-  const outcome = await deps
-    .wait(interviewId, now + deps.waitMs)
-    .catch((): StopWaitOutcome | "failed" => "failed");
-  if (outcome === "replaced" || outcome === "failed") return null;
-  if (outcome === "gone" || (outcome && outcome.batch.status === "stopped")) {
+  const gathered = new AbortController();
+  let gathering: ReturnType<typeof setTimeout> | undefined;
+  // A refusal (the Free plan's limit, signed out) drops that interview: waking
+  // the model to say "still waiting" would only fail the same way again.
+  const outcomes = await Promise.all(
+    live.map(async ({ interviewId }) => {
+      const outcome = await deps
+        .wait(interviewId, now + deps.waitMs, gathered.signal)
+        .catch((): StopWaitOutcome | "failed" => "failed");
+      if (
+        outcome &&
+        typeof outcome === "object" &&
+        fromUser(outcome.batch) &&
+        outcome.batch.status !== "stopped"
+      )
+        gathering ??= setTimeout(
+          () => gathered.abort(),
+          deps.gatherMs ?? STOP_GATHER_MS,
+        );
+      return { interviewId, outcome };
+    }),
+  );
+  clearTimeout(gathering);
+  const ended = new Set(
+    outcomes
+      .filter(
+        ({ outcome }) =>
+          outcome === "gone" ||
+          (outcome &&
+            typeof outcome === "object" &&
+            outcome.batch.status === "stopped"),
+      )
+      .map(({ interviewId }) => interviewId),
+  );
+  if (ended.size)
     writeBindings(
       deps.stateFile,
       readBindings(deps.stateFile).filter(
-        (known) => known.interviewId !== interviewId,
+        (known) => !ended.has(known.interviewId),
       ),
     );
-    return null;
-  }
-  if (outcome && fromUser(outcome.batch))
-    return { text: formatBatch("Stop", interviewId, outcome.batch) };
+  const answered = outcomes.flatMap(({ interviewId, outcome }) =>
+    outcome &&
+    typeof outcome === "object" &&
+    !ended.has(interviewId) &&
+    fromUser(outcome.batch)
+      ? [formatBatch("Stop", interviewId, outcome.batch)]
+      : [],
+  );
+  if (answered.length) return { text: answered.join("\n\n") };
   // Nothing from the user. Only a wait that ran its course says so, so a
   // wait that ends early for any reason can't wake the model over and over.
-  if (clock() - started < deps.waitMs / 2) return null;
-  return {
-    text: `Keep it moving: interview ${interviewId} is still running and nothing new has arrived. If you have nothing else to do, end your turn again to keep waiting; when the interview is done, stop it with \`kim session stop ${interviewId}\`.`,
-  };
+  const waiting = outcomes.filter(
+    ({ interviewId, outcome }) =>
+      !ended.has(interviewId) && outcome !== "failed" && outcome !== "replaced",
+  );
+  if (!waiting.length || clock() - started < deps.waitMs / 2) return null;
+  const ids = waiting.map(({ interviewId }) => interviewId);
+  const [only] = ids;
+  const text =
+    ids.length === 1
+      ? `interview ${only} is still running and nothing new has arrived. If you have nothing else to do, end your turn again to keep waiting; when the interview is done, stop it with \`kim session stop ${only}\`.`
+      : `interviews ${ids.join(", ")} are still running and nothing new has arrived. If you have nothing else to do, end your turn again to keep waiting; when one is done, stop it with \`kim session stop <id>\`.`;
+  return { text: `Keep it moving: ${text}` };
 }
 
 /**

@@ -52,7 +52,7 @@ import {
   armWaiter,
   bindSession,
   disarmWaiter,
-  liveBinding,
+  liveBindings,
   readBindings,
   runHook,
   runStop,
@@ -168,7 +168,6 @@ async function main(args: string[]): Promise<void> {
 
 async function sessionCommand(action: string | undefined, args: string[]) {
   if (action === "create") {
-    await refuseSecondInterview();
     const session = await api("/api/sessions", {
       method: "POST",
       body: JSON.stringify({
@@ -203,7 +202,6 @@ async function sessionCommand(action: string | undefined, args: string[]) {
   if (action === "delete") return deleteSessions(args);
   const id = positional(args, 0);
   if (action === "show") return output(await api(`/api/sessions/${id}`));
-  if (action === "resume") await refuseSecondInterview(id);
   if (action === "stop" || action === "resume") {
     // What the agent kept goes into the repo first; a conflict leaves the
     // interview running so the agent can merge and stop again.
@@ -1378,7 +1376,6 @@ async function ask(args: string[]) {
     (flag(args, "--prompt") ? questionFromFlags(args) : null);
   if (!questions)
     throw new Error("--json <questions|-> or --prompt is required");
-  await refuseSecondInterview();
   const session = (await api("/api/sessions", {
     method: "POST",
     body: JSON.stringify({
@@ -1907,7 +1904,7 @@ async function stopHookCommand(hold: boolean) {
     ) as HookPayload;
     const sessionId = payload.session_id ?? "";
     const stateFile = configFile("hooks.json");
-    if (liveBinding(readBindings(stateFile), sessionId)) {
+    if (liveBindings(readBindings(stateFile), sessionId).length) {
       const controller = new AbortController();
       let checker: NodeJS.Timeout | undefined;
       if (!hold) {
@@ -1922,7 +1919,12 @@ async function stopHookCommand(hold: boolean) {
           waitMs: hold
             ? STOP_HOLD_TIMEOUT_S * 1000 - STOP_HOLD_MARGIN_MS
             : STOP_WAIT_TIMEOUT_S * 1000 - STOP_WAIT_MARGIN_MS,
-          wait: (id, deadline) => stopWait(id, deadline, controller.signal),
+          wait: (id, deadline, gathered) =>
+            stopWait(
+              id,
+              deadline,
+              AbortSignal.any([controller.signal, gathered]),
+            ),
         });
         // Given up for a newer waiter or the user's own prompt: say nothing.
         text = controller.signal.aborted ? null : (result?.text ?? null);
@@ -1972,8 +1974,9 @@ async function stopWait(
     if (/not found/i.test(message)) return "gone";
     throw error;
   }
-  if (signal.aborted) return "replaced";
-  if (!batch) return null;
+  // A batch that came is delivered, so it goes to the agent even when
+  // the wait was cut short.
+  if (!batch) return signal.aborted ? "replaced" : null;
   // Delivered now, so a batch that won't open still goes to the agent.
   const opened = await encryption.open(batch).catch(() => batch);
   return { batch: opened as StopWaitBatch };
@@ -1992,15 +1995,15 @@ async function sessionEndHookCommand() {
     ) as HookPayload;
     const sessionId = payload.session_id ?? "";
     disarmWaiter(waitersDir(), sessionId);
-    const binding = liveBinding(
-      readBindings(configFile("hooks.json")),
-      sessionId,
+    await Promise.all(
+      liveBindings(readBindings(configFile("hooks.json")), sessionId).map(
+        (binding) =>
+          authorizedFetch(
+            `/api/sessions/${encodeURIComponent(binding.interviewId)}/away`,
+            { method: "POST", signal: AbortSignal.timeout(TAKE_TIMEOUT_MS) },
+          ).catch(() => null),
+      ),
     );
-    if (binding)
-      await authorizedFetch(
-        `/api/sessions/${encodeURIComponent(binding.interviewId)}/away`,
-        { method: "POST", signal: AbortSignal.timeout(TAKE_TIMEOUT_MS) },
-      ).catch(() => null);
   } catch {
     // Closing the session matters more.
   }
@@ -2008,14 +2011,13 @@ async function sessionEndHookCommand() {
 }
 
 /**
- * One interview of the user's own per agent session at a time: starting or
- * resuming another while one is live is refused, naming it, so the agent
- * stops it first. Knows the session from CLAUDE_CODE_SESSION_ID, so only in
- * Claude Code; elsewhere the hooks follow the newest.
+ * Links the agent session running this command to an interview it started
+ * or resumed. Claude Code and Codex (CODEX_THREAD_ID) both name the session
+ * with the id their hooks get as `session_id`.
  */
-/** Links the Claude Code session running this command to its interview. */
 function bindToAgentSession(id: string) {
-  const sessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  const sessionId =
+    process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_THREAD_ID;
   if (!sessionId) return;
   try {
     bindSession(configFile("hooks.json"), sessionId, id, process.cwd());
@@ -2031,32 +2033,6 @@ function forgetBinding(id: string) {
   } catch {
     // A stale binding finds out from the service.
   }
-}
-
-async function refuseSecondInterview(resuming?: string) {
-  const sessionId = process.env.CLAUDE_CODE_SESSION_ID;
-  if (!sessionId) return;
-  const binding = liveBinding(
-    readBindings(configFile("hooks.json")),
-    sessionId,
-  );
-  if (!binding || binding.interviewId === resuming) return;
-  const running = (await api(
-    `/api/sessions/${encodeURIComponent(binding.interviewId)}`,
-  ).catch(() => null)) as {
-    id: string;
-    title: string;
-    url: string;
-    status: string;
-  } | null;
-  if (!running || running.status !== "active") return;
-  throw new ApiError(
-    `This session already has a live interview, "${running.title}" (${running.id}). One interview per session at a time: stop it first with \`kim session stop ${running.id}\`.`,
-    {
-      code: "interview_running",
-      running: { id: running.id, title: running.title, url: running.url },
-    },
-  );
 }
 
 async function readStdin(): Promise<string> {

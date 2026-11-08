@@ -34,6 +34,7 @@ function tempDir() {
 
 const ID = "0b9f6a52-8d1e-4c1a-9a57-3f2a1e7c9d10";
 const OTHER = "7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
+const THIRD = "3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7";
 
 const batch = (events: unknown[] = [], extra: Partial<Batch> = {}): Batch => ({
   events,
@@ -195,12 +196,13 @@ describe("kim hook", () => {
     expect(take).toHaveBeenCalledTimes(3);
   });
 
-  it("follows one interview per session: starting another moves it, looking at one doesn't", async () => {
-    const { run, stateFile } = setup();
+  it("holds several interviews per session: starting one adds it, looking at one doesn't", async () => {
+    const { run, stateFile, take } = setup();
     const own = () =>
       readBindings(stateFile)
         .filter((binding) => binding.agentSessionId === "s1")
-        .map((binding) => binding.interviewId);
+        .map((binding) => binding.interviewId)
+        .sort();
     await run(
       "PostToolUse",
       bash("kim session create --title A", JSON.stringify({ id: ID })),
@@ -211,12 +213,21 @@ describe("kim hook", () => {
     expect(own()).toEqual([ID]);
     await run("PostToolUse", bash(`kim question add ${ID} --prompt P`));
     expect(own()).toEqual([ID]);
-    // Resuming one moves the session to it.
+    // Resuming another adds it alongside.
     await run("PostToolUse", bash(`kim session resume ${OTHER}`));
-    expect(own()).toEqual([OTHER]);
-    // Stopped, the session has none, and the next one it names binds.
+    expect(own()).toEqual([ID, OTHER].sort());
+    // Every tool call takes both.
+    take.mockClear();
+    await run("PostToolUse", bash("ls"), Date.parse("2026-10-30T09:01:00Z"));
+    expect(take.mock.calls.map(([id]) => id).sort()).toEqual(
+      [ID, OTHER].sort(),
+    );
+    // Stopping one leaves the other.
     await run("PostToolUse", bash(`kim session stop ${OTHER}`));
+    expect(own()).toEqual([ID]);
+    await run("PostToolUse", bash(`kim session stop ${ID}`));
     expect(own()).toEqual([]);
+    // With none, the next one it names binds.
     await run("PostToolUse", bash(`kim wait ${ID}`));
     expect(own()).toEqual([ID]);
   });
@@ -435,53 +446,61 @@ describe("kim hook, end to end", () => {
     expect(response.reason).toContain('"answer":"No"');
   }, 60_000);
 
-  it("refuses a second live interview in the same Claude session, naming the first", async () => {
+  it("runs several interviews in one Claude session, and wakes on whichever the user answers", async () => {
     const { store, env } = await served();
-    const session = store.createSession("", { title: "Plan" });
-    await hook(
-      "post-tool-use",
-      JSON.stringify({
-        session_id: "claude-1",
-        cwd: "/repo",
-        tool_name: "Bash",
-        tool_input: { command: `kim wait ${session.id}` },
-        tool_response: { stdout: "" },
-      }),
-      env,
-    );
-    const kim = (session: string, ...args: string[]) =>
-      new Promise<{ stdout: string; stderr: string; code: number }>((resolve) =>
+    const agent = { ...env, CLAUDE_CODE_SESSION_ID: "claude-1" };
+    const kim = (...args: string[]) =>
+      new Promise<string>((resolve, reject) =>
         execFile(
           process.execPath,
           [tsx, cli, ...args],
-          { env: { ...env, CLAUDE_CODE_SESSION_ID: session } },
-          (error, stdout, stderr) =>
-            resolve({
-              stdout,
-              stderr,
-              code: error ? Number(error.code ?? 1) : 0,
-            }),
+          { env: agent },
+          (error, stdout) => (error ? reject(error) : resolve(stdout)),
         ),
       );
-    const refused = await kim("claude-1", "session", "create", "--title", "B");
-    expect(refused.code).toBe(1);
-    expect(JSON.parse(refused.stderr)).toMatchObject({
-      code: "interview_running",
-      running: { id: session.id, title: "Plan" },
-    });
-    // Another session, or resuming the same one, is fine.
-    expect(
-      (await kim("claude-2", "session", "create", "--title", "C")).code,
-    ).toBe(0);
-    expect((await kim("claude-1", "session", "resume", session.id)).code).toBe(
-      0,
+    const first = JSON.parse(await kim("session", "create", "--title", "A"))
+      .id as string;
+    const second = JSON.parse(await kim("session", "create", "--title", "B"))
+      .id as string;
+    store.addQuestions(first, [{ type: "text", prompt: "First?" }]);
+    const [question] = store.addQuestions(second, [
+      { type: "text", prompt: "Second?" },
+    ]);
+    const woken = hook("stop", JSON.stringify({ session_id: "claude-1" }), env);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    store.answerQuestion(second, question!.id, { answer: "Yes" });
+    const result = await woken;
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain(`answers to interview ${second}`);
+    expect(result.stderr).not.toContain(`answers to interview ${first}`);
+  }, 60_000);
+
+  it("links Codex's session from CODEX_THREAD_ID, as its hooks name it", async () => {
+    const { store, env } = await served();
+    const thread = "01a0b45e-c62c-7ef0-8ee6-f70ef1d96430";
+    const { id } = JSON.parse(
+      await new Promise<string>((resolve, reject) =>
+        execFile(
+          process.execPath,
+          [tsx, cli, "session", "create", "--title", "A"],
+          { env: { ...env, CODEX_THREAD_ID: thread } },
+          (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        ),
+      ),
+    ) as { id: string };
+    const [question] = store.addQuestions(id, [
+      { type: "text", prompt: "Ship it?" },
+    ]);
+    store.answerQuestion(id, question!.id, { answer: "Yes" });
+    const held = await hook(
+      "stop",
+      JSON.stringify({ session_id: thread }),
+      env,
+      ["--hold"],
     );
-    // Once it's stopped, the session can start another.
-    store.setSessionStatus(session.id, "stopped");
-    expect(
-      (await kim("claude-1", "session", "create", "--title", "D")).code,
-    ).toBe(0);
-  }, 30_000);
+    expect(JSON.parse(held.stdout)).toMatchObject({ decision: "block" });
+    expect(JSON.parse(held.stdout).reason).toContain(id);
+  }, 60_000);
 
   it("links an interview kept in a variable, which the hook can't see, and waits on it", async () => {
     const { store, env } = await served();
@@ -705,7 +724,7 @@ describe("the Stop hook", () => {
       batch: batch([{ type: "answer.submitted" }]),
     });
     const text = (await result)?.text;
-    expect(wait).toHaveBeenCalledWith(ID, 61_000);
+    expect(wait).toHaveBeenCalledWith(ID, 61_000, expect.any(AbortSignal));
     expect(text).toMatch(
       new RegExp(
         `^Keep it moving: answers to interview ${ID} arrived while you were waiting`,
@@ -754,6 +773,79 @@ describe("the Stop hook", () => {
     stateFile = await bound();
     expect(await stop(stateFile, "gone").result).toBeNull();
     expect(readBindings(stateFile)).toEqual([]);
+  });
+
+  it("waits on every interview the session is on, and wakes with the first answers and any that came with them", async () => {
+    const { run, stateFile } = setup();
+    for (const id of [ID, OTHER, THIRD])
+      await run(
+        "PostToolUse",
+        bash("kim session create --title A", JSON.stringify({ id })),
+      );
+    const answered = batch([{ type: "answer.submitted" }]);
+    const wait = vi.fn(
+      (id: string, _deadline: number, signal: AbortSignal) =>
+        new Promise<StopWaitOutcome>((resolve) => {
+          if (id === ID) setTimeout(() => resolve({ batch: answered }), 10);
+          // Arrives within the gathering time, so it comes along.
+          else if (id === OTHER)
+            setTimeout(() => resolve({ batch: answered }), 30);
+          // Still waiting: cut short once the others answered.
+          else
+            signal.addEventListener("abort", () => resolve("replaced"), {
+              once: true,
+            });
+        }),
+    );
+    const text = (
+      await runStop(
+        { session_id: "s1" },
+        { stateFile, wait, waitMs: 60_000, gatherMs: 100 },
+      )
+    )?.text;
+    expect(wait).toHaveBeenCalledTimes(3);
+    expect(text).toContain(`answers to interview ${ID}`);
+    expect(text).toContain(`answers to interview ${OTHER}`);
+    expect(text).not.toContain(THIRD);
+    expect(readBindings(stateFile)).toHaveLength(3);
+  });
+
+  it("keeps waiting on the rest when one interview ends, and names them all when nothing came", async () => {
+    const { run, stateFile } = setup();
+    for (const id of [ID, OTHER])
+      await run(
+        "PostToolUse",
+        bash("kim session create --title A", JSON.stringify({ id })),
+      );
+    let time = 0;
+    const wait = vi.fn(async (id: string): Promise<StopWaitOutcome> => {
+      time = 60_000;
+      return id === ID ? "gone" : null;
+    });
+    const text = (
+      await runStop(
+        { session_id: "s1" },
+        { stateFile, wait, waitMs: 60_000, now: 0, clock: () => time },
+      )
+    )?.text;
+    expect(text).toContain(`interview ${OTHER} is still running`);
+    expect(readBindings(stateFile).map((b) => b.interviewId)).toEqual([OTHER]);
+    // Two still waiting are both named.
+    await run(
+      "PostToolUse",
+      bash("kim session create --title A", JSON.stringify({ id: THIRD })),
+    );
+    wait.mockImplementation(async () => {
+      time += 60_000;
+      return null;
+    });
+    const both = (
+      await runStop(
+        { session_id: "s1" },
+        { stateFile, wait, waitMs: 60_000, now: 0, clock: () => time },
+      )
+    )?.text;
+    expect(both).toContain(`interviews ${OTHER}, ${THIRD} are still running`);
   });
 
   it("only follows its own session's interview", async () => {
