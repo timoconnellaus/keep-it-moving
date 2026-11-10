@@ -1,4 +1,10 @@
-import { diffDataModel, parseDataModel, plainDataModel } from "../dataModel.js";
+import {
+  diffDataModel,
+  parseDataModel,
+  plainDataModel,
+  relationName,
+  tableName,
+} from "../dataModel.js";
 import { erdSvg } from "../erd.js";
 import { loadedMeasure } from "./fonts.js";
 import { tryParse, type Prepare } from "./types.js";
@@ -9,8 +15,14 @@ export const prepare: Prepare = async (source, base) => {
   const plain = plainDataModel(model);
   const diff = baseModel ? diffDataModel(baseModel, model) : plain;
   const measure = await loadedMeasure();
+  const names = new Map(model.tables.map((t) => [t.name, tableName(t)]));
   return {
     counts: diff.counts,
+    links: model.relations.flatMap((r) => {
+      const from = names.get(r.from.table);
+      const to = names.get(r.to.table);
+      return from && to ? [{ edge: relationName(r), from, to }] : [];
+    }),
     comparable: baseModel !== null,
     draw(root, compare) {
       root.innerHTML = erdSvg(compare ? diff : plain, { compare, measure });

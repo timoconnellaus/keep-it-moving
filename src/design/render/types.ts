@@ -1,8 +1,20 @@
 import type { ChangeCounts } from "../types.js";
 
+/**
+ * A connection between two drawn parts, by the `data-name`s they carry,
+ * so the viewer can light up what a part connects to.
+ */
+export interface DesignLink {
+  edge: string;
+  from: string;
+  to: string;
+}
+
 /** A design read and drawn, ready to show with or without the comparison. */
 export interface Prepared {
   counts: ChangeCounts;
+  /** What connects to what, for following a part's connections. */
+  links: DesignLink[];
   /** False when there is no base, or the base would not parse. */
   comparable: boolean;
   draw(root: HTMLElement, compare: boolean): void;

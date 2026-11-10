@@ -159,6 +159,12 @@ describe("erdSvg", () => {
     expect(svg).toContain('data-name="posts → comments relation"');
     expect(svg).toContain('class="card removed"');
   });
+  it("marks changed tables, fields and relations for the viewer", () => {
+    const svg = erdSvg(diff, { compare: true });
+    expect(svg).toMatch(/data-name="[^"]+ table" data-kim-status="removed"/);
+    expect(svg).toMatch(/data-kim-status="added"/);
+    expect(erdSvg(diff, { compare: false })).not.toContain("data-kim-status");
+  });
   it("draws no highlights with compare off", () => {
     const svg = erdSvg(diff, { compare: false });
     expect(svg).not.toMatch(

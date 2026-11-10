@@ -375,15 +375,37 @@ export function decodeD2Class(token: string): string | null {
   }
 }
 
-/** Adds data-name to every shape and connection group in a d2 SVG string. */
-export function nameD2Svg(svg: string, names: Map<string, string>): string {
+/**
+ * Adds data-name to every shape and connection group in a d2 SVG string,
+ * and data-kim-status to the ones that changed.
+ */
+export function nameD2Svg(
+  svg: string,
+  names: Map<string, string>,
+  statuses: Map<string, Status> = new Map(),
+): string {
   return svg.replace(/<g class="([^"]+)"/g, (whole, cls: string) => {
     for (const token of cls.split(/\s+/)) {
       const id = decodeD2Class(token);
       const name = id === null ? undefined : names.get(id);
-      if (name !== undefined)
-        return `${whole} data-name="${name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")}"`;
+      if (name !== undefined) {
+        const status = statuses.get(id!);
+        return `${whole} data-name="${name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")}"${status && status !== "same" ? ` data-kim-status="${status}"` : ""}`;
+      }
     }
     return whole;
+  });
+}
+
+/** What connects to what, by the names the drawing carries. */
+export function d2Links(
+  graph: D2Graph,
+  names: Map<string, string>,
+): Array<{ edge: string; from: string; to: string }> {
+  return graph.connections.flatMap((c) => {
+    const edge = names.get(c.id);
+    const from = names.get(c.src);
+    const to = names.get(c.dst);
+    return edge && from && to ? [{ edge, from, to }] : [];
   });
 }

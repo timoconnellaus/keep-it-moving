@@ -1,13 +1,14 @@
 import { D2 } from "@terrastruct/d2";
 import {
   annotateD2,
+  d2Links,
   d2Names,
   diffD2,
   graphFromDiagram,
   nameD2Svg,
   type D2Graph,
 } from "../d2.js";
-import { noChanges } from "../types.js";
+import { noChanges, type Status } from "../types.js";
 import type { Prepare } from "./types.js";
 
 /**
@@ -80,6 +81,8 @@ export const prepare: Prepare = async (source, base) => {
   let compareSvg: string | null = null;
   let counts = noChanges();
   let names = d2Names(graph);
+  const links = d2Links(graph, names);
+  let statuses = new Map<string, Status>();
   if (base !== null) {
     try {
       const baseGraph = graphFromDiagram(
@@ -91,6 +94,12 @@ export const prepare: Prepare = async (source, base) => {
       const annotatedGraph = graphFromDiagram(annotated.diagram as never);
       // Removed items are named from the base, the rest from the current.
       names = new Map([...d2Names(baseGraph), ...d2Names(annotatedGraph)]);
+      statuses = new Map<string, Status>([
+        ...diff.shapes,
+        ...diff.connections,
+        ...diff.removedShapes.map((s) => [s.id, "removed"] as const),
+        ...diff.removedConnections.map((c) => [c.id, "removed"] as const),
+      ]);
       compareSvg = await render(annotated);
     } catch (error) {
       console.warn("kim: could not compare with the base", error);
@@ -100,12 +109,13 @@ export const prepare: Prepare = async (source, base) => {
   }
   return {
     counts,
+    links,
     comparable: compareSvg !== null,
     draw(root, compare) {
-      root.innerHTML = nameD2Svg(
-        compare && compareSvg ? compareSvg : plainSvg,
-        names,
-      );
+      root.innerHTML =
+        compare && compareSvg
+          ? nameD2Svg(compareSvg, names, statuses)
+          : nameD2Svg(plainSvg, names);
     },
     exportSvg: () => plainSvg,
   };

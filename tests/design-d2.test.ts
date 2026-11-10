@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   annotateD2,
+  d2Links,
   d2Names,
   decodeD2Class,
   diffD2,
@@ -137,5 +138,31 @@ describe("naming d2 SVGs", () => {
     expect(named).toContain('<g class="YXBpIHNlcnZpY2U=" data-name="API">');
     expect(named).toContain('data-name="Worker → q: publishes"');
     expect(named).toContain('<g class="shape">');
+  });
+  it("marks what changed, so the viewer can fade the rest", () => {
+    const svg =
+      '<g class="YXBpIHNlcnZpY2U="><rect/></g><g class="Y2xvdWQuKHcgLSZndDsgcSlbMF0="></g>';
+    const marked = nameD2Svg(
+      svg,
+      d2Names(current),
+      new Map([
+        ["api service", "same"],
+        ["cloud.(w -> q)[0]", "added"],
+      ]),
+    );
+    expect(marked).toContain('data-name="API">');
+    expect(marked).toContain(
+      'data-name="Worker → q: publishes" data-kim-status="added"',
+    );
+  });
+  it("lists each connection by the names its ends are drawn with", () => {
+    const links = d2Links(current, d2Names(current));
+    expect(links).toContainEqual({
+      edge: "API → Postgres 16: writes",
+      from: "API",
+      to: "Postgres 16",
+    });
+    // One end isn't drawn (no cloud.q shape), so there's nothing to follow.
+    expect(links.map((l) => l.edge)).not.toContain("Worker → q: publishes");
   });
 });

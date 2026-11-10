@@ -11,6 +11,8 @@ export const prepare: Prepare = async (source, base) => {
   const measure = await loadedMeasure();
   return {
     counts: diff.counts,
+    // Operations stand alone; there's nothing to follow between them.
+    links: [],
     comparable: baseModel !== null,
     draw(root, compare) {
       root.innerHTML = apiHtml(model, compare ? diff : plain, compare);

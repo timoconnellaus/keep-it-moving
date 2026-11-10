@@ -59,6 +59,8 @@ html[data-kim-type="api"] .kim-canvas {
   display: block;
   max-width: none;
   height: auto;
+  /* Centred when it's narrower than the frame. */
+  margin: 0 auto;
 }
 
 /* Compare legend */
@@ -324,5 +326,69 @@ html[data-kim-type="api"] .kim-canvas {
   .ep .cols > div + div {
     border-left: 0;
     border-top: 1px solid var(--line);
+  }
+}
+
+/* Zoom */
+.kim-zoom {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: rgb(255 255 255 / 0.94);
+  box-shadow: 0 4px 14px -10px rgb(14 15 17 / 0.4);
+  overflow: hidden;
+}
+.kim-zoom button {
+  min-width: 34px;
+  height: 30px;
+  padding: 0 9px;
+  border: 0;
+  background: none;
+  font: 500 12px var(--mono);
+  color: var(--muted);
+  cursor: pointer;
+}
+.kim-zoom button:hover {
+  background: var(--panel);
+  color: var(--ink);
+}
+.kim-zoom button:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+.kim-canvas > svg {
+  cursor: grab;
+}
+html[data-kim-panning],
+html[data-kim-panning] .kim-canvas > svg {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* Comparing: what didn't change steps back. */
+html[data-kim-compare="on"]:not([data-kim-focus])
+  .kim-canvas
+  [data-name]:not([data-kim-status]):not(:has([data-kim-status])):not(
+    [data-kim-status] [data-name]
+  ) {
+  opacity: 0.4;
+}
+
+/* Following a part: it, its connections and what they reach stay. */
+html[data-kim-focus]
+  .kim-canvas
+  [data-name]:not(.kim-lit):not(:has(.kim-lit)):not(.kim-lit [data-name]) {
+  opacity: 0.16;
+}
+.kim-canvas [data-name] {
+  transition: opacity 0.15s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kim-canvas [data-name] {
+    transition: none;
   }
 }

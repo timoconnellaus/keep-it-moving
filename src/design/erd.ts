@@ -255,6 +255,10 @@ const STYLE = `
 .kim-erd .tag{font:${FONT.tag};fill:#fff;text-transform:uppercase;letter-spacing:.04em}
 `;
 
+/** Marks a changed element, so the viewer can fade what didn't change. */
+const statusAttr = (status: Status) =>
+  status === "same" ? "" : ` data-kim-status="${status}"`;
+
 const statusClass = (status: Status, compare: boolean) =>
   compare && status !== "same" ? ` ${status}` : "";
 
@@ -265,7 +269,7 @@ function drawCard(card: Card, measure: Measure, compare: boolean): string {
   const parts: string[] = [];
   const clipId = `clip-${esc(t.name).replace(/[^\w-]/g, "_")}`;
   parts.push(
-    `<g class="table" data-name="${attr(tableName(t))}" transform="translate(${card.x} ${card.y})">`,
+    `<g class="table" data-name="${attr(tableName(t))}"${statusAttr(st)} transform="translate(${card.x} ${card.y})">`,
     `<title>${esc(t.name)}${t.note ? `\n${esc(t.note)}` : ""}</title>`,
     `<clipPath id="${attr(clipId)}"><rect width="${card.width}" height="${card.height}" rx="10"/></clipPath>`,
     `<rect class="card${t.kind === "enum" ? " enum" : ""}${statusClass(st, true)}" width="${card.width}" height="${card.height}" rx="10"/>`,
@@ -333,7 +337,9 @@ function drawCard(card: Card, measure: Measure, compare: boolean): string {
         ? `Changed: ${fieldChange(f.before, field)}`
         : null,
     ].filter(Boolean);
-    parts.push(`<g class="field" data-name="${attr(fieldName(t, field))}">`);
+    parts.push(
+      `<g class="field" data-name="${attr(fieldName(t, field))}"${statusAttr(fs)}>`,
+    );
     if (tip.length)
       parts.push(
         `<title>${esc(`${t.name}.${field.name}\n${tip.join("\n")}`)}</title>`,
@@ -405,7 +411,7 @@ export function erdSvg(
         ? ` (was ${r.before.from.cardinality}–${r.before.to.cardinality})`
         : "";
     lines.push(
-      `<g class="relation" data-name="${attr(relationName(rel))}">`,
+      `<g class="relation" data-name="${attr(relationName(rel))}"${statusAttr(st)}>`,
       `<title>${esc(`${relationKey(rel)}: ${rel.from.cardinality} to ${rel.to.cardinality}${changedFrom}`)}</title>`,
       `<path class="rel${statusClass(st, true)}" d="${path.d}"/>`,
       `<path d="${path.d}" fill="none" stroke="transparent" stroke-width="10"/>`,

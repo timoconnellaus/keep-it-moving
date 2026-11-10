@@ -68,7 +68,7 @@ export function apiHtml(
     const summaryChanged =
       compare && o.before && o.before.summary !== op.summary;
     return [
-      `<article class="ep${st === "same" ? "" : ` ${st}`}${op.deprecated ? " deprecated" : ""}" data-name="${attr(operationName(op))}">`,
+      `<article class="ep${st === "same" ? "" : ` ${st}`}${op.deprecated ? " deprecated" : ""}" data-name="${attr(operationName(op))}"${st === "same" ? "" : ` data-kim-status="${st}"`}>`,
       `<div class="head"><span class="m m-${esc(op.method)}">${esc(op.method)}</span>`,
       `<span class="path">${esc(op.path)}</span>`,
       st !== "same" ? `<span class="tag ${st}">${TAG[st]}</span>` : "",

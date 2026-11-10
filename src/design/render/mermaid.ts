@@ -122,6 +122,11 @@ async function check(source: string) {
   await mermaid.parse(source);
 }
 
+/** Marks a changed element, so the viewer can fade what didn't change. */
+function mark(el: Element | null | undefined, status: Status) {
+  if (el && status !== "same") el.setAttribute("data-kim-status", status);
+}
+
 function paint(el: Element | null, status: Status, fill = true) {
   if (!el || status === "same") return;
   const c = STATUS_COLORS[status];
@@ -152,6 +157,7 @@ function decorateSequence(
     for (const el of [texts[i], lines[i]]) {
       if (!el) continue;
       el.setAttribute("data-name", name);
+      mark(el, status);
       if (status !== "same" && el === lines[i]) {
         const c = STATUS_COLORS[status];
         (el as SVGElement).style.setProperty("stroke", c.stroke, "important");
@@ -170,6 +176,7 @@ function decorateSequence(
       const target =
         g.tagName.toLowerCase() === "rect" ? (g.parentElement ?? g) : g;
       target.setAttribute("data-name", name);
+      mark(target, status);
       const box =
         g.tagName.toLowerCase() === "rect"
           ? g
@@ -224,8 +231,16 @@ const prepareSequence: Prepare = async (source, base) => {
       console.warn("kim: could not compare with the base", error);
     }
   }
+  const participantNames = new Map(
+    model.participants.map((p) => [p.id, participantName(p)]),
+  );
   return {
     counts: compared?.counts ?? noChanges(),
+    links: model.messages.flatMap((m) => {
+      const from = participantNames.get(m.from);
+      const to = participantNames.get(m.to);
+      return from && to ? [{ edge: messageName(m, labels), from, to }] : [];
+    }),
     comparable: compared !== null,
     draw(root, compare) {
       if (compare && compared) {
@@ -266,6 +281,7 @@ function decorateState(
     const state = id ? states.get(id) : undefined;
     if (!state) continue;
     node.setAttribute("data-name", state.name);
+    mark(node, state.status);
     if (state.composite)
       paint(node.querySelector("rect.outer"), state.status, false);
   }
@@ -283,8 +299,10 @@ function decorateState(
     if (!entry) return;
     const name = transitionName(entry.transition, labels);
     edge.setAttribute("data-name", name);
+    mark(edge, entry.status);
     const label = labelsById.get(edge.getAttribute("data-id") ?? "");
     label?.closest("g.edgeLabel")?.setAttribute("data-name", name);
+    mark(label?.closest("g.edgeLabel"), entry.status);
     if (entry.status !== "same") {
       const c = STATUS_COLORS[entry.status];
       const e = edge as SVGElement;
@@ -347,8 +365,15 @@ const prepareState: Prepare = async (source, base) => {
       console.warn("kim: could not compare with the base", error);
     }
   }
+  const stateNames = new Map(model.states.map((s) => [s.id, stateName(s)]));
   return {
     counts: compared?.counts ?? noChanges(),
+    // Start and end aren't named parts, so only state-to-state links count.
+    links: model.transitions.flatMap((t) => {
+      const from = stateNames.get(t.from);
+      const to = stateNames.get(t.to);
+      return from && to ? [{ edge: transitionName(t, labels), from, to }] : [];
+    }),
     comparable: compared !== null,
     draw(root, compare) {
       if (compare && compared) {
