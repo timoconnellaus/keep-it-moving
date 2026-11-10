@@ -56,7 +56,7 @@ kim skill install
 kim login
 ```
 
-`skill install` asks which agents get the interviewer skill: Claude Code, Codex, Pi, Cursor, Gemini CLI, GitHub Copilot, OpenCode, Amp, Factory Droid, Windsurf, Antigravity, Goose, Kiro CLI, Roo Code, Kilo Code or Qwen Code, with the ones on this machine listed first and ticked. Agents that read `~/.agents/skills` themselves, such as Cline, Warp and Zed, get it without being picked. Then ask Claude to interview you about something, such as "interview me about this feature", and answer in the browser. Diagrams also need the [archify](https://github.com/tt-a1i/archify) skill.
+`skill install` asks which agents get the interviewer skill: Claude Code, Codex, Pi, Cursor, Gemini CLI, GitHub Copilot, OpenCode, Amp, Factory Droid, Windsurf, Antigravity, Goose, Kiro CLI, Roo Code, Kilo Code or Qwen Code, with the ones on this machine listed first and ticked. Agents that read `~/.agents/skills` themselves, such as Cline, Warp and Zed, get it without being picked. Then ask Claude to interview you about something, such as "interview me about this feature", and answer in the browser.
 
 The skill lives in `~/.agents/skills/interviewer`, a copy kim made (marked by `.installed-by-kim`), and each chosen agent's skills folder links to it. Every `kim` run refreshes that copy when the CLI's bundled skill has changed, so the agents stay current. Outside a terminal, pick agents with `--agents claude,codex,cursor` (`kim skill agents` lists the ids and folders) or `--all` for every agent found on the machine; without either it uses the last choice, or Claude Code. It never replaces a link or folder it didn't make, such as a dev checkout's links, unless `--force`. `kim skill uninstall` removes what it made.
 
@@ -84,7 +84,7 @@ Your deployment serves its own CLI at `<your origin>/cli.tgz`. The CLI talks to 
 ```sh
 npm install
 npm run link:dev        # builds the CLI and links the `interviewer` executable
-npm run setup:agents    # links the skill to this checkout and adds the /grill-me pointer
+npm run link:skill      # links the skill to this checkout
 kim login       # browser sign-in: Google, then OAuth back to the CLI
 ```
 
@@ -442,27 +442,20 @@ An interview usually exists to produce a plan, so a session can carry a workspac
 
 - `plan`: the living plan document, in Markdown. There is one per session, and `kim plan` replaces its content.
 - `document`: any other Markdown.
-- `diagram`: an [archify](https://github.com/tt-a1i/archify) diagram (architecture, workflow, sequence, data flow, or lifecycle), or raw SVG.
+- `diagram`: an SVG or HTML diagram. For software, a system design is usually better: a `.dbml`, `.d2`, `.mmd` or OpenAPI `.yaml` file that lives in the repo's `.kim/` and is compared with it. `artifact add` and `artifact update` parse a design before saving it and refuse one that won't draw, naming the line.
 - `mockup`: a self-contained HTML page.
 
 ```sh
 kim plan <session-id> --file plan.md --show
-kim artifact add <session-id> --file sync.architecture.json --quality showcase
 kim artifact add <session-id> --file layout-a.html --title "Layout A" --description "Sidebar navigation" --show
 kim artifact update <session-id> <artifact-id> --file layout-a.html
 kim artifact show <session-id> <artifact-id>
 kim artifact delete <session-id> <artifact-id>
 ```
 
-`--kind` is inferred from `.md`, `.svg` and `.html` files, and from archify specs; `--file -` reads stdin. Each content change increments the artifact's revision. Agent-facing responses (`session show`, `wait`, `attach`, `events next`) omit artifact content and source, and report its `size`, since the agent wrote them.
+`--kind` is inferred from `.md`, `.svg` and `.html` files; `--file -` reads stdin. Each content change increments the artifact's revision. Agent-facing responses (`session show`, `wait`, `attach`, `events next`) omit artifact content and source, and report its `size`, since the agent wrote them.
 
-Diagrams come from archify, a separate skill that turns a small typed JSON spec into an interactive HTML viewer. Pass the spec, any JSON file with a `diagram_type`, and the CLI does the rest:
-
-1. It finds the archify skill (`~/.agents`, `~/.claude` or `~/.codex` `skills/archify`, or `KEEP_IT_MOVING_ARCHIFY`).
-2. It runs `archify validate`. On failure it exits with archify's diagnostics and supported fixes.
-3. It renders the HTML and uploads it along with the spec.
-
-`--quality showcase` applies archify's stricter layout checks. HTML that `archify deliver` already produced can be added with `--kind diagram`, and plain SVG is shown as an image. Mermaid is no longer rendered; older Mermaid diagrams are shown as source.
+A diagram is SVG, shown as an image, or HTML, framed like a mockup (`--kind diagram`). Anything else is shown as source.
 
 The workspace column starts closed, because the plan may be followed elsewhere, such as a Markdown file or a design open beside the interviewer. The agent opens or closes it (`kim stage open|close`, or `session create --open-stage`) and the user toggles it with **Canvas** in the header. Open, it sits between the questions and the chat, in three tabs (each shown when it has something in it; the last one picked is remembered in the browser):
 
@@ -483,9 +476,7 @@ The Design canvas:
 
 Plans and documents render as GitHub-flavored Markdown. SVG diagrams display as images, so script inside them never runs.
 
-HTML artifacts (mockups and archify diagrams) load from their own URL, `/api/browser/<token>/artifacts/<id>/view`, rather than traveling in state updates; an archify diagram is about 700 KB. That response carries `Content-Security-Policy: sandbox allow-scripts; frame-ancestors 'self'` and `Referrer-Policy: no-referrer`. The document runs scripts with an opaque origin, so it can use CDN scripts and styles, but it cannot read the page, call the API, open popups, submit forms, or leak the tokenized URL to a CDN. It loads only in a frame on this site: opened as a page of its own (`Sec-Fetch-Dest: document`) it's refused, so nobody's HTML can pose as the site at a link they send. The frame itself carries no `sandbox` attribute: the header provides the same isolation, and some embedded browsers refuse to load sandbox-attributed frames over the network.
-
-On the canvas, archify diagrams use archify's compact embed mode (`?embed=1`). In a preview they show archify's full viewer, with themes, pan and zoom, path tracing, presentation and export. Both use the light theme to match the page.
+HTML artifacts (mockups and HTML diagrams) load from their own URL, `/api/browser/<token>/artifacts/<id>/view`, rather than traveling in state updates. That response carries `Content-Security-Policy: sandbox allow-scripts; frame-ancestors 'self'` and `Referrer-Policy: no-referrer`. The document runs scripts with an opaque origin, so it can use CDN scripts and styles, but it cannot read the page, call the API, open popups, submit forms, or leak the tokenized URL to a CDN. It loads only in a frame on this site: opened as a page of its own (`Sec-Fetch-Dest: document`) it's refused, so nobody's HTML can pose as the site at a link they send. The frame itself carries no `sandbox` attribute: the header provides the same isolation, and some embedded browsers refuse to load sandbox-attributed frames over the network.
 
 Questions can point at the workspace:
 

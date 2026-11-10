@@ -181,7 +181,7 @@ export function Preview({
   const pageRef = useRef<HTMLDivElement>(null);
   const catcherRef = useRef<HTMLDivElement>(null);
   const frame = useFrameValues(values);
-  const source = useFrameSource(token, artifact, false);
+  const source = useFrameSource(token, artifact);
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
   // Which load of the frame the pins were sent to: a reload is a new page.
   const [loaded, setLoaded] = useState<string | null>(null);

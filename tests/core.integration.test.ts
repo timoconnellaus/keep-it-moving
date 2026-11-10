@@ -470,7 +470,7 @@ describe("interview HTTP seam", () => {
 
     const view = await app.inject({
       method: "GET",
-      url: `/api/browser/${session.token}/artifacts/${diagram.id}/view?embed=1`,
+      url: `/api/browser/${session.token}/artifacts/${diagram.id}/view`,
     });
     expect(view.headers["content-security-policy"]).toBe(
       "sandbox allow-scripts; frame-ancestors 'self'",

@@ -161,7 +161,7 @@ const artifactFields = {
   content: z.string().max(ARTIFACT_MAX_BYTES),
   /** A summary of what the artifact shows, e.g. a mockup's layout. */
   description: z.string().trim().max(5_000).nullable(),
-  /** What a rendered artifact was built from, e.g. an archify diagram's JSON spec. */
+  /** What a rendered artifact was built from; kim no longer sets it. */
   source: z.string().max(ARTIFACT_MAX_BYTES).nullable(),
   /** Put the artifact on screen as part of this change. */
   show: z.boolean(),
@@ -298,7 +298,7 @@ export interface QuestionView {
   answer: AnswerView | null;
 }
 /**
- * A plan, document, diagram (archify HTML or SVG), or HTML mockup shown
+ * A plan, document, diagram (HTML or SVG), or HTML mockup shown
  * beside the questions. Agent-facing responses omit `content`.
  */
 export interface ArtifactView {

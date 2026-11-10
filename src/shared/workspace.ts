@@ -19,8 +19,8 @@ export function shownArtifact(session: SessionView): ArtifactView | null {
 }
 
 /**
- * How an artifact renders. Diagrams are archify HTML or SVG; anything else,
- * such as Mermaid source from before archify, is shown as text.
+ * How an artifact renders. Diagrams are HTML or SVG; anything else is shown
+ * as text.
  */
 export function artifactFormat(
   kind: ArtifactKind,
@@ -35,17 +35,9 @@ export function artifactFormat(
   return "text";
 }
 
-/** Archify renders an embed mode without its viewer chrome, and a fixed theme. */
-export function artifactViewUrl(
-  token: string,
-  artifact: ArtifactView,
-  options: { embed?: boolean } = {},
-): string {
-  const params = new URLSearchParams({
-    rev: String(artifact.revision),
-    theme: "light",
-  });
-  if (options.embed) params.set("embed", "1");
+/** An html artifact's page, at its current revision. */
+export function artifactViewUrl(token: string, artifact: ArtifactView): string {
+  const params = new URLSearchParams({ rev: String(artifact.revision) });
   if (artifact.tokensRevision)
     params.set("tokens", String(artifact.tokensRevision));
   return `/api/browser/${token}/artifacts/${artifact.id}/view?${params}`;

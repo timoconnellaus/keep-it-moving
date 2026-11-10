@@ -88,96 +88,74 @@ describe("workspace through the CLI", () => {
   });
 });
 
-describe("archify diagrams through the CLI", () => {
-  // Stands in for the archify skill: validation fails on a component named
-  // "broken"; rendering writes HTML naming the diagram type and title.
-  const FAKE_ARCHIFY = `
-import { readFileSync, writeFileSync } from "node:fs";
-const [command, type, input, output] = process.argv.slice(2);
-const spec = JSON.parse(readFileSync(input, "utf8"));
-if (command === "validate") {
-  const broken = spec.components?.some((c) => c.id === "broken");
-  console.log(JSON.stringify(broken
-    ? { ok: false, error: "layout failed", diagnostics: [{ code: "layout/constraint", supportedFixes: ["move it"] }] }
-    : { ok: true, checks: [] }));
-} else if (command === "render") {
-  writeFileSync(output, "<!doctype html><html><body>" + type + ": " + spec.meta.title + "</body></html>");
-}
-`;
-
-  async function cliWithFakeArchify() {
+describe("designs checked by the CLI", () => {
+  async function cli() {
     const { address } = await listeningHarness();
-    const dir = mkdtempSync(join(tmpdir(), "interviewer-archify-test-"));
+    const dir = mkdtempSync(join(tmpdir(), "interviewer-design-test-"));
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-    const archify = join(dir, "archify.mjs");
-    writeFileSync(archify, FAKE_ARCHIFY);
     const tsx = new URL("../node_modules/tsx/dist/cli.mjs", import.meta.url)
       .pathname;
-    const cli = new URL("../src/cli.ts", import.meta.url).pathname;
+    const cliPath = new URL("../src/cli.ts", import.meta.url).pathname;
     const run = (...args: string[]) =>
-      exec(process.execPath, [tsx, cli, ...args], {
-        env: {
-          ...process.env,
-          KEEP_IT_MOVING_URL: address,
-          KEEP_IT_MOVING_ARCHIFY: archify,
-        },
+      exec(process.execPath, [tsx, cliPath, ...args], {
+        env: { ...process.env, KEEP_IT_MOVING_URL: address },
       });
-    const session = JSON.parse((await run("session", "create")).stdout);
-    return { address, dir, run, session };
+    /** The CLI's JSON error, when it fails. */
+    const failure = (...args: string[]) =>
+      run(...args).then(
+        () => null,
+        (error: { stderr?: string }) =>
+          JSON.parse(error.stderr!.trim().split("\n").pop()!) as Record<
+            string,
+            unknown
+          >,
+      );
+    const session = JSON.parse((await run("session", "create")).stdout) as {
+      id: string;
+    };
+    const file = (name: string, text: string) => {
+      const path = join(dir, name);
+      writeFileSync(path, text);
+      return path;
+    };
+    return { run, failure, session, file };
   }
 
-  it("validates and renders a spec, storing the HTML and the spec", async () => {
-    const { address, dir, run, session } = await cliWithFakeArchify();
-    const spec = join(dir, "sync.architecture.json");
-    const text = JSON.stringify({
-      diagram_type: "architecture",
-      meta: { title: "Sync" },
-      components: [{ id: "api" }],
+  it("refuses a design that won't draw, naming the line", async () => {
+    const { run, failure, session, file } = await cli();
+    const bad = file("orders.d2", "web -> api\napi ->\n");
+    const refused = await failure("artifact", "add", session.id, "--file", bad);
+    expect(refused?.error).toContain("wasn't saved (line 2");
+    expect(refused?.design).toMatchObject({
+      type: "architecture",
+      line: 2,
+      text: "api ->",
     });
-    writeFileSync(spec, text);
-    const added = JSON.parse(
-      (await run("artifact", "add", session.id, "--file", spec)).stdout,
-    );
-    expect(added).toMatchObject({
-      kind: "diagram",
-      title: "Sync",
-      format: "html",
-    });
-    const browser = await (
-      await fetch(`${address}/api/browser/${session.token}/session`)
-    ).json();
-    expect(browser.artifacts[0].source).toBe(text);
-    const view = await fetch(
-      `${address}/api/browser/${session.token}/artifacts/${added.id}/view`,
-    );
-    expect(await view.text()).toContain("architecture: Sync");
-  });
+    const shown = JSON.parse((await run("session", "show", session.id)).stdout);
+    expect(shown.artifacts).toEqual([]);
+  }, 60_000);
 
-  it("reports archify's diagnostics when a spec fails validation", async () => {
-    const { dir, run, session } = await cliWithFakeArchify();
-    const spec = join(dir, "bad.architecture.json");
-    writeFileSync(
-      spec,
-      JSON.stringify({
-        diagram_type: "architecture",
-        meta: { title: "Bad" },
-        components: [{ id: "broken" }],
-      }),
+  it("saves a design that draws, and checks its updates", async () => {
+    const { run, failure, session, file } = await cli();
+    const good = file(
+      "flow.mmd",
+      "sequenceDiagram\n  Web->>API: order\n  API-->>Web: ok\n",
     );
-    const failure = await run(
+    const added = JSON.parse(
+      (await run("artifact", "add", session.id, "--file", good)).stdout,
+    ) as { id: string; designType: string };
+    expect(added.designType).toBe("sequence");
+    const bad = file("flow-2.mmd", "sequenceDiagram\n  Web->>: order\n");
+    const refused = await failure(
       "artifact",
-      "add",
+      "update",
       session.id,
+      added.id,
       "--file",
-      spec,
-    ).then(
-      () => null,
-      (error: { stdout?: string; stderr?: string }) =>
-        `${error.stdout ?? ""}${error.stderr ?? ""}`,
+      bad,
     );
-    expect(failure).toContain("archify validation failed");
-    expect(failure).toContain("move it");
-  });
+    expect(refused?.design).toMatchObject({ type: "sequence", line: 2 });
+  }, 60_000);
 });
 
 describe("watcher lease seam", () => {

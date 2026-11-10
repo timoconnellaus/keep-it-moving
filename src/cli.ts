@@ -7,7 +7,6 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   renameSync,
@@ -89,7 +88,9 @@ import {
   updateLocked,
   writeUpdateState,
 } from "./update.js";
+import { checkDesign, DesignCheckError } from "./designCheck.js";
 import { designTypeOf, parseDesignType } from "./designFiles.js";
+import type { DesignType } from "./shared/designs.js";
 import {
   applyWrites,
   defaultPath,
@@ -350,144 +351,17 @@ const KIND_BY_EXTENSION: Record<string, string> = {
   css: "tokens",
 };
 
-const ARCHIFY_TYPES = new Set([
-  "architecture",
-  "workflow",
-  "sequence",
-  "dataflow",
-  "lifecycle",
-]);
-
-/** An archify diagram spec, recognized by its diagram_type. */
-function archifySpec(
-  content: string,
-): { diagram_type: string; meta?: { title?: string } } | null {
-  try {
-    const spec = JSON.parse(content) as { diagram_type?: unknown };
-    return typeof spec?.diagram_type === "string" &&
-      ARCHIFY_TYPES.has(spec.diagram_type)
-      ? (spec as { diagram_type: string })
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The archify skill's CLI; KEEP_IT_MOVING_ARCHIFY overrides the usual install locations. */
-function findArchify(): string {
-  const candidates = [
-    setting("ARCHIFY"),
-    ...[".agents", ".claude", ".codex"].map((dir) =>
-      join(homedir(), dir, "skills", "archify", "bin", "archify.mjs"),
-    ),
-  ].filter((path): path is string => Boolean(path));
-  const found = candidates.find((path) => existsSync(path));
-  if (!found)
-    throw new Error(
-      "Diagram specs are rendered with the archify skill, which wasn't found. Install it, or set KEEP_IT_MOVING_ARCHIFY to its bin/archify.mjs.",
-    );
-  return found;
-}
-
-function runArchify(archify: string, args: string[]): string {
-  try {
-    return execFileSync(process.execPath, [archify, ...args], {
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch (error) {
-    const failed = error as { stdout?: string; stderr?: string };
-    if (failed.stdout?.trim()) return failed.stdout;
-    throw new Error(
-      `archify ${args[0]} failed: ${failed.stderr ?? String(error)}`,
-    );
-  }
-}
-
-/**
- * Validates and renders an archify spec to its standalone HTML viewer. A
- * failed validation reports archify's diagnostics, with supported fixes.
- */
-function renderArchify(
-  content: string,
-  file: string | undefined,
-  quality: string | undefined,
-): string {
-  const spec = archifySpec(content)!;
-  const archify = findArchify();
-  const dir = mkdtempSync(join(tmpdir(), "kim-archify-"));
-  try {
-    // Validate the original file when there is one, so relative references resolve.
-    const input =
-      file && file !== "-"
-        ? file
-        : join(dir, `diagram.${spec.diagram_type}.json`);
-    if (input !== file) writeFileSync(input, content);
-    const qualityArgs = quality ? ["--quality", quality] : [];
-    const report = JSON.parse(
-      runArchify(archify, [
-        "validate",
-        spec.diagram_type,
-        input,
-        "--json",
-        ...qualityArgs,
-      ]),
-    ) as { ok: boolean; error?: string; diagnostics?: unknown };
-    if (!report.ok)
-      throw new Error(
-        `archify validation failed; fix the spec and retry:\n${JSON.stringify(
-          { error: report.error, diagnostics: report.diagnostics },
-          null,
-          2,
-        )}`,
-      );
-    const output = join(dir, "diagram.html");
-    runArchify(archify, [
-      "render",
-      spec.diagram_type,
-      input,
-      output,
-      ...qualityArgs,
-    ]);
-    return readFileSync(output, "utf8");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/** Artifact fields from a file or --content; archify specs arrive rendered, with their source. */
-async function artifactInput(args: string[]): Promise<{
-  content?: string;
-  source?: string;
-  kind?: string;
-  title?: string | undefined;
-}> {
+/** Artifact fields from a file or --content. */
+async function artifactInput(args: string[]): Promise<{ content?: string }> {
   const content = await artifactContent(args);
-  if (content === undefined) return {};
-  const spec = archifySpec(content);
-  if (!spec) return { content };
-  return {
-    content: renderArchify(
-      content,
-      flag(args, "--file"),
-      flag(args, "--quality"),
-    ),
-    source: content,
-    kind: "diagram",
-    title: spec.meta?.title,
-  };
+  return content === undefined ? {} : { content };
 }
 
-function artifactFields(
-  args: string[],
-  input: { content?: string; source?: string },
-) {
+function artifactFields(args: string[], input: { content?: string }) {
   const fields: Record<string, unknown> = {};
   const title = flag(args, "--title");
   if (title) fields.title = title;
   if (input.content !== undefined) fields.content = input.content;
-  if (input.source !== undefined) fields.source = input.source;
   const description = flag(args, "--description");
   if (description !== undefined) fields.description = description;
   if (args.includes("--show")) fields.show = true;
@@ -787,25 +661,23 @@ async function artifactCommand(action: string | undefined, args: string[]) {
     const typeFlag = flag(args, "--type");
     const designType = typeFlag
       ? parseDesignType(typeFlag)
-      : input.kind
-        ? null
-        : designTypeOf(file, input.content);
+      : designTypeOf(file, input.content);
     const kind = designType
       ? "design"
       : (flag(args, "--kind") ??
-        input.kind ??
         KIND_BY_EXTENSION[file?.split(".").pop()?.toLowerCase() ?? ""]);
     if (!kind)
       throw new Error(
-        "--kind is required (document, diagram, mockup); archify specs and designs (.dbml, .d2, .mmd, OpenAPI .yaml) are detected",
+        "--kind is required (document, diagram, mockup); designs (.dbml, .d2, .mmd, OpenAPI .yaml) are detected",
       );
     if (kind === "design" && !designType)
       throw new Error(
         "A design needs --type (data-model, architecture, data-flow, sequence, state, api)",
       );
+    if (designType) await checkDesign(designType, input.content, file);
     const fields = artifactFields(args, input);
     if (designType) fields.designType = designType;
-    fields.title ??= input.title ?? file?.split("/").pop() ?? "Untitled";
+    fields.title ??= file?.split("/").pop() ?? "Untitled";
     return output(
       await api(`/api/sessions/${sessionId}/artifacts`, {
         method: "POST",
@@ -814,13 +686,25 @@ async function artifactCommand(action: string | undefined, args: string[]) {
     );
   }
   const artifactId = positional(args, 1);
-  if (action === "update")
+  if (action === "update") {
+    const input = await artifactInput(args);
+    if (input.content !== undefined) {
+      const view = (await api(`/api/sessions/${sessionId}`)) as {
+        artifacts?: Array<{ id: string; designType?: DesignType | null }>;
+      };
+      const designType = view.artifacts?.find(
+        (artifact) => artifact.id === artifactId,
+      )?.designType;
+      if (designType)
+        await checkDesign(designType, input.content, flag(args, "--file"));
+    }
     return output(
       await api(`/api/sessions/${sessionId}/artifacts/${artifactId}`, {
         method: "PATCH",
-        body: JSON.stringify(artifactFields(args, await artifactInput(args))),
+        body: JSON.stringify(artifactFields(args, input)),
       }),
     );
+  }
   if (action === "show")
     return output(
       await api(`/api/sessions/${sessionId}/stage`, {
@@ -2658,8 +2542,8 @@ Commands:
   events next <session> [--timeout MS]
   plan <session> --file <path|-> | --content <md> [--show]   create or replace the plan document
   artifact add <session> --file <path|-> [--kind document|diagram|mockup] [--title T] [--description D] [--show]
-    diagrams: an archify spec (.json with diagram_type) is validated and rendered; also archify HTML or SVG
-  artifact update <session> <artifact> [--file|--content] [--title] [--description] [--show] [--quality showcase]
+    diagrams: SVG, or HTML; for software, prefer a design
+  artifact update <session> <artifact> [--file|--content] [--title] [--description] [--show]
     designs: .dbml (data-model), .d2 (architecture; name.data-flow.d2), .mmd (sequence, state), OpenAPI .yaml (api);
     [--type T] [--keep|--no-keep] [--repo-path .kim/… --base <file> [--base-commit SHA]] compares it with a repo copy
   artifact show <session> <artifact|none>   choose what the workspace shows
@@ -2723,7 +2607,9 @@ main(process.argv.slice(2)).catch((error: unknown) => {
   process.stderr.write(
     `${JSON.stringify({
       error: error instanceof Error ? error.message : String(error),
-      ...(error instanceof ApiError ? error.details : {}),
+      ...(error instanceof ApiError || error instanceof DesignCheckError
+        ? error.details
+        : {}),
     })}\n`,
   );
   process.exitCode = 1;

@@ -254,11 +254,7 @@ function FrameNode({
       ? live.valuesFor(artifact.id)
       : undefined;
   const frame = useFrameValues(values);
-  const source = useFrameSource(
-    live.token,
-    artifact,
-    artifact.kind === "diagram",
-  );
+  const source = useFrameSource(live.token, artifact);
   const pageRef = useRef<HTMLDivElement>(null);
 
   const highlight: FrameHighlight = copy

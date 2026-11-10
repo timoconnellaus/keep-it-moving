@@ -35,8 +35,7 @@
     "link:dev": "npm run build:cli && npm link",
     "unlink:dev": "npm unlink -g @tim/keep-it-moving @tim/interviewer || true",
     "link:skill": "node scripts/link-skill.mjs",
-    "unlink:skill": "node scripts/link-skill.mjs --unlink",
-    "setup:agents": "npm run link:skill && node scripts/add-global-context.mjs"
+    "unlink:skill": "node scripts/link-skill.mjs --unlink"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.2.1",
@@ -44,6 +43,7 @@
     "@dbml/parse": "^11.0.1",
     "@terrastruct/d2": "^0.1.33",
     "@xyflow/react": "^12.12.0",
+    "dompurify": "^3.4.17",
     "env-paths": "^3.0.0",
     "hono": "^4.13.12",
     "jose": "^6.2.12",

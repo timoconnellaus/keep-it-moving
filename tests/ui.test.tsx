@@ -883,7 +883,7 @@ describe("questionnaire UI seam", () => {
       );
       const iframe = frame("Layout A")!.querySelector("iframe")!;
       expect(iframe.getAttribute("src")).toMatch(
-        /\/artifacts\/a\/view\?rev=1&theme=light$/,
+        /\/artifacts\/a\/view\?rev=1$/,
       );
       // The server's CSP sandbox isolates it; embedded browsers can refuse
       // to load frames that also carry the sandbox attribute.

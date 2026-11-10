@@ -30,7 +30,6 @@ encryption.onLock(() => opened.clear());
 export function useFrameSource(
   token: string,
   artifact: ArtifactView,
-  embed: boolean,
 ): { src?: string; srcDoc?: string; sandbox?: string } {
   const kid = useContext(KidContext);
   const keys = useEncryption();
@@ -77,16 +76,12 @@ export function useFrameSource(
   const srcDoc = useMemo(
     () =>
       content?.key === key
-        ? renderArtifact(
-            content.html,
-            {},
-            { query: `?theme=light${embed ? "&embed=1" : ""}` },
-          )
+        ? renderArtifact(content.html, {}, { inline: true })
         : undefined,
-    [content, key, embed],
+    [content, key],
   );
   if (!html) return {};
-  if (!kid) return { src: artifactViewUrl(token, artifact, { embed }) };
+  if (!kid) return { src: artifactViewUrl(token, artifact) };
   return srcDoc ? { srcDoc, sandbox: "allow-scripts" } : {};
 }
 
@@ -246,7 +241,7 @@ export function ArtifactDocument({ artifact }: { artifact: ArtifactView }) {
   if (artifact.format === "text" || artifact.format === "svg")
     return (
       <div className="stage-error">
-        <p>This diagram isn’t archify or SVG, so it’s shown as source.</p>
+        <p>This diagram isn’t HTML or SVG, so it’s shown as source.</p>
         <pre>{artifact.content}</pre>
       </div>
     );
@@ -298,7 +293,7 @@ export function ArtifactThumb({
 }) {
   const frame = useFrameValues(values);
   const thumb = useThumbScale();
-  const source = useFrameSource(token, artifact, artifact.kind === "diagram");
+  const source = useFrameSource(token, artifact);
   if (artifact.format === "html")
     return (
       <div className="thumb" ref={thumb} aria-hidden="true">

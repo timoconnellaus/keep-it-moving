@@ -1414,7 +1414,7 @@ function respondentToken(method: string, path: string): string | null {
 
 /**
  * The page loads html artifacts by URL, so state updates don't carry them;
- * an archify diagram alone is around 700 KB.
+ * a mockup can be large.
  */
 export function forBrowser(session: SessionView): SessionView {
   return {
