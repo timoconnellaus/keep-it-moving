@@ -117,7 +117,20 @@ When you plan a feature technically, work through its data model, architecture a
 | `sequence`, `state`         | Mermaid (`sequenceDiagram`, `stateDiagram-v2`) | `.mmd`                                    |
 | `api`                       | OpenAPI 3 YAML                                 | `.yaml`                                   |
 
-`kim artifact add <session> --file checkout.dbml --title "Checkout schema" --description "…"` detects the type (`--type` sets it). `artifact add` and `artifact update` parse the design first, with the engine that draws it: one that won't draw isn't saved, and the error names the line (`design.line`, `design.text`), so fix that line and rerun the command. Put notes and reasons in the file itself (DBML `Note`, D2 labels and `#` comments, Mermaid `%%` comments and `Note`, OpenAPI `description`), so they travel with the design. Update the same artifact as the design changes, rather than adding another.
+`kim artifact add <session> --file checkout.dbml --title "Checkout schema" --description "…"` detects the type (`--type` sets it). Put notes and reasons in the file itself (DBML `Note`, D2 labels and `#` comments, Mermaid `%%` comments and `Note`, OpenAPI `description`), so they travel with the design. Update the same artifact as the design changes, rather than adding another.
+
+Writing a design that reads well:
+
+- **Decide what each connection is before writing it:** the main path, a branch or store off it, a return, or a second way in. Declare the main path's shapes in reading order and each branch next to its owner; the layout places shapes in a row by when they're declared.
+- **Labels carry meaning.** Never drop one to make room. Keep them short (about 17 characters) and move detail into a comment.
+- **Group with containers** (D2 `name: { … }`) so the overview has few boxes side by side, and split a busy area into a design of its own rather than squeezing it in.
+
+`artifact add` and `artifact update` check a design with the engine that draws it, and answer in two ways:
+
+- **Errors** (`diagnostics`, with `code`, `line`, `text` and `fixes`): it won't draw, so it wasn't saved. Fix each line named and rerun the same command.
+- **Warnings** (`layout.warnings`, with `code`, `subject`, `evidence` and `fixes`): it was saved but is hard to read once fitted to its 1280 × 800 frame, such as text shrunk below 7.5px, connections that cross or run through a shape, or a label sitting on one. `subject` names the parts involved. Apply one of the `fixes` in a single edit to the parts involved, update the artifact, and compare the new `evidence` with the old. After two tries at the same warning, stop: keep the better version and tell the user what's left. D2 and DBML are measured; Mermaid gets a syntax check only.
+
+To see a design, mockup or diagram as the user does, `kim artifact screenshot <session> <artifact>` draws it in a Chrome, Edge or Chromium on this machine (fitted to its frame, as the System tab shows it) and prints the PNG's path.
 
 The repo's `.kim/` folder holds what earlier interviews kept: `designs/`, `mockups/`, an optional `design-system/`, and `plans/` (each finished interview's plan). It is context you may use, not required reading:
 

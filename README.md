@@ -442,7 +442,7 @@ An interview usually exists to produce a plan, so a session can carry a workspac
 
 - `plan`: the living plan document, in Markdown. There is one per session, and `kim plan` replaces its content.
 - `document`: any other Markdown.
-- `diagram`: an SVG or HTML diagram. For software, a system design is usually better: a `.dbml`, `.d2`, `.mmd` or OpenAPI `.yaml` file that lives in the repo's `.kim/` and is compared with it. `artifact add` and `artifact update` parse a design before saving it and refuse one that won't draw, naming the line.
+- `diagram`: an SVG or HTML diagram. For software, a system design is usually better: a `.dbml`, `.d2`, `.mmd` or OpenAPI `.yaml` file that lives in the repo's `.kim/` and is compared with it. `artifact add` and `artifact update` parse a design before saving it and refuse one that won't draw, listing each problem (`diagnostics`: `code`, `line`, `text`, `fixes`). A D2 or DBML design that draws is also measured as the System tab shows it, fitted to a 1280 × 800 frame: text that shrinks below 7.5px, connections that cross or run through a shape, and labels sitting on one come back as `layout.warnings`, with the parts involved and changes to make. It's saved either way.
 - `mockup`: a self-contained HTML page.
 
 ```sh
@@ -450,6 +450,7 @@ kim plan <session-id> --file plan.md --show
 kim artifact add <session-id> --file layout-a.html --title "Layout A" --description "Sidebar navigation" --show
 kim artifact update <session-id> <artifact-id> --file layout-a.html
 kim artifact show <session-id> <artifact-id>
+kim artifact screenshot <session-id> <artifact-id>   # a PNG, drawn in a local Chrome, Edge or Chromium
 kim artifact delete <session-id> <artifact-id>
 ```
 
@@ -457,10 +458,11 @@ kim artifact delete <session-id> <artifact-id>
 
 A diagram is SVG, shown as an image, or HTML, framed like a mockup (`--kind diagram`). Anything else is shown as source.
 
-The workspace column starts closed, because the plan may be followed elsewhere, such as a Markdown file or a design open beside the interviewer. The agent opens or closes it (`kim stage open|close`, or `session create --open-stage`) and the user toggles it with **Canvas** in the header. Open, it sits between the questions and the chat, in three tabs (each shown when it has something in it; the last one picked is remembered in the browser):
+The workspace column starts closed, because the plan may be followed elsewhere, such as a Markdown file or a design open beside the interviewer. The agent opens or closes it (`kim stage open|close`, or `session create --open-stage`) and the user toggles it with **Canvas** in the header. Open, it sits between the questions and the chat, in four tabs (each shown when it has something in it; the last one picked is remembered in the browser):
 
 - **Document**: the plan and other Markdown documents, one at a time at page width, with a picker, comments and full screen.
 - **HTML**: html artifacts other than diagrams (mockups, html documents), one at a time and fully interactive, at Desktop 1280, Tablet 834 or Mobile 390 (a phone or tablet mockup opens on its device), with Rotate for tablet and phone, Reload, Open in a new tab, comments and full screen. Bound questions preview and apply their values here as on the canvas.
+- **System**: the system designs, listed by type. A design fits its frame when it opens; ctrl or ⌘ and scroll, a pinch, or the zoom buttons zoom it, and dragging pans. Clicking a part lights it and what it connects to and fades the rest; clicking a connection lights its two ends. Compared with the repo, what didn't change fades, so additions, changes and removals stand out.
 - **Design**: the designs (html pages and diagrams, never documents) as a canvas ([React Flow](https://reactflow.dev)), described below. Compare side by side always opens here.
 
 Showing an artifact on purpose (`--show`, `artifact show`, an option's or a question's link to it) goes to the tab that holds it, unless the user is on Design and it's a design, which the canvas fits there. Focusing a question shows its first artifact in the Document or HTML tab without changing tabs. Comments from any tab reach the agent the same way.
