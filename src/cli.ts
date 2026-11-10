@@ -88,7 +88,7 @@ import {
   updateLocked,
   writeUpdateState,
 } from "./update.js";
-import { checkDesign, DesignCheckError } from "./designCheck.js";
+import { checkDesign, DesignCheckError, type Finding } from "./designCheck.js";
 import { designTypeOf, parseDesignType } from "./designFiles.js";
 import type { DesignType } from "./shared/designs.js";
 import {
@@ -350,6 +350,22 @@ const KIND_BY_EXTENSION: Record<string, string> = {
   htm: "mockup",
   css: "tokens",
 };
+
+/**
+ * A saved design's response, with how it lays out: what to change, though
+ * it was saved either way.
+ */
+function withWarnings(response: unknown, warnings: Finding[]): unknown {
+  if (warnings.length === 0 || typeof response !== "object" || !response)
+    return response;
+  return {
+    ...response,
+    layout: {
+      warnings,
+      note: "Saved. These make it harder to read; fix what's cheap and update it, or tell the user why not.",
+    },
+  };
+}
 
 /** Artifact fields from a file or --content. */
 async function artifactInput(args: string[]): Promise<{ content?: string }> {
@@ -674,20 +690,26 @@ async function artifactCommand(action: string | undefined, args: string[]) {
       throw new Error(
         "A design needs --type (data-model, architecture, data-flow, sequence, state, api)",
       );
-    if (designType) await checkDesign(designType, input.content, file);
+    const warnings = designType
+      ? await checkDesign(designType, input.content, file)
+      : [];
     const fields = artifactFields(args, input);
     if (designType) fields.designType = designType;
     fields.title ??= file?.split("/").pop() ?? "Untitled";
     return output(
-      await api(`/api/sessions/${sessionId}/artifacts`, {
-        method: "POST",
-        body: JSON.stringify({ kind, ...fields }),
-      }),
+      withWarnings(
+        await api(`/api/sessions/${sessionId}/artifacts`, {
+          method: "POST",
+          body: JSON.stringify({ kind, ...fields }),
+        }),
+        warnings,
+      ),
     );
   }
   const artifactId = positional(args, 1);
   if (action === "update") {
     const input = await artifactInput(args);
+    let warnings: Finding[] = [];
     if (input.content !== undefined) {
       const view = (await api(`/api/sessions/${sessionId}`)) as {
         artifacts?: Array<{ id: string; designType?: DesignType | null }>;
@@ -696,13 +718,20 @@ async function artifactCommand(action: string | undefined, args: string[]) {
         (artifact) => artifact.id === artifactId,
       )?.designType;
       if (designType)
-        await checkDesign(designType, input.content, flag(args, "--file"));
+        warnings = await checkDesign(
+          designType,
+          input.content,
+          flag(args, "--file"),
+        );
     }
     return output(
-      await api(`/api/sessions/${sessionId}/artifacts/${artifactId}`, {
-        method: "PATCH",
-        body: JSON.stringify(artifactFields(args, input)),
-      }),
+      withWarnings(
+        await api(`/api/sessions/${sessionId}/artifacts/${artifactId}`, {
+          method: "PATCH",
+          body: JSON.stringify(artifactFields(args, input)),
+        }),
+        warnings,
+      ),
     );
   }
   if (action === "show")

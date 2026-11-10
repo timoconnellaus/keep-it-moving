@@ -11,6 +11,8 @@ export class DesignParseError extends Error {
     message: string,
     readonly line: number | null = null,
     readonly column: number | null = null,
+    /** Every problem, each at its own place, when the parser found several. */
+    readonly problems: DesignError[] = [],
   ) {
     super(message);
     this.name = "DesignParseError";
@@ -24,7 +26,7 @@ const num = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
 
 /** D2's `index:3:5: message` (the wasm build reports this, sometimes as JSON). */
-function fromD2Message(message: string): DesignError | null {
+function d2Problems(message: string): DesignError[] {
   let entries: string[] = [];
   try {
     const parsed: unknown = JSON.parse(message);
@@ -37,16 +39,34 @@ function fromD2Message(message: string): DesignError | null {
   } catch {
     entries = message.split("\n").filter(Boolean);
   }
-  const located = entries
+  return entries
     .map((e) => /^[^:\n]*:(\d+):(\d+):\s*([\s\S]*)$/.exec(e))
-    .filter((m): m is RegExpExecArray => m !== null);
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => ({ message: m[3]!, line: Number(m[1]), column: Number(m[2]) }));
+}
+
+function fromD2Message(message: string): DesignError | null {
+  const located = d2Problems(message);
   if (located.length === 0) return null;
-  const first = located[0]!;
   return {
-    message: located.map((m) => m[3]!).join("\n"),
-    line: Number(first[1]),
-    column: Number(first[2]),
+    message: located.map((p) => p.message).join("\n"),
+    line: located[0]!.line,
+    column: located[0]!.column,
   };
+}
+
+/**
+ * Every problem a parser reported, each at its own place; one, when it
+ * reported a single error or didn't say where the others were.
+ */
+export function describeErrors(error: unknown): DesignError[] {
+  if (error instanceof DesignParseError && error.problems.length > 0)
+    return error.problems;
+  if (error instanceof Error) {
+    const d2 = d2Problems(error.message);
+    if (d2.length > 0) return d2;
+  }
+  return [describeError(error)];
 }
 
 /**

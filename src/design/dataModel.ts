@@ -102,11 +102,16 @@ export function parseDataModel(source: string): DataModel {
   const compiler = new Compiler(layout);
   const errors = compiler.parse.errors(DEFAULT_ENTRY);
   if (errors.length > 0) {
-    const first = errors[0]!;
+    const problems = errors.map((e) => ({
+      message: e.diagnostic,
+      line: e.nodeOrToken.startPos.line + 1,
+      column: e.nodeOrToken.startPos.column + 1,
+    }));
     throw new DesignParseError(
-      errors.map((e) => e.diagnostic).join("\n"),
-      first.nodeOrToken.startPos.line + 1,
-      first.nodeOrToken.startPos.column + 1,
+      problems.map((p) => p.message).join("\n"),
+      problems[0]!.line,
+      problems[0]!.column,
+      problems,
     );
   }
   const database = compiler.parse.rawDb(

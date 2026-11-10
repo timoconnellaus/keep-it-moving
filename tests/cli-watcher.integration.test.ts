@@ -126,11 +126,9 @@ describe("designs checked by the CLI", () => {
     const bad = file("orders.d2", "web -> api\napi ->\n");
     const refused = await failure("artifact", "add", session.id, "--file", bad);
     expect(refused?.error).toContain("wasn't saved (line 2");
-    expect(refused?.design).toMatchObject({
-      type: "architecture",
-      line: 2,
-      text: "api ->",
-    });
+    expect(refused?.diagnostics).toMatchObject([
+      { code: "design/syntax", severity: "error", line: 2, text: "api ->" },
+    ]);
     const shown = JSON.parse((await run("session", "show", session.id)).stdout);
     expect(shown.artifacts).toEqual([]);
   }, 60_000);
@@ -154,7 +152,24 @@ describe("designs checked by the CLI", () => {
       "--file",
       bad,
     );
-    expect(refused?.design).toMatchObject({ type: "sequence", line: 2 });
+    expect(refused?.diagnostics).toMatchObject([
+      { code: "design/syntax", line: 2 },
+    ]);
+  }, 60_000);
+
+  it("saves a design that's hard to read, with what to change", async () => {
+    const { run, session, file } = await cli();
+    const wide = file(
+      "fanout.d2",
+      Array.from({ length: 40 }, (_, i) => `hub -> s${i}: calls`).join("\n"),
+    );
+    const added = JSON.parse(
+      (await run("artifact", "add", session.id, "--file", wide)).stdout,
+    ) as { id: string; layout?: { warnings: Array<{ code: string }> } };
+    expect(added.id).toBeTruthy();
+    expect(added.layout?.warnings.map((w) => w.code)).toContain(
+      "layout/text-too-small",
+    );
   }, 60_000);
 });
 

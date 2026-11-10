@@ -354,7 +354,10 @@ describe("the CLI package", () => {
       "package/dist/design/align.js",
       "package/dist/design/api.js",
       "package/dist/design/dataModel.js",
+      "package/dist/design/erd.js",
       "package/dist/design/errors.js",
+      "package/dist/design/layoutCheck.js",
+      "package/dist/design/svg.js",
       "package/dist/design/types.js",
       "package/dist/designCheck.js",
       "package/dist/designFiles.js",
@@ -391,6 +394,7 @@ describe("the CLI package", () => {
     expect(manifest.type).toBe("module");
     // The design parsers check a design before it's saved.
     expect(Object.keys(manifest.dependencies)).toEqual([
+      "@dagrejs/dagre",
       "@dbml/parse",
       "@terrastruct/d2",
       "dompurify",
