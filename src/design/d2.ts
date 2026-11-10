@@ -9,7 +9,7 @@ import {
 /**
  * D2 designs (architecture, data flow): compare the compiled graphs, then
  * annotate a copy of the source so the render shows the changes. Pure; the
- * wasm compile and render live in d2Render.ts.
+ * wasm compile and render live in render/d2.ts.
  */
 
 export interface D2Shape {
