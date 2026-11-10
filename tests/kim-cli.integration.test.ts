@@ -884,6 +884,34 @@ describe("design", { timeout: 30_000 }, () => {
     expect(svg).toContain("users");
   }, 60_000);
 
+  it("screenshots a design the way its frame draws it", async (context) => {
+    let browser: string;
+    try {
+      browser = findBrowser();
+    } catch {
+      return context.skip("no Chrome, Edge or Chromium on this machine");
+    }
+    if (!existsSync(join(repo, "web-dist/design-viewer/viewer.js")))
+      return context.skip("the design viewer isn't built (npm run build:web)");
+    const { dir, run } = await repoWithDesigns(browser);
+    const session = await run("session", "create", "--title", "Plans table");
+    const [design] = (
+      await run("design", "pull", session.id, ".kim/designs/data-model.dbml")
+    ).artifacts;
+    const file = join(dir, "design.png");
+    const shot = await run(
+      "artifact",
+      "screenshot",
+      session.id,
+      design.id,
+      "--out",
+      file,
+    );
+    expect(shot).toEqual({ file, width: 1280, height: 800, revision: 1 });
+    const png = readFileSync(file);
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1280, 800]);
+  }, 60_000);
+
   it("leaves the interview running when the repo file changed since the copy", async () => {
     const { dir, run, attempt } = await repoWithDesigns();
     const session = await run("session", "create", "--title", "Plans table");

@@ -59,6 +59,10 @@ const PAGE_URL = "http://artifact.localhost/";
 
 /** Waits for the page's fonts, then measures how tall it is. */
 const SETTLE_AND_MEASURE = `(async () => {
+  // A design draws itself once its viewer loads; wait for it to finish.
+  const until = Date.now() + 25000;
+  while (document.getElementById("kim-design-root") && !document.documentElement.dataset.kimRendered && Date.now() < until)
+    await new Promise((resolve) => setTimeout(resolve, 100));
   if (document.fonts) await document.fonts.ready;
   await new Promise((resolve) => setTimeout(resolve, 300));
   return Math.ceil(Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0));
@@ -432,6 +436,24 @@ const EXPORT_SVG = `(async () => {
 })()`;
 
 /**
+ * The design viewer's scripts and styles, fetched from `site` for a page
+ * kim serves to a local browser, so a design draws as its frame would.
+ */
+export function viewerFiles(
+  site: string,
+): (path: string) => Promise<ServedFile | null> {
+  return async (path) => {
+    if (!path.startsWith("/design-viewer/")) return null;
+    const response = await fetch(`${site}${path}`);
+    if (!response.ok) return null;
+    return {
+      type: response.headers.get("content-type") ?? "text/javascript",
+      body: Buffer.from(await response.arrayBuffer()),
+    };
+  };
+}
+
+/**
  * A system design's preview, for the repo: its page, as its frame serves
  * it, drawn by the design viewer in a local headless browser, which
  * exports it as SVG. kim fetches the viewer's scripts from `site` and
@@ -442,15 +464,7 @@ export function renderDesignSvg(
   site: string,
   browser = findBrowser(),
 ): Promise<string> {
-  const files = async (path: string): Promise<ServedFile | null> => {
-    if (!path.startsWith("/design-viewer/")) return null;
-    const response = await fetch(`${site}${path}`);
-    if (!response.ok) return null;
-    return {
-      type: response.headers.get("content-type") ?? "text/javascript",
-      body: Buffer.from(await response.arrayBuffer()),
-    };
-  };
+  const files = viewerFiles(site);
   return inBrowser(
     {
       format: "html",

@@ -26,6 +26,7 @@ import {
   NoBrowser,
   renderDesignSvg,
   renderScreenshot,
+  viewerFiles,
 } from "./render.js";
 import { encodeContentKey, Encryption } from "./sealedApi.js";
 import {
@@ -91,6 +92,9 @@ import {
 import { checkDesign, DesignCheckError, type Finding } from "./designCheck.js";
 import { designTypeOf, parseDesignType } from "./designFiles.js";
 import type { DesignType } from "./shared/designs.js";
+import type { ArtifactView } from "./shared/schema.js";
+import { frameSize } from "./shared/workspace.js";
+import { DESIGN_VIEWER_PATH } from "./server/designPage.js";
 import {
   applyWrites,
   defaultPath,
@@ -749,6 +753,33 @@ async function artifactCommand(action: string | undefined, args: string[]) {
         method: "DELETE",
       }),
     );
+  if (action === "screenshot") {
+    if (!artifactId) throw new Error("An artifact id is required");
+    const session = (await api(`/api/sessions/${sessionId}`)) as {
+      artifacts: ArtifactView[];
+    };
+    const artifact = session.artifacts.find((item) => item.id === artifactId);
+    if (!artifact) throw new Error("Artifact not found");
+    const page =
+      artifact.format === "html" || artifact.format === "svg"
+        ? ((await api(
+            `/api/sessions/${sessionId}/artifacts/${artifactId}/page`,
+          )) as { content: string })
+        : { content: "" };
+    const frame = frameSize(artifact);
+    return screenshotArtifact(
+      {
+        id: artifact.id,
+        title: artifact.title,
+        format: artifact.format,
+        revision: artifact.revision,
+        frame: { width: frame.w, height: frame.h },
+        content: page.content,
+      },
+      args,
+      "you wrote it, so read your file",
+    );
+  }
   throw new Error(`Unknown artifact action: ${action ?? ""}`);
 }
 
@@ -976,29 +1007,36 @@ async function draftCommand(args: string[]) {
  * page. With no browser here, it saves the page for the agent's own
  * browser tool, or for reading.
  */
-async function inboxScreenshot(interview: string, args: string[]) {
-  const id = positional(args, 1);
-  const artifact = (await encryption.inboxArtifact(
-    await api(
-      `/api/sessions/inbox/${interview}/artifacts/${encodeURIComponent(id)}`,
-    ),
-  )) as {
-    title: string;
-    format: string;
-    revision: number;
-    frame: { width: number; height: number | null };
-    content: string;
-  };
+/** What a screenshot needs of an artifact, from either side of an interview. */
+interface Shootable {
+  id: string;
+  title: string;
+  format: string;
+  revision: number;
+  frame: { width: number; height: number | null };
+  content: string;
+}
+
+/**
+ * Draws an html or svg artifact in a local browser at its frame's width
+ * (a design with its viewer, as its frame shows it) and saves the PNG.
+ */
+async function screenshotArtifact(
+  artifact: Shootable,
+  args: string[],
+  readHint: string,
+) {
   if (artifact.format !== "html" && artifact.format !== "svg")
     throw new Error(
-      `"${artifact.title}" is ${artifact.format}, not a page; read it with kim inbox artifact`,
+      `"${artifact.title}" is ${artifact.format}, not a page; ${readHint}`,
     );
   const width = Number(flag(args, "--width") ?? artifact.frame.width);
   if (!Number.isInteger(width) || width < 100 || width > 4_000)
     throw new Error("--width is a number of pixels, such as 1280, 834 or 390");
   const fullPage = args.includes("--full-page");
-  const name = `${id.replace(/[^A-Za-z0-9_-]+/g, "-")}-r${artifact.revision}-${width}${fullPage ? "-full" : ""}`;
+  const name = `${artifact.id.replace(/[^A-Za-z0-9_-]+/g, "-")}-r${artifact.revision}-${width}${fullPage ? "-full" : ""}`;
   const folder = join(tmpdir(), "kim-screenshots");
+  const design = artifact.content.includes(DESIGN_VIEWER_PATH);
   let shot: { png: Buffer; height: number };
   try {
     shot = await renderScreenshot({
@@ -1007,9 +1045,14 @@ async function inboxScreenshot(interview: string, args: string[]) {
       width,
       height: artifact.frame.height ?? 800,
       fullPage,
+      ...(design ? { files: viewerFiles(defaultBase) } : {}),
     });
   } catch (error) {
     if (!(error instanceof NoBrowser)) throw error;
+    if (design)
+      throw new Error(
+        `${error.message}. A design needs one to draw; read its source instead.`,
+      );
     const page = join(folder, `${name}.${artifact.format}`);
     mkdirSync(folder, { recursive: true });
     writeFileSync(page, artifact.content);
@@ -1026,6 +1069,20 @@ async function inboxScreenshot(interview: string, args: string[]) {
     height: shot.height,
     revision: artifact.revision,
   });
+}
+
+async function inboxScreenshot(interview: string, args: string[]) {
+  const id = positional(args, 1);
+  const artifact = (await encryption.inboxArtifact(
+    await api(
+      `/api/sessions/inbox/${interview}/artifacts/${encodeURIComponent(id)}`,
+    ),
+  )) as Omit<Shootable, "id">;
+  return screenshotArtifact(
+    { ...artifact, id },
+    args,
+    "read it with kim inbox artifact",
+  );
 }
 
 /**
@@ -2576,6 +2633,8 @@ Commands:
     designs: .dbml (data-model), .d2 (architecture; name.data-flow.d2), .mmd (sequence, state), OpenAPI .yaml (api);
     [--type T] [--keep|--no-keep] [--repo-path .kim/… --base <file> [--base-commit SHA]] compares it with a repo copy
   artifact show <session> <artifact|none>   choose what the workspace shows
+  artifact screenshot <session> <artifact> [--width N] [--full-page] [--out <file.png>]
+    draws a mockup, diagram or design in a local Chrome, Edge or Chromium as the user sees it
   artifact delete <session> <artifact>
   stage open|close <session>   show or hide the workspace column
 
