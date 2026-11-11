@@ -1490,6 +1490,14 @@ html.previewing-full body {
 .device.paper {
   border-radius: 4px;
 }
+/* A system design fills the pane; its viewer does the fitting. */
+.preview-body.fill {
+  place-items: stretch;
+}
+.device.fill {
+  border-radius: 0;
+  box-shadow: none;
+}
 .browser-bar {
   flex: none;
   display: flex;

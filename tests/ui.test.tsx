@@ -1232,6 +1232,13 @@ describe("questionnaire UI seam", () => {
         expect(panel().querySelector("iframe")!.getAttribute("src")).toMatch(
           /\/artifacts\/d1\/view\?/,
         );
+        // A design fills the pane, its viewer fitting and zooming it: no
+        // device widths, no browser drawn around it.
+        expect(
+          within(panel()).queryByRole("group", { name: "Device width" }),
+        ).toBeNull();
+        expect(panel().querySelector(".browser-bar")).toBeNull();
+        expect(panel().querySelector(".device.fill")).not.toBeNull();
         const iframe = panel().querySelector("iframe")!;
         const sent = vi.fn();
         Object.defineProperty(iframe, "contentWindow", {

@@ -114,7 +114,7 @@ export function FitIcon() {
 export type Placed = Spot & { width: number };
 
 interface Geometry {
-  kind: "bare" | "bezel" | "browser" | "paper";
+  kind: "bare" | "bezel" | "browser" | "paper" | "fill";
   /** Scale, at most 1: the device is shown at real size when it fits. */
   s: number;
   /** The screen: the document's viewport. */
@@ -197,6 +197,9 @@ export function Preview({
     return () => observer.disconnect();
   }, []);
   const html = artifact.format === "html";
+  // A system design isn't a page at a device width: its viewer fits and
+  // zooms it to whatever room it has, so it takes the whole pane.
+  const design = artifact.kind === "design";
   const pinsKey = JSON.stringify(pins);
   useEffect(() => {
     if (html && loaded === frameKey)
@@ -214,7 +217,9 @@ export function Preview({
     const pad = box.w < 560 ? 12 : 28;
     const aw = box.w - pad * 2;
     const ah = box.h - pad * 2;
-    if (
+    if (design) {
+      geo = { kind: "fill", s: 1, w: box.w, h: box.h, ow: box.w, oh: box.h };
+    } else if (
       html &&
       device === "mobile" &&
       !landscape &&
@@ -299,7 +304,7 @@ export function Preview({
             {name}
           </span>
         )}
-        {html && (
+        {html && !design && (
           <div className="seg" role="group" aria-label="Device width">
             {(Object.keys(DEVICES) as Device[]).map((key) => (
               <button
@@ -372,7 +377,7 @@ export function Preview({
         )}
       </div>
       <div
-        className={`preview-body${geo?.kind === "bare" ? " bare" : ""}`}
+        className={`preview-body${geo?.kind === "bare" || geo?.kind === "fill" ? ` ${geo.kind}` : ""}`}
         ref={bodyRef}
       >
         {geo && (
