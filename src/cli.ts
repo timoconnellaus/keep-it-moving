@@ -52,6 +52,7 @@ import {
   armWaiter,
   bindSession,
   disarmWaiter,
+  endSession,
   liveBindings,
   readBindings,
   runHook,
@@ -1965,13 +1966,15 @@ async function sessionEndHookCommand() {
     ) as HookPayload;
     const sessionId = payload.session_id ?? "";
     disarmWaiter(waitersDir(), sessionId);
+    const file = configFile("hooks.json");
+    const bindings = readBindings(file);
+    endSession(file, sessionId);
     await Promise.all(
-      liveBindings(readBindings(configFile("hooks.json")), sessionId).map(
-        (binding) =>
-          authorizedFetch(
-            `/api/sessions/${encodeURIComponent(binding.interviewId)}/away`,
-            { method: "POST", signal: AbortSignal.timeout(TAKE_TIMEOUT_MS) },
-          ).catch(() => null),
+      liveBindings(bindings, sessionId).map((binding) =>
+        authorizedFetch(
+          `/api/sessions/${encodeURIComponent(binding.interviewId)}/away`,
+          { method: "POST", signal: AbortSignal.timeout(TAKE_TIMEOUT_MS) },
+        ).catch(() => null),
       ),
     );
   } catch {

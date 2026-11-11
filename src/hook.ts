@@ -30,6 +30,12 @@ export interface Binding {
   takenAt?: number;
   /** Sent to the user: interviewId is its token, and changes come from the inbox. */
   inbox?: true;
+  /**
+   * When its agent session ended. The interview stays bound so the next
+   * session can carry on, but any session may now take it just by working
+   * on it; until then only starting or resuming it takes it over.
+   */
+  endedAt?: number;
 }
 
 /** The parts of a hook's stdin payload kim reads; Claude Code and Codex share them. */
@@ -271,16 +277,29 @@ export async function runHook(
     const { unbind, inbox } = changes;
     // A session can work on several interviews of the user's own. Starting
     // or resuming one adds it; other commands renew the ones it has, or
-    // bind the first, so looking at an old interview doesn't add it.
+    // bind the first, so looking at an old interview doesn't add it. Only
+    // starting or resuming takes one another live session is running: a
+    // command that just names it (listing, screenshotting) would otherwise
+    // take its answers away from the agent asking the questions.
     const own = new Set(
       liveBindings(bindings, sessionId).map((binding) => binding.interviewId),
+    );
+    const heldElsewhere = new Set(
+      bindings
+        .filter(
+          (binding) =>
+            !binding.inbox &&
+            binding.agentSessionId !== sessionId &&
+            binding.endedAt === undefined,
+        )
+        .map((binding) => binding.interviewId),
     );
     const bind = [
       ...new Set([
         ...(changes.started ?? []),
         ...changes.bind.filter((id) => own.has(id)),
         ...(!own.size && !changes.started?.length
-          ? changes.bind.slice(-1)
+          ? changes.bind.filter((id) => !heldElsewhere.has(id)).slice(-1)
           : []),
       ]),
     ];
@@ -402,6 +421,27 @@ export function bindSession(
     ),
     { interviewId, agentSessionId: sessionId, cwd, boundAt: now },
   ]);
+}
+
+/**
+ * Marks an agent session's interviews as left by it, so the next session
+ * can pick them up by working on them.
+ */
+export function endSession(
+  file: string,
+  sessionId: string,
+  now = Date.now(),
+): void {
+  const bindings = readBindings(file);
+  if (!bindings.some((binding) => binding.agentSessionId === sessionId)) return;
+  writeBindings(
+    file,
+    bindings.map((binding) =>
+      binding.agentSessionId === sessionId
+        ? { ...binding, endedAt: now }
+        : binding,
+    ),
+  );
 }
 
 /** Forgets an interview that was stopped or deleted, whoever it was bound to. */

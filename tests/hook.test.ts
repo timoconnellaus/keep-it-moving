@@ -7,6 +7,7 @@ import {
   armWaiter,
   bindingChanges,
   disarmWaiter,
+  endSession,
   readBindings,
   runHook,
   runStop,
@@ -232,6 +233,51 @@ describe("kim hook", () => {
     expect(own()).toEqual([ID]);
   });
 
+  it("never takes another live session's interview by naming it; only resuming it does", async () => {
+    const { run, stateFile, take } = setup();
+    const holder = () =>
+      readBindings(stateFile).find((binding) => binding.interviewId === ID)
+        ?.agentSessionId;
+    await run(
+      "PostToolUse",
+      bash("kim session create --title A", JSON.stringify({ id: ID }), "s1"),
+    );
+    expect(holder()).toBe("s1");
+    // Another session, with no interview of its own, looks at it: listing
+    // it or screenshotting one of its artifacts doesn't move it.
+    take.mockClear();
+    await run(
+      "PostToolUse",
+      bash(`kim artifact screenshot ${ID} a1 --out x.png`, "", "s2"),
+    );
+    await run(
+      "PostToolUse",
+      bash("kim session list", JSON.stringify({ interviewId: ID }), "s2"),
+    );
+    expect(holder()).toBe("s1");
+    expect(take).not.toHaveBeenCalled();
+    // Resuming it is a deliberate takeover.
+    await run("PostToolUse", bash(`kim session resume ${ID}`, "", "s2"));
+    expect(holder()).toBe("s2");
+  });
+
+  it("lets the next session carry on an interview once its session ended", async () => {
+    const { run, stateFile } = setup();
+    await run(
+      "PostToolUse",
+      bash("kim session create --title A", JSON.stringify({ id: ID }), "s1"),
+    );
+    endSession(stateFile, "s1");
+    await run("PostToolUse", bash(`kim wait ${ID}`, "", "s2"));
+    expect(
+      readBindings(stateFile).find((binding) => binding.interviewId === ID),
+    ).toMatchObject({ agentSessionId: "s2" });
+    expect(
+      readBindings(stateFile).find((binding) => binding.interviewId === ID)
+        ?.endedAt,
+    ).toBeUndefined();
+  });
+
   it("brings in answers for the folder's recent interviews at session start, from any session", async () => {
     const { run, take } = setup();
     const start = Date.parse("2026-10-30T09:00:00Z");
@@ -435,6 +481,8 @@ describe("kim hook, end to end", () => {
     );
     expect(claude.stderr).toContain('"answer":"Friday"');
 
+    // Claude's session ends; Codex carries the interview on.
+    await hook("session-end", JSON.stringify({ session_id: "claude-1" }), env);
     await bind("codex-1");
     const held = stopping("codex-1", ["--hold"]);
     await new Promise((resolve) => setTimeout(resolve, 1_500));
