@@ -673,19 +673,19 @@ export function createHub(options: HubOptions) {
       : Array.isArray(input?.questions)
         ? input.questions
         : [input];
-    return c.json({
-      questions: store.addQuestions(c.req.param("id"), inputs),
-    });
+    const questions = store.addQuestions(c.req.param("id"), inputs);
+    const warnings = store.questionWarnings(c.req.param("id"), questions);
+    return c.json({ questions, ...(warnings.length ? { warnings } : {}) });
   });
-  app.patch("/api/sessions/:id/questions/:questionId", async (c) =>
-    c.json(
-      store.updateQuestion(
-        c.req.param("id"),
-        c.req.param("questionId"),
-        await c.req.json(),
-      ),
-    ),
-  );
+  app.patch("/api/sessions/:id/questions/:questionId", async (c) => {
+    const question = store.updateQuestion(
+      c.req.param("id"),
+      c.req.param("questionId"),
+      await c.req.json(),
+    );
+    const warnings = store.questionWarnings(c.req.param("id"), [question]);
+    return c.json({ ...question, ...(warnings.length ? { warnings } : {}) });
+  });
   app.delete("/api/sessions/:id/questions/:questionId", (c) => {
     store.deleteQuestion(c.req.param("id"), c.req.param("questionId"));
     return c.json({ ok: true });

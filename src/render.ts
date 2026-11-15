@@ -38,6 +38,11 @@ export interface RenderInput {
   /** The frame's height, which the viewport starts at. */
   height: number;
   fullPage: boolean;
+  /**
+   * Control values to show over the saved ones, such as `{ "@nav": "top" }`,
+   * sent to the page's applier as the frame sends a hovered option's.
+   */
+  values?: Record<string, string>;
 }
 
 /** A full page is cut off here: a screenshot past this is no use to read. */
@@ -66,6 +71,16 @@ const SETTLE_AND_MEASURE = `(async () => {
   if (document.fonts) await document.fonts.ready;
   await new Promise((resolve) => setTimeout(resolve, 300));
   return Math.ceil(Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0));
+})()`;
+
+/**
+ * Sets control values over the saved ones, as the framing page does on a
+ * hover: the page is its own parent here, so its applier takes the message.
+ */
+const setValues = (values: Record<string, string>) =>
+  `(async () => {
+  window.postMessage({ type: "kim-set", merge: true, values: ${JSON.stringify(values).replace(/</g, "\\u003c")} }, "*");
+  await new Promise((resolve) => setTimeout(resolve, 50));
 })()`;
 
 /** No browser to render with: the caller says what to do instead. */
@@ -404,6 +419,11 @@ async function capture(
       height,
       deviceScaleFactor: 1,
       mobile: false,
+    });
+  if (input.values && Object.keys(input.values).length)
+    await send("Runtime.evaluate", {
+      expression: setValues(input.values),
+      awaitPromise: true,
     });
   const measured = (await send("Runtime.evaluate", {
     expression: SETTLE_AND_MEASURE,

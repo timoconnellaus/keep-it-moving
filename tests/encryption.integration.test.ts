@@ -290,6 +290,41 @@ describe("end-to-end encryption through the CLI", { timeout: 30_000 }, () => {
     ]);
   });
 
+  it("warns about controls an answer couldn't visibly change, in the client", async () => {
+    const { kim } = await ownerHarness();
+    const { session } = await encryptedInterview(kim);
+    const mockup = await kim(
+      "artifact",
+      "add",
+      session.id,
+      "--kind",
+      "mockup",
+      "--title",
+      "Plans",
+      "--content",
+      '<!doctype html><html><head><style>.card { --tone: red; color: var(--tone) }</style></head><body data-kim-density="cozy"></body></html>',
+    );
+    expect(mockup.warnings).toEqual([
+      expect.stringContaining('Artifact "Plans" @density: kim sets'),
+    ]);
+    const added = await kim(
+      "question",
+      "add",
+      session.id,
+      "--json",
+      JSON.stringify({
+        prompt: "Tone?",
+        type: "single-choice",
+        options: ["Red", "Blue"],
+        artifactId: mockup.id,
+        optionValues: { Blue: { "--tone": "blue" } },
+      }),
+    );
+    expect(added.warnings).toEqual([
+      expect.stringContaining('Artifact "Plans" --tone: kim sets --tone'),
+    ]);
+  });
+
   it("brings the browser's sealed answers to the agent, finishing the batch", async () => {
     const { harness, ann, kim } = await ownerHarness();
     const { session, questions } = await encryptedInterview(kim);

@@ -17,10 +17,11 @@ import {
   type PublicKey,
 } from "./shared/crypto.js";
 import {
-  bindingWarnings,
+  artifactWarnings,
   checkBinding,
   checkLinks,
   completeBatch,
+  questionWarnings,
   type ArtifactRef,
 } from "./shared/questions.js";
 import {
@@ -307,15 +308,18 @@ export class Encryption {
           ? ((body as Json).questions as unknown[])
           : [body];
       const find = await this.artifactFinder(id);
+      const checked = list.map((item) =>
+        checkedQuestion(QuestionInputSchema.parse(item), find),
+      );
+      // The service can't read the markup, so the warnings are made here.
+      const warnings = checked.flatMap((question) =>
+        questionWarnings(find, bindingOf(question)),
+      );
       return {
         body: await Promise.all(
-          list.map(async (item) =>
-            sealQuestion(
-              checkedQuestion(QuestionInputSchema.parse(item), find),
-              s,
-            ),
-          ),
+          checked.map((question) => sealQuestion(question, s)),
         ),
+        after: withWarnings(warnings),
       };
     }
     const question = /^PATCH \/questions\/([^/]+)$/.exec(tail)?.[1];
@@ -324,19 +328,30 @@ export class Encryption {
       const current = session.questions.find((item) => item.id === question);
       if (!current) throw new Error("Question not found");
       const merged = mergeQuestion(current, QuestionPatchSchema.parse(body));
+      const find = await this.artifactFinder(id, session);
+      const checked = checkedQuestion(merged, find);
       return {
-        body: await sealQuestion(
-          checkedQuestion(merged, await this.artifactFinder(id, session)),
-          s,
-        ),
+        body: await sealQuestion(checked, s),
+        after: withWarnings(questionWarnings(find, bindingOf(checked))),
       };
     }
     if (tail === "POST /artifacts") {
       const input = ArtifactInputSchema.parse(body);
+      const format = artifactFormat(input.kind, input.content);
+      const warnings =
+        format === "html"
+          ? artifactWarnings([], {
+              id: "",
+              format,
+              title: input.title,
+              content: input.content,
+            })
+          : [];
       return {
+        after: withWarnings(warnings),
         body: {
           kind: input.kind,
-          format: artifactFormat(input.kind, input.content),
+          format,
           show: input.show,
           ...(input.designType ? { designType: input.designType } : {}),
           ...(input.keep !== undefined ? { keep: input.keep } : {}),
@@ -365,7 +380,7 @@ export class Encryption {
       if (!current) throw new Error("Artifact not found");
       const format = artifactFormat(current.kind, patch.content);
       // The service can't read the markup, so the warnings are made here.
-      const warnings = bindingWarnings(session.questions, {
+      const warnings = artifactWarnings(session.questions, {
         id: artifact,
         format,
         title: patch.title ?? current.title,
@@ -373,8 +388,7 @@ export class Encryption {
       });
       return {
         body: { ...patch, format, ...(await sealArtifact(patch, key)) },
-        after: async (response) =>
-          warnings.length ? { ...(response as Json), warnings } : response,
+        after: withWarnings(warnings),
       };
     }
     if (tail === "POST /chat") {
@@ -499,6 +513,19 @@ export class Encryption {
 }
 
 type ParsedQuestion = ReturnType<typeof QuestionInputSchema.parse>;
+
+/** Adds warnings the client made to the service's response. */
+const withWarnings =
+  (warnings: string[]) =>
+  async (response: unknown): Promise<unknown> =>
+    warnings.length ? { ...(response as Json), warnings } : response;
+
+/** What a question sets in its artifact. */
+const bindingOf = (question: ParsedQuestion) => ({
+  artifactId: question.artifactId ?? null,
+  optionValues: question.optionValues ?? {},
+  control: question.control ?? null,
+});
 
 /** A question checked as the service checks a plain one, its default normalised. */
 function checkedQuestion(

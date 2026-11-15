@@ -91,6 +91,7 @@ import {
   writeUpdateState,
 } from "./update.js";
 import { checkDesign, DesignCheckError, type Finding } from "./designCheck.js";
+import { CONTROL_PATTERN, missingControls } from "./shared/bindings.js";
 import { designTypeOf, parseDesignType } from "./designFiles.js";
 import type { DesignType } from "./shared/designs.js";
 import type { ArtifactView } from "./shared/schema.js";
@@ -1035,7 +1036,13 @@ async function screenshotArtifact(
   if (!Number.isInteger(width) || width < 100 || width > 4_000)
     throw new Error("--width is a number of pixels, such as 1280, 834 or 390");
   const fullPage = args.includes("--full-page");
-  const name = `${artifact.id.replace(/[^A-Za-z0-9_-]+/g, "-")}-r${artifact.revision}-${width}${fullPage ? "-full" : ""}`;
+  const values = controlValuesFromFlags(flags(args, "--set"));
+  const set = Object.keys(values).length
+    ? `-${createHash("sha256").update(JSON.stringify(values)).digest("hex").slice(0, 8)}`
+    : "";
+  if (set && artifact.format !== "html")
+    throw new Error("--set is for an html mockup's controls");
+  const name = `${artifact.id.replace(/[^A-Za-z0-9_-]+/g, "-")}-r${artifact.revision}-${width}${fullPage ? "-full" : ""}${set}`;
   const folder = join(tmpdir(), "kim-screenshots");
   const design = artifact.content.includes(DESIGN_VIEWER_PATH);
   let shot: { png: Buffer; height: number };
@@ -1046,6 +1053,7 @@ async function screenshotArtifact(
       width,
       height: artifact.frame.height ?? 800,
       fullPage,
+      ...(set ? { values } : {}),
       ...(design ? { files: viewerFiles(defaultBase) } : {}),
     });
   } catch (error) {
@@ -1064,12 +1072,38 @@ async function screenshotArtifact(
   const out = resolve(flag(args, "--out") ?? join(folder, `${name}.png`));
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, shot.png);
+  const missing = missingControls(artifact.content, Object.keys(values));
   return output({
     file: out,
     width,
     height: shot.height,
     revision: artifact.revision,
+    ...(set ? { values } : {}),
+    ...(missing.length
+      ? {
+          warnings: [
+            `The page doesn't declare ${missing.join(", ")}, so setting ${missing.length === 1 ? "it" : "them"} changed nothing`,
+          ],
+        }
+      : {}),
   });
+}
+
+/**
+ * `--set '<control>=<value>'`, repeated: control values a screenshot shows
+ * over the saved answers', as hovering an option does.
+ */
+function controlValuesFromFlags(sets: string[]): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const set of sets) {
+    const match = /^((?:--|@|#)[\w-]+)=(.*)$/s.exec(set);
+    if (!match || !CONTROL_PATTERN.test(match[1]!))
+      throw new Error(
+        `--set takes <control>=<value>, e.g. '@nav=top' or '--accent=#e4572e'; got "${set}"`,
+      );
+    values[match[1]!] = match[2]!;
+  }
+  return values;
 }
 
 async function inboxScreenshot(interview: string, args: string[]) {
@@ -2636,8 +2670,9 @@ Commands:
     designs: .dbml (data-model), .d2 (architecture; name.data-flow.d2), .mmd (sequence, state), OpenAPI .yaml (api);
     [--type T] [--keep|--no-keep] [--repo-path .kim/… --base <file> [--base-commit SHA]] compares it with a repo copy
   artifact show <session> <artifact|none>   choose what the workspace shows
-  artifact screenshot <session> <artifact> [--width N] [--full-page] [--out <file.png>]
-    draws a mockup, diagram or design in a local Chrome, Edge or Chromium as the user sees it
+  artifact screenshot <session> <artifact> [--width N] [--full-page] [--out <file.png>] [--set '<control>=<value>']
+    draws a mockup, diagram or design in a local Chrome, Edge or Chromium as the user sees it;
+    --set (repeatable) shows a mockup with a control set, as hovering an option does
   artifact delete <session> <artifact>
   stage open|close <session>   show or hide the workspace column
 
@@ -2653,7 +2688,7 @@ Interviews sent to you (someone assigned you one; your agent drafts, you send):
   inbox   the interviews sent to you (or a linked account) still open: url, sender, open and drafted counts
   inbox show <interview>   its questions with answers, drafts and threads, the chat, and the workspace
   inbox artifact <interview> <artifact> [--out <file>]   the artifact as its frame serves it
-  inbox screenshot <interview> <artifact> [--width N] [--full-page] [--out <file.png>]
+  inbox screenshot <interview> <artifact> [--width N] [--full-page] [--out <file.png>] [--set '<control>=<value>']
     renders an html or svg artifact in Chrome, Edge or Chromium on this machine
     (KIM_BROWSER picks one); saves the PNG and prints its path
   inbox chat <interview> [--question <question>] <text>   message the sender's agent, as you

@@ -648,6 +648,52 @@ describe("the inbox, as the assignee's agent", () => {
     expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([390, 844]);
   }, 60_000);
 
+  it("screenshots a mockup with a control set, as a hover shows it", async (context) => {
+    let browser: string;
+    try {
+      browser = findBrowser();
+    } catch {
+      return context.skip("no Chrome, Edge or Chromium on this machine");
+    }
+    const { store, session, address } = await inboxHarness();
+    // Drawn by a script that reads <body>'s attribute and redraws on a change.
+    const mockup = store.addArtifact(session.id, {
+      kind: "mockup",
+      title: "Sized",
+      content: `<!doctype html><html><head><style>body { margin: 0 }</style></head>
+<body data-kim-size="short"><div id="box"></div><script>
+  const draw = () => { box.style.height = document.body.dataset.kimSize === "tall" ? "2000px" : "100px"; };
+  addEventListener("kim-change", draw);
+  draw();
+</script></body></html>`,
+    });
+    const shoot = async (...extra: string[]) =>
+      JSON.parse(
+        (
+          await kimWith(
+            address,
+            { KIM_BROWSER: browser },
+            "inbox",
+            "screenshot",
+            session.token,
+            mockup.id,
+            "--width",
+            "390",
+            "--full-page",
+            ...extra,
+          )
+        ).stdout,
+      );
+    expect((await shoot()).height).toBe(800);
+    const tall = await shoot("--set", "@size=tall", "--set", "--x=1");
+    expect(tall).toMatchObject({
+      height: 2000,
+      values: { "@size": "tall", "--x": "1" },
+      warnings: [expect.stringContaining("doesn't declare --x")],
+    });
+    expect(tall.file).toMatch(/-full-[0-9a-f]{8}\.png$/);
+  }, 60_000);
+
   it("saves the page for the agent's own browser when there's none to render with", async () => {
     const { session, mockup, address } = await inboxHarness();
     const failed = await kimWith(
