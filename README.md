@@ -499,17 +499,19 @@ Questions can point at the workspace:
 
 An answer can also change values inside one html artifact, applied in the page with no round-trip to the agent. The artifact names what can change, and the question's `artifactId` points at it:
 
-| Control     | In the artifact                                                 | An answer sets                    |
-| ----------- | --------------------------------------------------------------- | --------------------------------- |
-| `--accent`  | a CSS custom property it defines or reads (`--accent: #1f6bff`) | the property, inline on `:root`   |
-| `@nav`      | `data-kim-nav`, e.g. CSS on `[data-kim-nav="top"]`              | the attribute on the root element |
-| `#headline` | elements marked `data-kim-text="headline"`                      | their text                        |
+| Control     | In the artifact                                                 | An answer sets                                                          |
+| ----------- | --------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `--accent`  | a CSS custom property it defines or reads (`--accent: #1f6bff`) | the property, inline on `:root`                                         |
+| `@nav`      | `data-kim-nav`, e.g. CSS on `[data-kim-nav="top"]`              | the attribute on `<html>`, and on every element whose markup carries it |
+| `#headline` | elements marked `data-kim-text="headline"`                      | their text                                                              |
 
 - Choice questions take `optionValues`: option → control values. Several chosen options merge in option order.
 - A number question takes `control` (a CSS variable), `unit` and `min`/`max`, and shows a slider.
 - A text question takes `control` (a text slot).
 
-Creating or updating a question checks that the artifact is html and declares every control, and rejects it otherwise. An artifact edit that drops a bound control succeeds, with `warnings` naming the questions it breaks.
+Creating or updating a question checks that the artifact is html and declares every control, and rejects it otherwise. An artifact edit that drops a bound control succeeds, with `warnings` naming the questions it breaks. Adding or updating an artifact, and adding or updating a bound question, also returns `warnings` for a declared control an answer couldn't visibly change: an attribute no CSS selector or script reads, a script that reads it from `<body>` when only `<html>` gets it or never runs again after a change, CSS like `body[data-kim-nav]` with no such element, a variable a declaration below `:root` (on `body`, say) shadows, or a text slot holding other elements.
+
+After every change the script fires `kim-change` on the window, with `detail.values` holding every value set, so a mockup that draws itself with JavaScript redraws with `addEventListener("kim-change", render)`. `kim artifact screenshot … --set '@nav=top'` (and `kim inbox screenshot`) renders with control values over the saved ones, as a hover shows them, so an agent can check a control works.
 
 ```json
 {
@@ -526,7 +528,7 @@ Creating or updating a question checks that the artifact is html and declares ev
 
 From the CLI: `--set 'Fraunces=--font-display=Fraunces, serif'` (repeat it), or `--bind --radius --unit px --min 0 --max 24` for a number.
 
-The view URL serves the artifact with a small script in its head (`APPLIER_SOURCE` in `src/server/artifactView.ts`). The script applies the values of saved answers before first paint (text slots holding plain text are filled on the server), so a reload, thumbnails and later questions show the decided state. It then follows `{ type: "kim-set", values }` messages, accepted only from the framing page. Each message carries the whole state, and a control it leaves out returns to the artifact's own value. In the page, hovering or focusing an option previews it in the artifact's frames and preview, choosing keeps the preview until it's saved or cancelled, and sliders and text update them as the user drags or types. Option cards show a thumbnail with each option applied, and **Compare side by side** adds a row of copies of the artifact to the canvas, one per option, each with a "Use …" button; hiding the comparison removes them. The same script answers comment picks, draws pins and passes Esc up (`COMMENTS_SOURCE`). Previews never leave the browser. When a variable whose name contains `font` is set to a family that isn't a system font, the script loads it from Google Fonts. The CSP sandbox has no fetch directives, so `fonts.googleapis.com` and `fonts.gstatic.com` load. Bound answers in the agent's batch carry `applied: { artifactId, values }`.
+The view URL serves the artifact with a small script in its head (`APPLIER_SOURCE` in `src/server/artifactView.ts`). The script applies the values of saved answers before first paint (text slots holding plain text are filled on the server), so a reload, thumbnails and later questions show the decided state. It then follows `{ type: "kim-set", values }` messages, accepted only from the framing page. Each message carries the whole state, and a control it leaves out returns to the artifact's own value (each element that carried an attribute gets its own value back); `merge: true` sets values over the current ones instead. In the page, hovering or focusing an option previews it in the artifact's frames and preview, choosing keeps the preview until it's saved or cancelled, and sliders and text update them as the user drags or types. Option cards show a thumbnail with each option applied, and **Compare side by side** adds a row of copies of the artifact to the canvas, one per option, each with a "Use …" button; hiding the comparison removes them. The same script answers comment picks, draws pins and passes Esc up (`COMMENTS_SOURCE`). Previews never leave the browser. When a variable whose name contains `font` is set to a family that isn't a system font, the script loads it from Google Fonts. The CSP sandbox has no fetch directives, so `fonts.googleapis.com` and `fonts.gstatic.com` load. Bound answers in the agent's batch carry `applied: { artifactId, values }`.
 
 ## Architecture
 

@@ -2,7 +2,9 @@ import { defaultAnswerText } from "./answers.js";
 import {
   boundControls,
   controlKind,
+  controlWarnings,
   isBound,
+  markupControls,
   missingControls,
   savedValues,
   type ControlValues,
@@ -152,6 +154,45 @@ export function bindingWarnings(
         ? [`${where}: ${undeclared(artifact.title, missing)}`]
         : [];
     });
+}
+
+/**
+ * Everything an html artifact's controls would do wrong, as warnings:
+ * bound questions it no longer serves, and controls it declares (in its
+ * markup, or bound by a question) that an answer couldn't visibly change.
+ */
+export function artifactWarnings(
+  questions: QuestionView[],
+  artifact: ArtifactRef & { content: string },
+): string[] {
+  const warnings = bindingWarnings(questions, artifact);
+  if (artifact.format !== "html") return warnings;
+  const bound = questions
+    .filter(
+      (question) => question.artifactId === artifact.id && isBound(question),
+    )
+    .flatMap(boundControls);
+  const controls = [
+    ...new Set([...markupControls(artifact.content), ...bound]),
+  ];
+  return [
+    ...warnings,
+    ...controlWarnings(artifact.content, controls).map(
+      (warning) => `Artifact "${artifact.title}" ${warning}`,
+    ),
+  ];
+}
+
+/** Controls a question binds that its artifact couldn't visibly change, as warnings. */
+export function questionWarnings(
+  find: FindArtifact,
+  question: Pick<BindingInput, "artifactId" | "optionValues" | "control">,
+): string[] {
+  const artifact = question.artifactId ? find(question.artifactId) : undefined;
+  if (artifact?.format !== "html" || artifact.content === undefined) return [];
+  return controlWarnings(artifact.content, boundControls(question)).map(
+    (warning) => `Artifact "${artifact.title}" ${warning}`,
+  );
 }
 
 /**

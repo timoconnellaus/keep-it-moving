@@ -29,9 +29,18 @@ export const opensAsPage = (request: Request) =>
  * from the head, so they show before first paint, then follows
  * `{ type: "kim-set", values }` messages from the page framing it. Each
  * message is the whole state: a control it leaves out goes back to what
- * the artifact had. Setting a font variable loads that family from Google
- * Fonts unless it is a generic or system font. Plain JavaScript in a
- * string, since bundlers rewrite a function's own source.
+ * the artifact had, unless the message says `merge: true` (a screenshot
+ * with values of its own). Setting a font variable loads that family from
+ * Google Fonts unless it is a generic or system font.
+ *
+ * Where each kind lives: a variable is set on the root element's style
+ * (`:root`); an `@name` attribute on the root element and on every element
+ * whose markup carries `data-kim-name` (so a `<body data-kim-name>` follows
+ * too, and goes back to its own value); a text slot's text on every
+ * `data-kim-text` element. After each change it fires `kim-change` on the
+ * window, `detail.values` being every value set, for a mockup that draws
+ * itself with JavaScript. Plain JavaScript in a string, since bundlers
+ * rewrite a function's own source.
  */
 export const APPLIER_SOURCE = `(function (window, initial) {
   var document = window.document;
@@ -41,6 +50,9 @@ export const APPLIER_SOURCE = `(function (window, initial) {
   var originals = {};
   var current = {};
   var fonts = {};
+  // Elements besides the root that carry an @control's attribute, each
+  // with the value it had, to go back to.
+  var hosts = {};
   Object.keys(initial.originals || {}).forEach(function (control) {
     originals[control] = initial.originals[control];
   });
@@ -68,7 +80,25 @@ export const APPLIER_SOURCE = `(function (window, initial) {
     link.href = query + ":wght@400;500;600;700&display=swap";
     (document.head || root).appendChild(link);
   }
-  function write(control, value) {
+  function hostsOf(control) {
+    var name = "data-kim-" + control.slice(1);
+    var known = (hosts[control] || []).filter(function (host) {
+      return host.el.isConnected;
+    });
+    document.querySelectorAll("[" + name + "]").forEach(function (el) {
+      if (el === root) return;
+      for (var i = 0; i < known.length; i++) if (known[i].el === el) return;
+      known.push({ el: el, value: el.getAttribute(name) });
+    });
+    hosts[control] = known;
+    return known;
+  }
+  function setAttribute(el, name, value) {
+    if (value === null) el.removeAttribute(name);
+    else if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+  }
+  // Restoring puts each element back to its own value; setting gives all the same.
+  function write(control, value, restoring) {
     if (control.slice(0, 2) === "--") {
       if (value === null) root.style.removeProperty(control);
       else {
@@ -76,8 +106,11 @@ export const APPLIER_SOURCE = `(function (window, initial) {
         if (/font|family|typeface/i.test(control)) loadFont(value);
       }
     } else if (control[0] === "@") {
-      if (value === null) root.removeAttribute("data-kim-" + control.slice(1));
-      else root.setAttribute("data-kim-" + control.slice(1), value);
+      var name = "data-kim-" + control.slice(1);
+      setAttribute(root, name, value);
+      hostsOf(control).forEach(function (host) {
+        setAttribute(host.el, name, restoring ? host.value : value);
+      });
     } else if (value !== null) {
       slots(control).forEach(function (slot) {
         slot.textContent = value;
@@ -86,7 +119,7 @@ export const APPLIER_SOURCE = `(function (window, initial) {
   }
   function apply(values) {
     Object.keys(current).forEach(function (control) {
-      if (!(control in values)) write(control, control in originals ? originals[control] : null);
+      if (!(control in values)) write(control, control in originals ? originals[control] : null, true);
     });
     var next = {};
     Object.keys(values).forEach(function (control) {
@@ -96,10 +129,15 @@ export const APPLIER_SOURCE = `(function (window, initial) {
         var original = read(control);
         if (original !== undefined) originals[control] = original;
       }
-      write(control, value);
+      write(control, value, false);
       next[control] = value;
     });
     current = next;
+    try {
+      window.dispatchEvent(new window.CustomEvent("kim-change", { detail: { values: Object.assign({}, next) } }));
+    } catch (error) {
+      // No CustomEvent in a very old browser: the values are set all the same.
+    }
   }
   apply(initial.values || {});
   // Text slots the server couldn't fill exist once the document has parsed.
@@ -110,7 +148,8 @@ export const APPLIER_SOURCE = `(function (window, initial) {
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data || data.type !== "kim-set") return;
-    if (data.values && typeof data.values === "object") apply(data.values);
+    if (data.values && typeof data.values === "object")
+      apply(data.merge ? Object.assign({}, current, data.values) : data.values);
   });
 })`;
 

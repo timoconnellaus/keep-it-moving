@@ -40,9 +40,10 @@ import {
 import { boundControls } from "../shared/bindings.js";
 import { kidsIn, type PublicKey, type Unlock } from "../shared/crypto.js";
 import {
-  bindingWarnings,
+  artifactWarnings,
   checkBinding,
   checkLinks,
+  questionWarnings,
   type ArtifactRef,
 } from "../shared/questions.js";
 import { projectName } from "../shared/remote.js";
@@ -1437,7 +1438,12 @@ export class InterviewStore {
       title: parsed.title,
     });
     if (parsed.show) this.showArtifact(sessionId, id, "agent");
-    return this.artifactView(sessionId, id);
+    // The client warns for a sealed artifact: only it can read the markup.
+    const warnings = kid ? [] : this.artifactWarnings(sessionId, id);
+    return {
+      ...this.artifactView(sessionId, id),
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
 
   updateArtifact(
@@ -1502,7 +1508,7 @@ export class InterviewStore {
     const warnings =
       parsed.content === undefined || kid
         ? []
-        : this.bindingWarnings(sessionId, artifactId);
+        : this.artifactWarnings(sessionId, artifactId);
     return {
       ...this.artifactView(sessionId, artifactId),
       ...(warnings.length ? { warnings } : {}),
@@ -1726,13 +1732,27 @@ export class InterviewStore {
     return row ? this.mapArtifact(row) : undefined;
   }
 
-  /** Bound questions an edited artifact no longer serves, as warnings. */
-  private bindingWarnings(sessionId: string, artifactId: string): string[] {
+  /**
+   * Bound questions an edited artifact no longer serves, and controls it
+   * declares that an answer couldn't visibly change, as warnings.
+   */
+  private artifactWarnings(sessionId: string, artifactId: string): string[] {
     const artifact = this.artifactView(sessionId, artifactId);
-    return bindingWarnings(this.getSession(sessionId, "").questions, {
+    return artifactWarnings(this.getSession(sessionId, "").questions, {
       ...artifact,
       content: artifact.content!,
     });
+  }
+
+  /**
+   * Controls these questions bind that their artifacts couldn't visibly
+   * change, as warnings. Sealed, the client makes them.
+   */
+  questionWarnings(sessionId: string, questions: QuestionView[]): string[] {
+    if (this.kidOf(sessionId)) return [];
+    return questions.flatMap((question) =>
+      questionWarnings((id) => this.artifactRef(sessionId, id), question),
+    );
   }
 
   // ------------------------------------------------------------ encryption

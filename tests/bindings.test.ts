@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { APPLIER_SOURCE, renderArtifact } from "../src/server/artifactView.js";
 import {
   answerValues,
   artifactValues,
+  controlWarnings,
+  datasetName,
   declaresControl,
+  markupControls,
   missingControls,
   type ControlValues,
 } from "../src/shared/bindings.js";
@@ -58,6 +63,150 @@ describe("declared controls", () => {
     expect(
       missingControls(MOCKUP, ["--font", "--radius", "@theme", "#head"]),
     ).toEqual(["--font", "--radius", "@theme", "#head"]);
+  });
+
+  it("counts an attribute a script reads through dataset", () => {
+    expect(datasetName("@main-nav")).toBe("kimMainNav");
+    const page = `<script>render(document.documentElement.dataset.kimMainNav)</script>`;
+    expect(declaresControl(page, "@main-nav")).toBe(true);
+    expect(declaresControl(page, "@main")).toBe(false);
+  });
+
+  it("lists the attributes and text slots the markup names", () => {
+    expect(markupControls(MOCKUP)).toEqual(["@nav", "#headline", "#tagline"]);
+  });
+});
+
+describe("control warnings", () => {
+  const warn = (html: string, controls: string[]) =>
+    controlWarnings(html, controls);
+
+  it("has nothing to say about a mockup that works", () => {
+    expect(
+      warn(MOCKUP, ["--font-display", "--accent", "@nav", "#headline"]),
+    ).toEqual([]);
+  });
+
+  it("accepts an attribute on <body> that a script there follows", () => {
+    // The mockup from the bug report: kim writes a declared host too now.
+    const page = `<html><body data-kim-example="software"><main></main><script>
+      const render = () => { main.textContent = document.body.dataset.kimExample };
+      new MutationObserver(render).observe(document.body, { attributeFilter: ["data-kim-example"] });
+      render();
+    </script></body></html>`;
+    expect(warn(page, ["@example"])).toEqual([]);
+  });
+
+  it("warns when nothing reads an attribute", () => {
+    expect(
+      warn(`<html data-kim-density="cozy"><body></body></html>`, ["@density"]),
+    ).toEqual([
+      expect.stringMatching(
+        /^@density: kim sets data-kim-density on <html>, but no CSS selector or script reads it/,
+      ),
+    ]);
+  });
+
+  it("warns when a script reads an attribute from <body> that only <html> gets", () => {
+    const page = `<html><body><script>
+      addEventListener("kim-change", () => draw(document.body.dataset.kimExample));
+    </script></body></html>`;
+    expect(warn(page, ["@example"])).toEqual([
+      expect.stringContaining(
+        "Read document.documentElement.dataset.kimExample",
+      ),
+    ]);
+  });
+
+  it("warns when only a script reads an attribute and nothing re-runs it", () => {
+    const page = `<html><body><script>draw(document.documentElement.dataset.kimExample)</script></body></html>`;
+    expect(warn(page, ["@example"])).toEqual([
+      expect.stringContaining('window.addEventListener("kim-change", render)'),
+    ]);
+    expect(
+      warn(page.replace("draw(", 'addEventListener("kim-change", x);draw('), [
+        "@example",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("warns about CSS that ties the attribute to an element without it", () => {
+    const css = `<style>body[data-kim-nav="top"] aside { display: none }</style>`;
+    expect(
+      warn(`<html><head>${css}</head><body></body></html>`, ["@nav"]),
+    ).toEqual([
+      expect.stringContaining(
+        "body[data-kim-nav…] needs that element to carry",
+      ),
+    ]);
+    expect(
+      warn(
+        `<html><head>${css}</head><body data-kim-nav="side"></body></html>`,
+        ["@nav"],
+      ),
+    ).toEqual([]);
+    expect(
+      warn(
+        `<style>:root[data-kim-nav="top"] aside, html[data-kim-nav="top"] nav { display: none }</style>`,
+        ["@nav"],
+      ),
+    ).toEqual([]);
+  });
+
+  it("warns when a declaration below :root shadows a variable", () => {
+    expect(
+      warn(`<style>body { --accent: red } a { color: var(--accent) }</style>`, [
+        "--accent",
+      ]),
+    ).toEqual([expect.stringContaining('also declared in "body"')]);
+    expect(
+      warn(`<style>.card { --accent: red; color: var(--accent) }</style>`, [
+        "--accent",
+      ]),
+    ).toEqual([expect.stringContaining('also declared in ".card"')]);
+    expect(
+      warn(`<p style="--accent: red; color: var(--accent)">Hi</p>`, [
+        "--accent",
+      ]),
+    ).toEqual([expect.stringContaining('"<p style>"')]);
+    // A default on :root with a deliberate override lower down is fine.
+    expect(
+      warn(
+        `<style>/* x */ :root { --accent: red } @media (prefers-color-scheme: dark) { :root { --accent: pink } } .dark { --accent: white }</style>`,
+        ["--accent"],
+      ),
+    ).toEqual([]);
+    expect(
+      warn(
+        `<style>.card { --accent-2: red; --my--accent: red; color: var(--accent) }</style>`,
+        ["--accent"],
+      ),
+    ).toEqual([]);
+  });
+
+  it("warns about a text slot that holds other elements", () => {
+    expect(
+      warn(`<h1 data-kim-text="headline"><em>Plan</em> it</h1>`, ["#headline"]),
+    ).toEqual([expect.stringContaining("holds other elements")]);
+  });
+
+  it("has nothing to say about the skill's example", () => {
+    const skill = readFileSync(
+      join(process.cwd(), "skills/interviewer/SKILL.md"),
+      "utf8",
+    );
+    const example = /```html\n([\s\S]*?data-kim-plan[\s\S]*?)```/.exec(
+      skill,
+    )?.[1];
+    expect(example).toBeDefined();
+    expect(warn(example!, ["--accent", "@plan", "#headline"])).toEqual([]);
+    expect(
+      missingControls(example!, ["--accent", "@plan", "#headline"]),
+    ).toEqual([]);
+  });
+
+  it("leaves undeclared controls to the binding checks", () => {
+    expect(warn(`<p>Hi</p>`, ["--accent", "@nav", "#headline"])).toEqual([]);
   });
 });
 
@@ -208,6 +357,48 @@ describe("the applier", () => {
     send({ "--accent": "red" }, frame);
     send({ "not a control": "x", "--ok": 5 });
     expect(root().getAttribute("style")).toBeNull();
+  });
+
+  it("applies a merged message over what it has", () => {
+    start({ "--accent": "red" });
+    frame.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: "kim-set", values: { "@nav": "top" }, merge: true },
+        source: frame.parent,
+      }),
+    );
+    expect(root().style.getPropertyValue("--accent")).toBe("red");
+    expect(root().getAttribute("data-kim-nav")).toBe("top");
+  });
+
+  it("tells the page what it set, for a mockup drawn by a script", () => {
+    start({});
+    const seen: unknown[] = [];
+    frame.addEventListener("kim-change", (event) =>
+      seen.push((event as CustomEvent).detail.values),
+    );
+    send({ "@nav": "top", "--accent": "red" });
+    send({});
+    expect(seen).toEqual([{ "@nav": "top", "--accent": "red" }, {}]);
+  });
+
+  it("sets an attribute on every element that declares it, and gives each its own back", () => {
+    start({ "@nav": "top" });
+    // Declared on <body> and a section as well as the root.
+    const body = frame.document.body;
+    body.setAttribute("data-kim-nav", "software");
+    body.innerHTML = '<section data-kim-nav="inner"></section>';
+    const section = body.querySelector("section")!;
+    send({ "@nav": "content" });
+    expect(
+      [root(), body, section].map((el) => el.getAttribute("data-kim-nav")),
+    ).toEqual(["content", "content", "content"]);
+    send({});
+    expect(
+      [root(), body, section].map((el) => el.getAttribute("data-kim-nav")),
+    ).toEqual(["side", "software", "inner"]);
+    // An element without it gets nothing.
+    expect(body.querySelector("[data-kim-other]")).toBeNull();
   });
 
   it("loads a font variable's family from Google Fonts once", () => {

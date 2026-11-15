@@ -744,6 +744,70 @@ describe("interview HTTP seam", () => {
     ]);
   });
 
+  it("warns about controls an answer couldn't visibly change", async () => {
+    const { app } = await harness();
+    const session = (
+      await app.inject({ method: "POST", url: "/api/sessions" })
+    ).json();
+    // Nothing reads @density; --accent is shadowed by body's own.
+    const html = `<!doctype html><html><head><style>
+      body { --accent: red } h1 { color: var(--accent) }
+    </style></head><body data-kim-density="cozy"><h1>Plan</h1></body></html>`;
+    const added = (
+      await app.inject({
+        method: "POST",
+        url: `/api/sessions/${session.id}/artifacts`,
+        payload: { kind: "mockup", title: "Home", content: html },
+      })
+    ).json();
+    expect(added.warnings).toEqual([
+      expect.stringContaining(
+        'Artifact "Home" @density: kim sets data-kim-density on <html>, but no CSS selector or script reads it',
+      ),
+    ]);
+    const bound = (
+      await app.inject({
+        method: "POST",
+        url: `/api/sessions/${session.id}/questions`,
+        payload: {
+          type: "single-choice",
+          prompt: "Accent?",
+          artifactId: added.id,
+          options: ["Red", "Blue"],
+          optionValues: { Blue: { "--accent": "blue" } },
+        },
+      })
+    ).json();
+    expect(bound.warnings).toEqual([
+      expect.stringContaining('Artifact "Home" --accent: kim sets --accent'),
+    ]);
+    const updated = (
+      await app.inject({
+        method: "PATCH",
+        url: `/api/sessions/${session.id}/questions/${bound.questions[0].id}`,
+        payload: { prompt: "Accent colour?" },
+      })
+    ).json();
+    expect(updated).toMatchObject({ prompt: "Accent colour?" });
+    expect(updated.warnings).toHaveLength(1);
+    // Fixed, the update has nothing to say.
+    const fixed = (
+      await app.inject({
+        method: "PATCH",
+        url: `/api/sessions/${session.id}/artifacts/${added.id}`,
+        payload: {
+          content: html
+            .replace("body { --accent", ":root { --accent")
+            .replace(
+              "</style>",
+              '[data-kim-density="compact"] h1 { margin: 0 }</style>',
+            ),
+        },
+      })
+    ).json();
+    expect(fixed.warnings).toBeUndefined();
+  });
+
   it("supports skip, edit, delete, stop and resume without automatic invalidation", async () => {
     const { app } = await harness();
     const { session, question } = await createQuestion(app);

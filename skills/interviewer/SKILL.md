@@ -35,7 +35,7 @@ Use the `kim` CLI (Keep it moving) to run an adaptive interview in the user's br
 
 Someone else's agent may have assigned your user an interview. When the user asks you to answer interviews sent to them, or `kim inbox` lists some, work through each one with `kim inbox show <interview>`. It gives the questions (type, options, default, recommendation, bound artifact) with any answer, draft and chat thread, the sender's agent's other messages, and the workspace. `<interview>` is the `id` or `url`; `<question>` is a question's id or number.
 
-- **Workspace**: plans and documents come inline. For an html mockup or diagram, `kim inbox artifact <interview> <artifact> --out <file>` saves it as its frame serves it, with saved answers' values applied; read it for detail. To see it, `kim inbox screenshot <interview> <artifact>` renders it in a Chrome, Edge or Chromium on this machine at its frame's width (`frame` in `show`; `--width 390|834|1280` for another, `--full-page` for all of it) and prints the PNG's path; open that file to look. With no browser here it fails, saying where it saved the page: open that at the width it names with your own browser tool if you have one (Playwright, a browser MCP), or read the HTML. Each artifact has a `revision`, so you can tell what you've already seen.
+- **Workspace**: plans and documents come inline. For an html mockup or diagram, `kim inbox artifact <interview> <artifact> --out <file>` saves it as its frame serves it, with saved answers' values applied; read it for detail. To see it, `kim inbox screenshot <interview> <artifact>` renders it in a Chrome, Edge or Chromium on this machine at its frame's width (`frame` in `show`; `--width 390|834|1280` for another, `--full-page` for all of it) and prints the PNG's path; open that file to look. `--set '<control>=<value>'` (repeatable) shows a mockup with a control set, as hovering an option does. With no browser here it fails, saying where it saved the page: open that at the width it names with your own browser tool if you have one (Playwright, a browser MCP), or read the HTML. Each artifact has a `revision`, so you can tell what you've already seen.
 - **Draft, don't send**: draft each answer from what you know of the user's project and preferences: `kim draft <interview> <question> <answer>`, with `--option <label>` (repeat for multiple-choice) and `--note <text>` for the form's "Other, or add a note", or `--skip`. `--clear` drops a draft. Drafts reach no one until the user sends them in the browser. Only use `--send`, which answers as the user at once, when the user told you to answer directly. A draft is refused if the answer wouldn't fit the question, as the form would refuse it; fix it and try again. Leave questions only the user can answer undrafted.
 - **Chat**: `kim inbox chat <interview> [--question <question>] <text>` asks the sender's agent something as the user, sent at once, so only ask what the user would want asked; `--question` puts it in that question's thread. The reply arrives through `kim inbox wait`.
 - **Watch**: run `kim inbox wait [<interview>]` in the background, as with `kim wait`. It exits with what is new since you last looked: new questions, the sender's agent's replies, workspace changes (one per artifact, with what `happened` and its `revision`), interviews newly sent to the user (`assigned`: read it with `show`), and `notes` such as a draft written against an older revision of its mockup. Revise drafts as needed, then wait again. `"timedOut": true` means nothing arrived.
@@ -96,13 +96,50 @@ kim artifact show <session-id> <artifact-id>     # put it on screen
   }
   ```
 
-- **Controls inside one mockup:** for fonts, colours, spacing, copy and small variants, let answers change one mockup live instead of drawing a mockup per option. Keep separate artifacts with `optionArtifacts` for different layouts. Mark what can change in the HTML: a CSS variable (`--accent`, used through `var(--accent)`), a variant attribute (`@nav` is `data-kim-nav`, styled with `[data-kim-nav="top"] …`), or a text slot (`#headline` is `data-kim-text="headline"` on an element holding only text). Point the question's `artifactId` at the mockup. A choice maps options to values with `optionValues` (or `--set '<option>=<control>=<value>'`, repeated). A number sets one variable with a unit and needs `min` and `max` (`--bind --radius --unit px --min 0 --max 24`), and shows a slider. A text question sets one slot (`--bind '#headline'`). Hovering an option previews it in the mockup, a font variable set to a Google Fonts family loads it, and a saved answer stays applied when the mockup is viewed again. Each bound answer in a batch carries `applied: { artifactId, values }`: write those values into the mockup's defaults when you next revise it. An undeclared control is rejected; an `artifact update` that drops one returns `warnings`.
+- **Controls inside one mockup:** for fonts, colours, spacing, copy and small variants, let answers change one mockup live instead of drawing a mockup per option. Keep separate artifacts with `optionArtifacts` for different layouts. Point the question's `artifactId` at the mockup. A choice maps options to values with `optionValues` (or `--set '<option>=<control>=<value>'`, repeated). A number sets one variable with a unit and needs `min` and `max` (`--bind --radius --unit px --min 0 --max 24`), and shows a slider. A text question sets one slot (`--bind '#headline'`). Hovering an option previews it, choosing keeps it, and a saved answer stays applied when the mockup is viewed again. Each bound answer in a batch carries `applied: { artifactId, values }`: write those values into the mockup's defaults when you next revise it.
+
+  Where kim writes each kind of control, and so where your mockup must look for it:
+
+  | Control     | kim writes                                                                                       | Your mockup                                                                                                                                                                                                                      |
+  | ----------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `--accent`  | an inline style on `<html>` (`:root`)                                                            | declares the default in `:root { --accent: … }` and uses `var(--accent)`. A declaration on `body` or a class wins over `:root` inside it, so the answer won't show there. A font variable set to a Google Fonts family loads it. |
+  | `@nav`      | `data-kim-nav` on `<html>`, and on any other element whose markup already carries `data-kim-nav` | styles each value with a selector that doesn't name an element: `[data-kim-nav="top"] aside { … }`. Put the default on `<html data-kim-nav="side">`.                                                                             |
+  | `#headline` | the text of every `data-kim-text="headline"` element                                             | marks an element that holds only text, no child elements.                                                                                                                                                                        |
+
+  A mockup that draws itself with JavaScript reads values from `document.documentElement` (`.dataset.kimNav`, or `getComputedStyle(document.documentElement).getPropertyValue("--accent")`) and redraws on kim's `kim-change` event, fired on `window` after every hover, choice and reset, with `event.detail.values` holding every value set. A smallest complete example, a choice between two variants:
+
+  <!-- prettier-ignore -->
+  ```html
+  <!doctype html>
+  <html data-kim-plan="free">
+    <head><style>
+      :root { --accent: #1f6bff }
+      .price { color: var(--accent) }
+      [data-kim-plan="pro"] .free-only { display: none }
+    </style></head>
+    <body>
+      <h1 data-kim-text="headline">Pick a plan</h1>
+      <p class="free-only">Free forever</p>
+      <p class="price"></p>
+      <script>
+        const draw = () => {
+          const plan = document.documentElement.dataset.kimPlan;
+          document.querySelector(".price").textContent = plan === "pro" ? "$12/mo" : "$0";
+        };
+        addEventListener("kim-change", draw);
+        draw();
+      </script>
+    </body>
+  </html>
+  ```
 
   ```sh
-  kim question add <session-id> --prompt "Display font?" --type single-choice --artifact <id> \
-    --option Inter --option Fraunces --default Inter \
-    --set 'Inter=--font-display=Inter, sans-serif' --set 'Fraunces=--font-display=Fraunces, serif'
+  kim question add <session-id> --prompt "Which plan?" --type single-choice --artifact <id> \
+    --option Free --option Pro --default Free \
+    --set 'Free=@plan=free' --set 'Pro=@plan=pro'
   ```
+
+  An undeclared control is rejected. `artifact add`, `artifact update` and `question add`/`update` return `warnings` for a control that wouldn't visibly change (nothing reads the attribute, a script reads it from `<body>` or never redraws, a variable shadowed below `:root`, a slot holding elements); fix each before you show the mockup. Then check it yourself rather than asking the user to hover: `kim artifact screenshot <session-id> <id> --set '@plan=pro'` (repeat `--set`) renders it with those values over the saved ones, as a hover shows it. Compare it with a screenshot without `--set`; if they look the same, the control does nothing.
 
 Artifact ids come back from `artifact add`. `session show` lists artifacts without their content.
 
