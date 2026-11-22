@@ -49,14 +49,17 @@ import {
   uninstallSkill,
 } from "./skill.js";
 import {
+  answersHeld,
   armWaiter,
   bindSession,
   disarmWaiter,
+  holdAnswers,
   endSession,
   liveBindings,
   readBindings,
   runHook,
   runStop,
+  takeHeld,
   unbindInterview,
   waiterArmed,
   type HookPayload,
@@ -1821,26 +1824,48 @@ async function hookCommand(argument: string | undefined) {
   let response: Record<string, unknown> = {};
   try {
     const event = hookEventFor(argument ?? "");
-    if (event)
-      response = await Promise.race([
+    if (event) {
+      let sessionId = "";
+      const ran = await Promise.race([
         (async () => {
           const payload = JSON.parse(
             (await readStdin()).trim() || "{}",
           ) as HookPayload;
+          // A subagent's hook hands nothing over: what it printed would go
+          // to the subagent, so answers held for the session wait for the
+          // parent's own hook.
+          sessionId = payload.agent_id ? "" : (payload.session_id ?? "");
           // The user took the turn: a background Stop hook still waiting
           // gives up, so this turn's own hooks bring the answers in.
-          if (event === "UserPromptSubmit")
-            disarmWaiter(waitersDir(), payload.session_id ?? "");
+          if (event === "UserPromptSubmit" && sessionId)
+            disarmWaiter(waitersDir(), sessionId);
           return runHook(event, payload, {
             stateFile: configFile("hooks.json"),
             take: (id, binding) =>
               binding.inbox ? takeInbox(id) : takeAnswers(id),
+            heldDir: heldDir(),
           });
         })().catch(() => ({})),
         new Promise<Record<string, unknown>>((resolve) =>
           setTimeout(() => resolve({}), HOOK_BUDGET_MS),
         ),
       ]);
+      // What goes to the agent is what is held for its session: this hook's
+      // own answers, and any an earlier hook took but could not hand over (a
+      // background waiter that was replaced, a hook that ran out of time).
+      // Answers still on their way when the budget ran out stay held.
+      const held = sessionId ? takeHeld(heldDir(), sessionId) : [];
+      response = held.length
+        ? {
+            hookSpecificOutput: {
+              hookEventName: event,
+              additionalContext: held.join("\n\n"),
+            },
+          }
+        : sessionId
+          ? {}
+          : ran;
+    }
   } catch {
     // The agent's work matters more than the answers.
   }
@@ -1853,6 +1878,8 @@ async function hookCommand(argument: string | undefined) {
 }
 
 const waitersDir = () => configFile("waiters");
+/** Answers taken for an agent session and not yet handed to it. */
+const heldDir = () => configFile("held");
 /** The background waiter wakes the model this long before its hook's timeout. */
 const STOP_WAIT_MARGIN_MS = 15 * 60_000;
 /** Codex's hold hands back this long before its hook's timeout. */
@@ -1877,11 +1904,16 @@ async function stopHookCommand(hold: boolean) {
     const stateFile = configFile("hooks.json");
     if (liveBindings(readBindings(stateFile), sessionId).length) {
       const controller = new AbortController();
+      // Answers another hook took and could not hand over end the wait:
+      // this waiter hands them to the agent.
+      const handover = new AbortController();
+      if (answersHeld(heldDir(), sessionId)) handover.abort();
       let checker: NodeJS.Timeout | undefined;
       if (!hold) {
         const token = armWaiter(waitersDir(), sessionId);
         checker = setInterval(() => {
           if (!waiterArmed(waitersDir(), sessionId, token)) controller.abort();
+          else if (answersHeld(heldDir(), sessionId)) handover.abort();
         }, WAITER_CHECK_MS);
       }
       try {
@@ -1894,11 +1926,27 @@ async function stopHookCommand(hold: boolean) {
             stopWait(
               id,
               deadline,
-              AbortSignal.any([controller.signal, gathered]),
+              AbortSignal.any([controller.signal, handover.signal, gathered]),
             ),
         });
-        // Given up for a newer waiter or the user's own prompt: say nothing.
-        text = controller.signal.aborted ? null : (result?.text ?? null);
+        if (controller.signal.aborted) {
+          // Given up for a newer waiter or the user's own prompt: say
+          // nothing. But answers that came with the wait are delivered as
+          // far as the service knows, so they are held for the session's
+          // next hook rather than dropped.
+          if (result?.answered) holdAnswers(heldDir(), sessionId, result.text);
+          text = null;
+        } else {
+          const held = takeHeld(heldDir(), sessionId);
+          text =
+            [
+              ...held,
+              // "Still waiting" says nothing new beside held answers.
+              ...(result && (result.answered || !held.length)
+                ? [result.text]
+                : []),
+            ].join("\n\n") || null;
+        }
       } finally {
         clearInterval(checker);
       }

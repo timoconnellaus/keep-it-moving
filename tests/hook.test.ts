@@ -4,14 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  answersHeld,
   armWaiter,
   bindingChanges,
   disarmWaiter,
   endSession,
+  holdAnswers,
   readBindings,
   runHook,
   runStop,
   TAKE_THROTTLE_MS,
+  takeHeld,
   waiterArmed,
   type StopWaitOutcome,
   type Batch,
@@ -913,5 +916,90 @@ describe("the Stop hook", () => {
     expect(waiterArmed(dir, "s2", second)).toBe(false);
     disarmWaiter(dir, "s1");
     expect(waiterArmed(dir, "s1", second)).toBe(false);
+  });
+});
+
+describe("answers a hook took but could not hand over", () => {
+  it("never go to a subagent: its hooks share the session id, and their context is the subagent's", async () => {
+    const { run, take, stateFile } = setup();
+    take.mockResolvedValue({ batch: batch([{ type: "answer.submitted" }]) });
+    await run("PostToolUse", bash(`kim question add ${ID} --prompt "One?"`));
+    take.mockClear();
+    // The same session id, from inside a subagent.
+    expect(
+      await run("PostToolUse", { ...bash("ls"), agent_id: "a1b2c3" }),
+    ).toEqual({});
+    expect(take).not.toHaveBeenCalled();
+    // The parent's next tool call brings them.
+    const mine = await run("PostToolUse", bash("ls"));
+    expect(take).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(mine)).toContain("answers to interview");
+    // A subagent's kim commands still bind for the session.
+    const other = "22222222-2222-4222-8222-222222222222";
+    await run("PostToolUse", {
+      ...bash(`kim session resume ${other}`),
+      agent_id: "a1b2c3",
+    });
+    expect(
+      readBindings(stateFile).map((binding) => binding.interviewId),
+    ).toContain(other);
+  });
+
+  it("are held on disk as they are taken, and taken once, oldest first", async () => {
+    const dir = tempDir();
+    expect(answersHeld(dir, "s1")).toBe(false);
+    expect(takeHeld(dir, "s1")).toEqual([]);
+    holdAnswers(dir, "s1", "first\nbatch");
+    holdAnswers(dir, "s1", "second");
+    holdAnswers(dir, "s1", "second");
+    holdAnswers(dir, "s2", "another session's");
+    expect(answersHeld(dir, "s1")).toBe(true);
+    expect(takeHeld(dir, "s1")).toEqual(["first\nbatch", "second"]);
+    expect(answersHeld(dir, "s1")).toBe(false);
+    expect(takeHeld(dir, "s1")).toEqual([]);
+    expect(takeHeld(dir, "s2")).toEqual(["another session's"]);
+  });
+
+  it("are held by the hook that took them, for the caller to hand over", async () => {
+    const { take, stateFile } = setup();
+    const heldDir = tempDir();
+    take.mockResolvedValue({ batch: batch([{ type: "answer.submitted" }]) });
+    const now = Date.parse("2026-10-30T09:00:00Z");
+    await runHook(
+      "PostToolUse",
+      bash(`kim question add ${ID} --prompt "One?"`),
+      { stateFile, take, now, heldDir },
+    );
+    const held = takeHeld(heldDir, "s1");
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatch(/^Keep it moving: answers to interview/);
+    expect(held[0]).toContain('"answer":"Yes"');
+  });
+
+  it('the Stop hook marks answers, which count as delivered, apart from "still waiting"', async () => {
+    const { run, stateFile } = setup();
+    await run("PostToolUse", bash(`kim question add ${ID} --prompt "One?"`));
+    const stop = (outcome: StopWaitOutcome) => {
+      let time = 1_000;
+      return runStop(
+        { session_id: "s1" },
+        {
+          stateFile,
+          wait: async () => {
+            time += 60_000;
+            return outcome;
+          },
+          waitMs: 60_000,
+          now: 1_000,
+          clock: () => time,
+        },
+      );
+    };
+    expect(
+      (await stop({ batch: batch([{ type: "answer.submitted" }]) }))?.answered,
+    ).toBe(true);
+    const waiting = await stop(null);
+    expect(waiting?.text).toContain("still running");
+    expect(waiting?.answered).toBeUndefined();
   });
 });

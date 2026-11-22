@@ -1,4 +1,6 @@
 import {
+  appendFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -41,6 +43,11 @@ export interface Binding {
 /** The parts of a hook's stdin payload kim reads; Claude Code and Codex share them. */
 export interface HookPayload {
   session_id?: string;
+  /**
+   * Set when the event fired inside a subagent. A subagent's hooks carry
+   * its parent's `session_id`, and what they print goes to the subagent.
+   */
+  agent_id?: string;
   cwd?: string;
   tool_name?: string;
   tool_input?: { command?: unknown } | null;
@@ -261,6 +268,13 @@ export async function runHook(
     stateFile: string;
     take: (interviewId: string, binding: Binding) => Promise<TakeOutcome>;
     now?: number;
+    /**
+     * Where answers taken are held until the agent has them (`holdAnswers`).
+     * With it, what this returns is also held: the caller hands the agent
+     * what `takeHeld` gives, so answers a hook took but ran out of time to
+     * print reach the agent at its next hook instead of being lost.
+     */
+    heldDir?: string;
   },
 ): Promise<Record<string, unknown>> {
   const now = deps.now ?? Date.now();
@@ -334,6 +348,16 @@ export async function runHook(
     }
   }
 
+  // A subagent shares its parent's session id, and a hook's context goes
+  // to whoever ran the tool. Taking here would hand the answers to the
+  // subagent and count them delivered, so the agent running the interview
+  // would never see them. Its commands still bind and unbind; the answers
+  // wait for the parent's own next hook.
+  if (payload.agent_id) {
+    if (changed) writeBindings(deps.stateFile, bindings);
+    return {};
+  }
+
   const targets = bindings.filter((binding) =>
     event === "SessionStart"
       ? binding.cwd === cwd
@@ -382,6 +406,10 @@ export async function runHook(
       current.filter((binding) => !finished.has(binding.interviewId)),
     );
   }
+  // The service counts a batch delivered once it is taken, so it is kept
+  // on disk before anything else can go wrong with handing it over.
+  if (deps.heldDir && sessionId)
+    for (const part of parts) holdAnswers(deps.heldDir, sessionId, part);
   return parts.length
     ? {
         hookSpecificOutput: {
@@ -500,7 +528,7 @@ export async function runStop(
     clock?: () => number;
     gatherMs?: number;
   },
-): Promise<{ text: string } | null> {
+): Promise<{ text: string; answered?: true } | null> {
   const now = deps.now ?? Date.now();
   const clock = deps.clock ?? Date.now;
   const live = liveBindings(
@@ -558,7 +586,9 @@ export async function runStop(
       ? [formatBatch("Stop", interviewId, outcome.batch)]
       : [],
   );
-  if (answered.length) return { text: answered.join("\n\n") };
+  // `answered`: the text is the user's answers, which the service now
+  // counts as delivered, so the caller must get it to the agent.
+  if (answered.length) return { text: answered.join("\n\n"), answered: true };
   // Nothing from the user. Only a wait that ran its course says so, so a
   // wait that ends early for any reason can't wake the model over and over.
   const waiting = outcomes.filter(
@@ -604,4 +634,63 @@ export function waiterArmed(
 
 export function disarmWaiter(dir: string, sessionId: string): void {
   if (sessionId) rmSync(waiterFile(dir, sessionId), { force: true });
+}
+
+/**
+ * Answers a hook took for an agent session but has not yet handed to the
+ * agent: one JSON string a line. The service counts a batch delivered the
+ * moment it is taken, so a hook that then can't print it (a background
+ * waiter replaced by a newer one, a hook out of time) holds it here, and
+ * the session's next hook hands it over.
+ */
+const heldFile = (dir: string, sessionId: string) =>
+  join(dir, `${sessionId.replace(/[^A-Za-z0-9_-]/g, "_")}.held`);
+
+export function holdAnswers(
+  dir: string,
+  sessionId: string,
+  text: string,
+): void {
+  if (!sessionId || !text) return;
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(heldFile(dir, sessionId), `${JSON.stringify(text)}\n`);
+}
+
+/** Whether answers are being held for the session. */
+export function answersHeld(dir: string, sessionId: string): boolean {
+  return Boolean(sessionId) && existsSync(heldFile(dir, sessionId));
+}
+
+/**
+ * Takes the answers held for a session, oldest first, for a hook about to
+ * hand them to the agent. Only one of several hooks running at once gets
+ * them: the file is claimed by renaming it.
+ */
+export function takeHeld(dir: string, sessionId: string): string[] {
+  if (!sessionId) return [];
+  const file = heldFile(dir, sessionId);
+  const claimed = `${file}.${process.pid}.${randomBytes(4).toString("hex")}`;
+  try {
+    renameSync(file, claimed);
+  } catch {
+    return [];
+  }
+  try {
+    const seen = new Set<string>();
+    return readFileSync(claimed, "utf8")
+      .split("\n")
+      .flatMap((line) => {
+        if (!line.trim()) return [];
+        try {
+          const text = JSON.parse(line) as unknown;
+          if (typeof text !== "string" || seen.has(text)) return [];
+          seen.add(text);
+          return [text];
+        } catch {
+          return [];
+        }
+      });
+  } finally {
+    rmSync(claimed, { force: true });
+  }
 }
